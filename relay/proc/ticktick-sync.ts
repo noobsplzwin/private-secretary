@@ -1,0 +1,194 @@
+// The pass that writes the owner's to-do list into TickTick.
+//
+// Reads loop-state, builds one TickTick task per TASK CLUSTER (not per
+// message — relay/core/ticktick-plan.ts explains why), diffs against the id
+// map, and writes only what changed. A cycle where nothing moved makes ZERO
+// API calls.
+//
+// I/O is injected so this is unit-testable with a stub client and no network,
+// the same shape as relay/proc/execute.ts.
+//
+// WHY CREATES ARE NOT BATCHED: batch_add_tasks returns `id2etag` keyed by the
+// NEW TickTick ids with no echo of the input order, so there is no sound way to
+// tell which id belongs to which to-do — the Microsoft To Do migration lost 803
+// tasks learning that. create_task returns the whole task instead, including
+// every checklist item's id, which is exactly what the tick-to-approve poll
+// needs. It costs one call per NEW task, and the hash gate means new tasks are
+// rare after the first cycle. Completions ARE batched: they only need ids we
+// already hold, so there is nothing to pair.
+
+import {
+  applySyncOps,
+  diffTickTickSync,
+  summarize,
+  type DesiredTask,
+  type SyncMap,
+  type SyncOp,
+  type SyncResult,
+} from "../core/ticktick-sync.js";
+import { buildTaskPayload, shouldSync, type TaskUnit } from "../core/ticktick-plan.js";
+import { groupByTask } from "../core/tasks.js";
+import { unitKey } from "../core/unit-key.js";
+import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
+import type { TickTickTaskPayload } from "../core/ticktick.js";
+import type { TrackedApproval } from "../core/ticktick-approval.js";
+import type { LoopState } from "../io/state.js";
+
+/** The TickTick calls this pass needs. Narrow on purpose. */
+export interface TickTickWriter {
+  /** Create one task; must return its id and its checklist items' ids. */
+  createTask(payload: TickTickTaskPayload): Promise<{
+    id: string;
+    projectId: string;
+    itemIds: string[];
+  }>;
+  /** Update one task in place; returns the (possibly new) checklist item ids. */
+  updateTask(
+    taskId: string,
+    projectId: string,
+    payload: TickTickTaskPayload,
+  ): Promise<{ itemIds: string[] }>;
+  /** Mark tasks complete, batched by the caller to TICKTICK_BATCH_MAX. */
+  completeTasks(tasks: ReadonlyArray<{ id: string; projectId: string }>): Promise<void>;
+}
+
+export interface SyncReport {
+  created: number;
+  updated: number;
+  completed: number;
+  skipped: number;
+  failed: number;
+}
+
+/**
+ * Every task unit worth syncing this cycle.
+ *
+ * groupByTask puts ALL standalone actions in one `task_id: null` bucket, which
+ * is a rendering convenience, not a task — so that bucket is split back into
+ * one unit per action, keyed the same way plans are (unitKey).
+ */
+export function taskUnitsFrom(state: LoopState): TaskUnit[] {
+  const plans = state.plans ?? {};
+  const overrides = state.planOverrides ?? {};
+  const units: TaskUnit[] = [];
+
+  const withTier = (key: string): TaskUnit["plan"] => {
+    const plan = plans[key];
+    const override = overrides[key];
+    if (!plan) return override ? { tier: override, rank: 0, why: "", at: "" } : undefined;
+    // A manual re-tier wins: the ranking pass must not undo a human's move.
+    return override ? { ...plan, tier: override } : plan;
+  };
+
+  for (const cluster of groupByTask(state.actions, state.tasks)) {
+    if (cluster.task_id) {
+      units.push({
+        unitKey: cluster.task_id,
+        title: cluster.title ?? "(untitled task)",
+        grouped: true,
+        plan: withTier(cluster.task_id),
+        members: cluster.actions,
+      });
+      continue;
+    }
+    for (const action of cluster.actions) {
+      const key = unitKey(action);
+      units.push({
+        unitKey: key,
+        title:
+          action.headline ||
+          (typeof action.params.title === "string" ? action.params.title : "") ||
+          "(untitled)",
+        grouped: false,
+        plan: withTier(key),
+        members: [action],
+      });
+    }
+  }
+  return units;
+}
+
+export async function syncToTickTick(
+  state: LoopState,
+  map: SyncMap,
+  writer: TickTickWriter,
+): Promise<{ map: SyncMap; report: SyncReport }> {
+  const desired: DesiredTask[] = [];
+  // itemIds come back positionally, so remember which slots are executable.
+  const executableByUnit = new Map<string, Array<{ sortOrder: number; actionId: string }>>();
+
+  for (const unit of taskUnitsFrom(state)) {
+    if (!shouldSync(unit)) continue;
+    const built = buildTaskPayload(unit);
+    desired.push({ unitKey: unit.unitKey, payload: built.payload });
+    executableByUnit.set(unit.unitKey, built.executable);
+  }
+
+  const ops = diffTickTickSync(desired, map);
+  const results: Record<string, SyncResult> = {};
+  let failed = 0;
+
+  // Pair the returned checklist item ids back to the actions they approve.
+  // Positional: TickTick preserves the order the items were sent in, which is
+  // the same order buildTaskPayload assigned sortOrder in.
+  const trackedFrom = (unitKey: string, itemIds: readonly string[]): TrackedApproval[] =>
+    (executableByUnit.get(unitKey) ?? [])
+      .filter((e) => e.sortOrder < itemIds.length)
+      .map((e) => ({ itemId: itemIds[e.sortOrder]!, actionId: e.actionId }));
+
+  for (const op of ops) {
+    if (op.kind === "skip") continue;
+    try {
+      if (op.kind === "create") {
+        const created = await writer.createTask(op.payload);
+        results[op.unitKey] = {
+          ticktickId: created.id,
+          projectId: created.projectId,
+          items: trackedFrom(op.unitKey, created.itemIds),
+        };
+      } else if (op.kind === "update") {
+        const written = await writer.updateTask(op.ticktickId, op.projectId, op.payload);
+        results[op.unitKey] = {
+          ticktickId: op.ticktickId,
+          projectId: op.projectId,
+          items: trackedFrom(op.unitKey, written.itemIds),
+        };
+      }
+    } catch (e) {
+      // One bad task must not abandon the rest of the list. Leaving it out of
+      // `results` is what makes the next cycle retry it.
+      failed++;
+      console.error(`[ticktick] ${op.kind} failed for ${op.unitKey}: ${(e as Error).message}`);
+    }
+  }
+
+  const completes = ops.filter((o): o is Extract<SyncOp, { kind: "complete" }> => o.kind === "complete");
+  for (let i = 0; i < completes.length; i += TICKTICK_BATCH_MAX) {
+    const chunk = completes.slice(i, i + TICKTICK_BATCH_MAX);
+    try {
+      await writer.completeTasks(chunk.map((c) => ({ id: c.ticktickId, projectId: c.projectId })));
+      for (const c of chunk) results[c.unitKey] = { ticktickId: c.ticktickId, projectId: c.projectId };
+    } catch (e) {
+      failed += chunk.length;
+      console.error(`[ticktick] complete batch failed: ${(e as Error).message}`);
+    }
+  }
+
+  // A complete that threw must stay in the map so it is retried; applySyncOps
+  // drops every complete op unconditionally, so filter the failed ones out.
+  const applied = ops.filter((o) => o.kind !== "complete" || results[o.unitKey]);
+  // Counted from what actually LANDED, not from what was attempted — a report
+  // that says "created 3" after three failures is worse than no report.
+  const landed = (kind: SyncOp["kind"]) =>
+    ops.filter((o) => o.kind === kind && results[o.unitKey]).length;
+  return {
+    map: applySyncOps(map, applied, results),
+    report: {
+      created: landed("create"),
+      updated: landed("update"),
+      completed: landed("complete"),
+      skipped: summarize(ops).skip,
+      failed,
+    },
+  };
+}

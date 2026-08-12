@@ -16,11 +16,16 @@
 
 import { stableHash } from "./unit-key.js";
 import type { TickTickTaskPayload } from "./ticktick.js";
+import type { TrackedApproval } from "./ticktick-approval.js";
 
 export interface SyncRecord {
   ticktickId: string;
   projectId: string;
   hash: string;
+  // Which checklist item approves which action. Without this the poll in
+  // specs/ticktick-migration.md §1 knows an item was ticked but not what it
+  // was supposed to execute, so a tick would silently do nothing.
+  items?: TrackedApproval[];
 }
 
 export type SyncMap = Record<string, SyncRecord>;
@@ -107,26 +112,35 @@ export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap):
   return ops;
 }
 
+/** What TickTick returned for a task this cycle wrote. */
+export interface SyncResult {
+  ticktickId: string;
+  projectId: string;
+  items?: TrackedApproval[];
+}
+
 /** The map after `ops` have been applied. Completed units leave the map. */
 export function applySyncOps(
   map: SyncMap,
   ops: readonly SyncOp[],
-  createdIds: Readonly<Record<string, { ticktickId: string; projectId: string }>>,
+  results: Readonly<Record<string, SyncResult>>,
 ): SyncMap {
   const next: SyncMap = { ...map };
   for (const op of ops) {
     if (op.kind === "create") {
-      const created = createdIds[op.unitKey];
+      const created = results[op.unitKey];
       // No id back means the create failed. Leaving the unitKey OUT of the map
       // makes the next cycle retry it; recording it would lose the to-do.
       if (!created) continue;
       next[op.unitKey] = { ...created, hash: hashPayload(op.payload) };
     } else if (op.kind === "update") {
-      next[op.unitKey] = {
-        ticktickId: op.ticktickId,
-        projectId: op.projectId,
-        hash: hashPayload(op.payload),
-      };
+      const written = results[op.unitKey];
+      // An update rewrites the checklist, so TickTick may hand back NEW item
+      // ids. Keeping the stale ones would leave a ticked item pointing at
+      // nothing. No result → the update failed; keep the old hash so the next
+      // cycle retries rather than believing it succeeded.
+      if (!written) continue;
+      next[op.unitKey] = { ...written, hash: hashPayload(op.payload) };
     } else if (op.kind === "complete") {
       delete next[op.unitKey];
     }

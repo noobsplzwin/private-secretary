@@ -136,9 +136,30 @@ describe("applySyncOps", () => {
   it("re-hashes after an update so the next cycle skips", () => {
     const map: SyncMap = { u1: rec("tt1", payload()) };
     const changed = payload({ priority: 5 });
-    const next = applySyncOps(map, diffTickTickSync([{ unitKey: "u1", payload: changed }], map), {});
+    const next = applySyncOps(map, diffTickTickSync([{ unitKey: "u1", payload: changed }], map), {
+      u1: { ticktickId: "tt1", projectId: "proj" },
+    });
     expect(diffTickTickSync([{ unitKey: "u1", payload: changed }], next)).toEqual([
       { kind: "skip", unitKey: "u1" },
     ]);
+  });
+
+  // An update that failed must NOT be recorded as done, or the changed content
+  // never reaches TickTick and the task silently goes stale forever.
+  it("leaves a failed update un-hashed so it retries", () => {
+    const map: SyncMap = { u1: rec("tt1", payload()) };
+    const changed = payload({ priority: 5 });
+    const next = applySyncOps(map, diffTickTickSync([{ unitKey: "u1", payload: changed }], map), {});
+    expect(diffTickTickSync([{ unitKey: "u1", payload: changed }], next)[0]!.kind).toBe("update");
+  });
+
+  // An update rewrites the checklist, so TickTick can hand back NEW item ids.
+  // Keeping the stale ones would leave a ticked item pointing at nothing.
+  it("stores the item→action map returned by a write", () => {
+    const ops = diffTickTickSync([{ unitKey: "u1", payload: payload() }], {});
+    const next = applySyncOps({}, ops, {
+      u1: { ticktickId: "tt1", projectId: "proj", items: [{ itemId: "i1", actionId: "cal1" }] },
+    });
+    expect(next.u1!.items).toEqual([{ itemId: "i1", actionId: "cal1" }]);
   });
 });
