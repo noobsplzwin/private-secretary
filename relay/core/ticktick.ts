@@ -42,6 +42,11 @@ export interface TickTickTaskPayload {
   items?: TickTickChecklistItem[];
   tags?: string[];
   project?: string; // NAME; the io layer resolves it to a projectId
+  // Set ONLY when the task really has a deadline — never invented. TickTick's
+  // Today / Next 7 Days are date-driven, so a fabricated "due today" on every
+  // urgent item makes Today meaningless within a week.
+  dueDate?: string;
+  isAllDay?: boolean;
 }
 
 export const TIER_PRIORITY: Record<TaskPlan["tier"], TickTickPriority> = {
