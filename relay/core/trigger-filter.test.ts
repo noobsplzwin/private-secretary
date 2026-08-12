@@ -3,6 +3,7 @@ import {
   evaluateTrigger,
   filterReasonToIgnoreCategory,
   isAlreadyHandled,
+  mayProduceActionType,
 } from "./trigger-filter.js";
 import type { InboundMessage } from "./types.js";
 
@@ -112,5 +113,35 @@ describe("filterReasonToIgnoreCategory", () => {
     expect(filterReasonToIgnoreCategory("bot-or-noreply")).toBe("automated-notification");
     expect(filterReasonToIgnoreCategory("not-addressed")).toBe("not-addressed");
     expect(filterReasonToIgnoreCategory("already-answered")).toBe("already-answered");
+  });
+});
+
+describe("mayProduceActionType — answered threads are mined, not re-replied", () => {
+  const answered = (over: Partial<InboundMessage> = {}) =>
+    msg({ threadAnsweredByUserAfter: true, ...over });
+
+  // A thread the owner spoke last in is where his own commitments live ("好",
+  // "我去订", a confirmed appointment). 1,550 messages were discarded unseen
+  // for this reason, and a missed task leaves no trace to reject.
+  it("allows task / calendar / tool on a thread the owner answered", () => {
+    for (const t of ["task", "calendar", "tool", "ignore"]) {
+      expect(mayProduceActionType(answered(), t)).toBe(true);
+    }
+  });
+
+  // REGRESSION: re-drafting a reply to a conversation the owner already
+  // finished is the most irritating false positive there is. The prompt is
+  // told, but a prompt is not enforcement.
+  it("NEVER allows a reply / relay / forward there", () => {
+    for (const t of ["reply", "relay", "forward"]) {
+      expect(mayProduceActionType(answered(), t)).toBe(false);
+      expect(mayProduceActionType(msg({ userIsLastSenderInChannel: true }), t)).toBe(false);
+    }
+  });
+
+  it("leaves an unanswered thread completely unrestricted", () => {
+    for (const t of ["reply", "relay", "forward", "task", "calendar", "tool"]) {
+      expect(mayProduceActionType(msg(), t)).toBe(true);
+    }
   });
 });

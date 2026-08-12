@@ -348,6 +348,15 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           if (decision.relay) {
             triggered++;
             sourceMessages.push(m);
+          } else if (decision.reason === "already-answered") {
+            // NOT dropped any more. evaluateTrigger only answers "does this
+            // deserve a REPLY" — using it as the total gate discarded 1,550
+            // messages unseen, and those are where the owner's own commitments
+            // live ("好", "我去订", a confirmed appointment). Analysed here for
+            // task / calendar; core/trigger-filter.mayProduceActionType blocks
+            // a second reply deterministically.
+            triggered++;
+            sourceMessages.push(m);
           } else {
             filtered++;
             filteredOut.push({ id: m.id, reason: decision.reason, text: m.text, sender: m.senderHandle, platform: m.platform });

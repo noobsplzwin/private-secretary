@@ -296,7 +296,18 @@ function describeMessage(m: InboundMessage, i: number): string {
     : "";
   // Carry the message's own timestamp in the header — relative dates in the
   // text ("明晚9点") resolve against THIS, not the model's stale calendar.
-  return `  [${i + 1}] (${m.platform}, id=${m.id}, at=${new Date(m.timestampMs).toISOString()})\n  ${m.text}${attach}${ctx}`;
+  //
+  // ANSWERED marks a thread Leo has already replied in. Those used to be
+  // discarded before analysis, which hid every commitment he made in the act of
+  // replying. They are analysed now, but they must not produce another reply —
+  // enforced deterministically in core/trigger-filter.mayProduceActionType; the
+  // marker is here so the model does not waste the call on a card that is
+  // dropped.
+  const answered =
+    m.threadAnsweredByUserAfter || m.userIsLastSenderInChannel
+      ? " ANSWERED — Leo already replied here: extract only what it COMMITS him to (task/calendar/tool). Do NOT draft a reply."
+      : "";
+  return `  [${i + 1}] (${m.platform}, id=${m.id}, at=${new Date(m.timestampMs).toISOString()})${answered}\n  ${m.text}${attach}${ctx}`;
 }
 
 // Build the request for one sender's batch. Optional 3-layer-RAG context:

@@ -27,6 +27,7 @@ import { machineTimeZone } from "../io/settings.js";
 import { buildDraftRequest, type DraftedAction } from "./draft-prompt.js";
 import { selectProjects, renderProjectContext, renderProjectCatalog, type Project } from "../core/project.js";
 import { detectMentions } from "../core/mentions.js";
+import { mayProduceActionType } from "../core/trigger-filter.js";
 
 // The injected LLM call: takes the assembled request, returns the parsed
 // suggested actions (the adapter extracts them from the tool call).
@@ -310,6 +311,16 @@ export async function draftActions(
         source_message_id: latest.id,
         context: ctx,
       };
+      // A thread the owner already answered is analysed for what it commits him
+      // to, never for another reply. The prompt is told this, but a prompt is
+      // not enforcement: re-drafting a reply to a conversation he already
+      // finished is the most irritating false positive there is.
+      if (!mayProduceActionType(latest, String(s.action_type))) {
+        senderErrors.push(
+          `dropped ${s.action_type}: owner already replied in this thread (task/calendar only)`,
+        );
+        continue;
+      }
       const result = validateActionItem(raw);
       if (!result.ok) {
         senderErrors.push(result.errors.join("; "));

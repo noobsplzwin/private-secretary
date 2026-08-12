@@ -486,3 +486,60 @@ describe("owner timezone anchors the clock", () => {
     expect(seen).toContain("2026-06-14 13:00");
   });
 });
+
+describe("answered threads: mined for commitments, never re-replied", () => {
+  const resolver = buildPersonaResolver([michael]);
+  const deps = (llm: LlmCaller) => ({
+    llm,
+    resolvePersona: resolver.resolve,
+    knownPersonaKeys: resolver.keys,
+    now: () => "2026-06-14T12:00:00Z",
+  });
+
+  // 1,550 messages were discarded before analysis purely because Leo had spoken
+  // last — and that is exactly where his own commitments live ("好", "我去订",
+  // a confirmed appointment). They are analysed now.
+  it("keeps a task the model found in a thread Leo already answered", async () => {
+    const llm: LlmCaller = async () => [
+      {
+        action_type: "task",
+        reason: "he committed to booking it",
+        confidence: 0.9,
+        params: { title: "订机票" },
+      } as DraftedAction,
+    ];
+    const r = await draftActions([msg({ threadAnsweredByUserAfter: true })], deps(llm));
+    expect(r.actions).toHaveLength(1);
+    expect(r.actions[0]!.action_type).toBe("task");
+  });
+
+  // REGRESSION: the deterministic half of the rule. The prompt is told not to
+  // draft a reply here, but a prompt is not enforcement, and re-drafting a
+  // reply to a conversation Leo already finished is the most irritating false
+  // positive there is.
+  it("DROPS a reply the model produced anyway, keeping the task beside it", async () => {
+    const llm: LlmCaller = async () => [
+      { action_type: "reply", reason: "answer him", confidence: 0.95, draft: "got it" } as DraftedAction,
+      { action_type: "task", reason: "track", confidence: 0.9, params: { title: "订机票" } } as DraftedAction,
+    ];
+    const r = await draftActions([msg({ threadAnsweredByUserAfter: true })], deps(llm));
+    expect(r.actions.map((a) => a.action_type)).toEqual(["task"]);
+    expect(r.dropped[0]!.errors.join()).toContain("already replied");
+  });
+
+  it("drops it for the last-sender signal too, not just the in-thread one", async () => {
+    const llm: LlmCaller = async () => [
+      { action_type: "reply", reason: "r", confidence: 0.9, draft: "d" } as DraftedAction,
+    ];
+    const r = await draftActions([msg({ userIsLastSenderInChannel: true })], deps(llm));
+    expect(r.actions).toHaveLength(0);
+  });
+
+  it("still allows a reply on a thread Leo has NOT answered", async () => {
+    const llm: LlmCaller = async () => [
+      { action_type: "reply", reason: "r", confidence: 0.9, draft: "d" } as DraftedAction,
+    ];
+    const r = await draftActions([msg()], deps(llm));
+    expect(r.actions.map((a) => a.action_type)).toEqual(["reply"]);
+  });
+});
