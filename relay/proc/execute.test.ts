@@ -309,6 +309,75 @@ describe("executeAction — local types", () => {
   });
 });
 
+describe("executeAction — task → TickTick", () => {
+  const taskAction = (over: Partial<ActionItem> = {}) =>
+    action({
+      action_type: "task",
+      target: {},
+      draft: undefined,
+      params: { title: "Send the SoW" },
+      ...over,
+    });
+
+  it("creates the TickTick to-do and takes a tool_result receipt", async () => {
+    const run = vi.fn().mockResolvedValue({ ref: "ticktick:6a7c" });
+    const r = await executeAction(taskAction(), deps({ ticktick: { run } }));
+    expect(run).toHaveBeenCalledOnce();
+    expect(run.mock.calls[0]![0]).toMatchObject({ title: "Send the SoW", kind: "TEXT" });
+    expect(r.receipt).toEqual({ kind: "tool_result", ref: "ticktick:6a7c", at: NOW });
+    expect(r.action.status).toBe("executed");
+  });
+
+  it("passes the plan tier through as the TickTick priority", async () => {
+    const run = vi.fn().mockResolvedValue({ ref: "ticktick:1" });
+    await executeAction(
+      taskAction(),
+      deps({
+        ticktick: { run },
+        planFor: () => ({ tier: "A", rank: 0, why: "client blocked", at: NOW }),
+      }),
+    );
+    expect(run.mock.calls[0]![0]).toMatchObject({ priority: 5 });
+  });
+
+  // REGRESSION: TickTick is optional. Without it a task must keep its old
+  // local receipt — a `tool_result` would also make the card non-restorable.
+  it("stays local when TickTick is not connected", async () => {
+    const r = await executeAction(taskAction(), deps({}));
+    expect(r.receipt).toEqual({ kind: "local", ref: "local", at: NOW });
+  });
+
+  // The claim must be persisted BEFORE the external call, same as every other
+  // side effect, so a crash mid-create cannot double-create.
+  it("persists the executing claim before calling TickTick", async () => {
+    const order: string[] = [];
+    const run = vi.fn().mockImplementation(async () => {
+      order.push("create");
+      return { ref: "ticktick:1" };
+    });
+    await executeAction(
+      taskAction(),
+      deps({
+        ticktick: { run },
+        persistClaim: async () => {
+          order.push("claim");
+        },
+      }),
+    );
+    expect(order).toEqual(["claim", "create"]);
+  });
+
+  it("does not touch TickTick for an ignore card", async () => {
+    const run = vi.fn();
+    const r = await executeAction(
+      action({ action_type: "ignore", target: {}, draft: undefined, params: { category: "newsletter" } }),
+      deps({ ticktick: { run } }),
+    );
+    expect(run).not.toHaveBeenCalled();
+    expect(r.receipt?.kind).toBe("local");
+  });
+});
+
 describe("executeAction — tool (connected MCP, stubbed runner)", () => {
   it("dispatches to the tool's runner and marks executed with a tool_result receipt", async () => {
     const run = vi.fn(async () => ({ ref: "BKO-123" }));

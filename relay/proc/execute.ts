@@ -12,7 +12,9 @@
 //     · wechat   → clipboard-manual            → awaitingManual, NO receipt
 //   calendar     → conflict-check then events.insert → receipt {kind:"calendar_event"}
 //                  (BLOCKS on a conflict — returns conflicts, no event created)
-//   task / ignore → local, no external call    → receipt {kind:"local"}
+//   task         → TickTick create_task when connected → {kind:"tool_result"}
+//                  not connected → local, no external call → {kind:"local"}
+//   ignore       → local, no external call    → receipt {kind:"local"}
 //
 // CRASH-SAFE SEQUENCE (T4):
 //   1. if the action already has an execution_receipt → it already happened;
@@ -43,6 +45,8 @@ import {
   findConflictsForProposed,
   type Conflict,
 } from "../core/calendar-conflict.js";
+import { buildTickTickTask } from "../core/ticktick.js";
+import type { TaskPlan } from "../core/tasks.js";
 import type { CalendarEvent } from "../io/calendar-api.js";
 import { randomUUID } from "node:crypto";
 
@@ -91,6 +95,16 @@ export interface ExecuteDeps {
   // Task-processing MCP tools, keyed by core/tool-registry key (stubbed until
   // each real MCP client lands).
   tools?: Record<string, ToolRunner>;
+  // TickTick, the to-do destination for `task` cards. SEPARATE from `tools`
+  // on purpose: every registry key gets a STUB runner in production, and a
+  // task card routed through a stub would take a tool_result receipt (making
+  // it non-restorable) while creating nothing. Present here ONLY when TickTick
+  // is really connected; absent → task stays local, exactly as before.
+  ticktick?: ToolRunner;
+  // The daily plan for a task card's unit, supplying the A/B/C/D tier that
+  // becomes the TickTick priority. Injected because plans live in loop-state
+  // and this module does no I/O.
+  planFor?: (action: ActionItem) => TaskPlan | undefined;
   // Clock. Receipts + execution_started_at use this.
   now: () => string;
   // Called with the markExecuting'd action BEFORE the side effect fires, so
@@ -143,6 +157,13 @@ export async function executeAction(
   // 2. Mid-execution claim from a prior crashed attempt.
   if (isExecuting(action)) {
     throw new NeedsVerificationError(action);
+  }
+
+  // task — the to-do's home is TickTick when it's connected; otherwise it
+  // stays local (the pre-TickTick behaviour), so an unconnected install is
+  // unchanged.
+  if (action.action_type === "task" && deps.ticktick) {
+    return executeTickTickTask(action, deps.ticktick, deps);
   }
 
   // task / ignore — local, no external side effect, no manual leg.
@@ -274,6 +295,25 @@ async function executeCalendar(action: ActionItem, deps: ExecuteDeps): Promise<E
     ref: created.id ?? created.htmlLink ?? "(created)",
     at: deps.now(),
   };
+  return { action: markExecuted(withReceipt(claimed, receipt)), receipt, awaitingManual: false };
+}
+
+// A `task` card becomes a real TickTick to-do. Same crash-safe sequence as
+// every other external side effect: claim, persist, call, receipt. The receipt
+// is `tool_result` (not `local`) because something now exists outside this
+// machine — which is also what stops restoreAction from resurrecting the card.
+async function executeTickTickTask(
+  action: ActionItem,
+  runner: ToolRunner,
+  deps: ExecuteDeps,
+): Promise<ExecuteResult> {
+  const payload = buildTickTickTask(action, { plan: deps.planFor?.(action) });
+
+  const claimed = markExecuting(action, deps.now());
+  await deps.persistClaim?.(claimed);
+
+  const result = await runner.run(payload as unknown as Record<string, unknown>);
+  const receipt: ExecutionReceipt = { kind: "tool_result", ref: result.ref, at: deps.now() };
   return { action: markExecuted(withReceipt(claimed, receipt)), receipt, awaitingManual: false };
 }
 

@@ -18,9 +18,13 @@ import { KNOWN_MAILBOXES } from "../io/google-oauth.js";
 import { effectiveToolSpecs } from "../io/tools.js";
 import { createMcpToolRunner, mcpAuthServiceFor } from "../io/mcp-tool.js";
 import { createJiraToolRunner } from "../io/jira-mcp.js";
+import { createTickTickToolRunner } from "../io/ticktick-mcp.js";
+import { loadState } from "../io/state.js";
+import { unitKey } from "../core/unit-key.js";
 import { executeAction, type ExecuteDeps, type ToolRunner } from "../proc/execute.js";
 import type { CockpitExecutor } from "./api.js";
 import type { ActionItem } from "../core/action-item.js";
+import type { TaskPlan } from "../core/tasks.js";
 
 // Lazy singletons — built on first use, reused after.
 let depsPromise: Promise<Omit<ExecuteDeps, "now" | "persistClaim" | "tools">> | null = null;
@@ -72,6 +76,33 @@ function toolStubs(statePath: string): Record<string, ToolRunner> {
   return runners;
 }
 
+// The REAL TickTick runner, or undefined when TickTick isn't connected. Kept
+// out of toolStubs deliberately: every registry key gets a stub there, and a
+// task card routed through a stub would report success while creating nothing.
+// Undefined here means `task` cards stay local (relay/proc/execute.ts).
+function ticktickRunner(statePath: string): ToolRunner | undefined {
+  const spec = effectiveToolSpecs(statePath).ticktick;
+  const cfg = spec?.config ?? {};
+  if (cfg.type !== "mcp" || !cfg.url) return undefined;
+  return createTickTickToolRunner({
+    url: cfg.url,
+    authService: mcpAuthServiceFor("ticktick", cfg.authService),
+    ...(cfg.project ? { project: cfg.project } : {}),
+  });
+}
+
+// The destination list NAME + the plan tier are what turn a bare `task` card
+// into a filed, prioritised TickTick to-do.
+function planLookup(statePath: string): (action: ActionItem) => TaskPlan | undefined {
+  return (action) => {
+    try {
+      return loadState(statePath).plans?.[unitKey(action)];
+    } catch {
+      return undefined; // a missing/corrupt state file must not block an approve
+    }
+  };
+}
+
 export function createWiredExecutor(
   statePath: string,
   now: () => string = () => new Date().toISOString(),
@@ -83,7 +114,15 @@ export function createWiredExecutor(
     // draft + recipient, assemble one here so the executor has something
     // to draft. (Belt-and-suspenders — the LLM path is expected to set it.)
     const prepared = ensureGmailRaw(action);
-    return executeAction(prepared, { ...base, tools: toolStubs(statePath), now, persistClaim });
+    const ticktick = ticktickRunner(statePath);
+    return executeAction(prepared, {
+      ...base,
+      tools: toolStubs(statePath),
+      ...(ticktick ? { ticktick } : {}),
+      planFor: planLookup(statePath),
+      now,
+      persistClaim,
+    });
   };
 }
 
