@@ -532,11 +532,14 @@ export class CockpitApi {
       system:
         "You re-time a Google Calendar event for a personal assistant. Given the event's " +
         "current times and a user instruction, output ONLY a single JSON object " +
-        '{"start":"...","end":"..."} with RFC 3339 start/end using the +08:00 offset ' +
-        '(e.g. 2026-08-07T15:00:00+08:00). Interpret RELATIVE instructions (e.g. "extend by ' +
-        '30 minutes", "move earlier by 1 hour") from the CURRENT start/end. Keep the offset ' +
-        "unless the instruction says otherwise. If no current time is set, the instruction " +
-        "must supply it absolutely. Never change the event title. No prose.",
+        '{"start":"...","end":"..."}. COPY THE CURRENT START\'S OFFSET EXACTLY — if it ' +
+        'ends in "-05:00", yours ends in "-05:00"; never substitute a different one, and ' +
+        "never invent an offset the current event does not have. If the current start has " +
+        'NO offset, output a bare wall time "YYYY-MM-DDTHH:mm:ss" with no offset and no Z; ' +
+        "the caller stamps the owner's timezone. Interpret RELATIVE instructions (e.g. " +
+        '"extend by 30 minutes", "move earlier by 1 hour") from the CURRENT start/end. If no ' +
+        "current time is set, the instruction must supply it absolutely. Never change the " +
+        "event title. No prose.",
       userText:
         `Event title: ${typeof p.title === "string" ? p.title : "(untitled)"}\n` +
         `Current start: ${typeof p.start === "string" ? p.start : "(not set)"}\n` +
@@ -545,8 +548,16 @@ export class CockpitApi {
       toolInputSchema: {
         type: "object",
         properties: {
-          start: { type: "string", description: "RFC 3339 start with +08:00 offset" },
-          end: { type: "string", description: "RFC 3339 end with +08:00 offset" },
+          start: {
+            type: "string",
+            description:
+              "RFC 3339 start carrying the CURRENT start's own offset, or a bare wall time when it has none",
+          },
+          end: {
+            type: "string",
+            description:
+              "RFC 3339 end carrying the CURRENT start's own offset, or a bare wall time when it has none",
+          },
         },
         required: ["start", "end"],
       },

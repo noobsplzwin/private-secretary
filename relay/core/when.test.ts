@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isValidTimeZone, nowLocalIn, resolveWallTime } from "./when.js";
+import { isValidTimeZone, nowLocalIn, resolveWallTime, zoneOffsetAt } from "./when.js";
 
 describe("resolveWallTime", () => {
   // The meeting that started all of this: "Thursday 3pm Portugal time" on
@@ -72,5 +72,31 @@ describe("nowLocalIn", () => {
 
   it("crosses the date line correctly", () => {
     expect(nowLocalIn("2026-08-13T20:00:00Z", "Asia/Shanghai")).toContain("2026-08-14 04:00");
+  });
+});
+
+describe("zoneOffsetAt", () => {
+  // DST is the whole point: the same zone is -05:00 in August and -06:00 in
+  // December, so an offset computed from "now" instead of the event's own date
+  // is an hour wrong for half the year.
+  it("returns the offset in force at that wall time, not today's", () => {
+    expect(zoneOffsetAt("2026-08-05T09:00:00", "America/Winnipeg")).toBe("-05:00");
+    expect(zoneOffsetAt("2026-12-05T09:00:00", "America/Winnipeg")).toBe("-06:00");
+  });
+
+  it("handles zones east of UTC and non-hour offsets", () => {
+    expect(zoneOffsetAt("2026-08-05T09:00:00", "Asia/Shanghai")).toBe("+08:00");
+    expect(zoneOffsetAt("2026-08-05T09:00:00", "Asia/Kolkata")).toBe("+05:30");
+    expect(zoneOffsetAt("2026-08-05T09:00:00", "UTC")).toBe("+00:00");
+  });
+
+  it("accepts a wall time without seconds", () => {
+    expect(zoneOffsetAt("2026-08-05T09:00", "America/Winnipeg")).toBe("-05:00");
+  });
+
+  // Guessing an offset books the wrong hour; null lets the caller decide.
+  it("returns null rather than guessing", () => {
+    expect(zoneOffsetAt("not a date", "America/Winnipeg")).toBeNull();
+    expect(zoneOffsetAt("2026-08-05T09:00:00", "Not/AZone")).toBeNull();
   });
 });

@@ -434,17 +434,42 @@ describe("executeAction — tool (connected MCP, stubbed runner)", () => {
 });
 
 describe("toRfc3339 — datetime normalization (Calendar HTTP 400 guard)", () => {
-  it("adds the default offset to a bare local datetime", () => {
-    expect(toRfc3339("2026-08-05T09:00:00")).toBe("2026-08-05T09:00:00+08:00");
+  // Every assertion passes an EXPLICIT zone. The default is the machine's zone,
+  // so hardcoding an expected offset would make these pass here and fail on any
+  // machine or CI runner in another zone.
+  it("stamps the zone's offset on a bare local datetime", () => {
+    expect(toRfc3339("2026-08-05T09:00:00", "America/Winnipeg")).toBe("2026-08-05T09:00:00-05:00");
   });
   it("adds missing seconds too", () => {
-    expect(toRfc3339("2026-08-05T09:00")).toBe("2026-08-05T09:00:00+08:00");
+    expect(toRfc3339("2026-08-05T09:00", "America/Winnipeg")).toBe("2026-08-05T09:00:00-05:00");
   });
+
+  // REGRESSION: the offset used to be a hardcoded "+08:00", which put every
+  // approved event 13 hours off once the owner left China — invites included.
+  // A fixed offset is also wrong across a DST boundary in the RIGHT country,
+  // which is why the offset is computed at the event's own date.
+  it("uses the offset in force on that date, not a fixed one", () => {
+    expect(toRfc3339("2026-08-05T09:00:00", "America/Winnipeg")).toBe("2026-08-05T09:00:00-05:00");
+    expect(toRfc3339("2026-12-05T09:00:00", "America/Winnipeg")).toBe("2026-12-05T09:00:00-06:00");
+  });
+
+  it("defaults to the machine's zone rather than a constant", () => {
+    const zone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    expect(toRfc3339("2026-08-05T09:00:00")).toBe(
+      toRfc3339("2026-08-05T09:00:00", zone),
+    );
+  });
+
   it("passes through an already-zoned value (offset or Z)", () => {
     expect(toRfc3339("2026-07-13T16:00:00+08:00")).toBe("2026-07-13T16:00:00+08:00");
     expect(toRfc3339("2026-07-13T08:00:00Z")).toBe("2026-07-13T08:00:00Z");
   });
   it("leaves non-datetime input untouched", () => {
     expect(toRfc3339("not a date")).toBe("not a date");
+  });
+
+  // A bogus zone must not silently produce a plausible-looking wrong offset.
+  it("falls back to explicit UTC for an unknown zone", () => {
+    expect(toRfc3339("2026-08-05T09:00:00", "Not/AZone")).toBe("2026-08-05T09:00:00Z");
   });
 });

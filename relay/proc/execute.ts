@@ -46,6 +46,8 @@ import {
   type Conflict,
 } from "../core/calendar-conflict.js";
 import { buildTickTickTask } from "../core/ticktick.js";
+import { zoneOffsetAt } from "../core/when.js";
+import { machineTimeZone } from "../io/settings.js";
 import type { TaskPlan } from "../core/tasks.js";
 import type { CalendarEvent } from "../io/calendar-api.js";
 import { randomUUID } from "node:crypto";
@@ -453,19 +455,36 @@ function eventWindowForList(event: CalendarEvent): { timeMin: string; timeMax: s
   return { timeMin, timeMax };
 }
 
-// Leo's default offset when the drafter emits a bare local datetime (he's UTC+8
-// unless a thread says otherwise — the same convention the draft prompt states).
-const DEFAULT_UTC_OFFSET = "+08:00";
+// The zone a bare local datetime is read as, when the drafter emits one without
+// an offset. Read from the MACHINE, resolved per call.
+//
+// This was a hardcoded "+08:00" (the owner was in China when it was written).
+// Once he wasn't, every bare datetime was stamped 13 hours off — and an
+// approved calendar event at the wrong hour, with the invites already emailed
+// to attendees, is the worst failure this product has. A fixed offset is also
+// wrong twice a year even in the right country, because it cannot know DST.
+//
+// machineTimeZone() is what settings.timezone already defaults to, so the two
+// agree unless the owner has explicitly declared a different zone; pass `zone`
+// to honour that setting from a caller that has it.
+function ownerTimeZone(): string {
+  return machineTimeZone();
+}
 
 // Coerce a loose datetime into RFC-3339 WITH an offset. Google Calendar rejects the
 // whole request (HTTP 400) when timeMin/timeMax or start/end lack a zone — the model
 // sometimes emits "2026-08-05T09:00:00" or "...T09:00". Adds missing seconds and the
 // default offset; passes through anything already carrying Z or ±HH:MM. Non-datetime
 // input is returned untouched (the caller's own validation still applies).
-export function toRfc3339(value: string, defaultOffset = DEFAULT_UTC_OFFSET): string {
+export function toRfc3339(value: string, zone: string = ownerTimeZone()): string {
   const s = value.trim();
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2})?(\.\d+)?/.test(s)) return s;
   if (/(Z|[+-]\d{2}:?\d{2})$/.test(s)) return s; // already zoned
   const withSeconds = /T\d{2}:\d{2}$/.test(s) ? `${s}:00` : s;
-  return `${withSeconds}${defaultOffset}`;
+  // Offset for THAT date, so a summer booking made in winter is still right.
+  // An unresolvable zone falls back to UTC explicitly rather than to a guessed
+  // offset; machineTimeZone() already returns "UTC" when it cannot read one, so
+  // this only fires for a bogus zone passed in by a caller.
+  const offset = zoneOffsetAt(withSeconds, zone) ?? "Z";
+  return `${withSeconds}${offset}`;
 }

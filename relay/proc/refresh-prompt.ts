@@ -24,8 +24,9 @@ DECIDE from the CURRENT state of the thread:
 - If a meeting was AGREED with a DATE (even if the exact clock time or place is
   still pending), emit a "calendar" action so Leo can one-click add it — do NOT
   downgrade a dated meeting to just a reply/task. params {title, start, end,
-  location?, description?}, ISO 8601 WITH timezone (Leo is UTC+8 unless the thread
-  says otherwise). Derive start/end from the date + any rough cue: 上午/morning →
+  location?, description?}, start/end written per the TIMEZONES rule below (wall
+  clock + params.tz — never an offset you picked yourself). Derive start/end from
+  the date + any rough cue: 上午/morning →
   09:00–11:00, 下午/afternoon → 14:00–16:00, 晚上/evening → 19:00–20:00, else a 1h
   block. When the exact time/place is NOT settled, say so in the description
   ("具体时间/地点待定，临近确认") and put the confirm step in next_actions. Put people +

@@ -41,6 +41,31 @@ function zoneOffsetMinutes(zone: string, atUtcMs: number): number {
   return Math.round((asUtc - atUtcMs) / 60000);
 }
 
+/**
+ * The offset ("+HH:MM" / "-HH:MM") in force in `zone` at the WALL TIME `wall`.
+ *
+ * At the wall time, not "now": Winnipeg is -05:00 in August and -06:00 in
+ * December, so an event booked in one season while the clock reads the other
+ * would be stamped an hour off. Returns null for an unreadable wall time or an
+ * unknown zone rather than guessing an offset.
+ */
+export function zoneOffsetAt(wall: string, zone: string): string | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/.exec(wall.trim());
+  if (!m) return null;
+  if (!isValidTimeZone(zone)) return null;
+  const [, y, mo, d, h, mi, sec] = m;
+  const naive = Date.UTC(+y!, +mo! - 1, +d!, +h!, +mi!, +(sec ?? 0));
+  // Same two-pass settle as resolveWallTime: the offset depends on the instant,
+  // and the instant depends on the offset.
+  const guess = naive - zoneOffsetMinutes(zone, naive) * 60000;
+  const minutes = zoneOffsetMinutes(zone, guess);
+  const sign = minutes < 0 ? "-" : "+";
+  const abs = Math.abs(minutes);
+  const hh = String(Math.floor(abs / 60)).padStart(2, "0");
+  const mm = String(abs % 60).padStart(2, "0");
+  return `${sign}${hh}:${mm}`;
+}
+
 export function isValidTimeZone(zone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: zone });

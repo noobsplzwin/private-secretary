@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CockpitApi, CockpitBadRequestError, type CockpitExecutor } from "./api.js";
 import { loadState } from "../io/state.js";
+import { toRfc3339 } from "../proc/execute.js";
 import { activityPathFor, appendActivity, readActivity } from "../io/activity-log.js";
 import { loadSettings } from "../io/settings.js";
 import { __setRunner, type SecurityRunner } from "../io/keychain.js";
@@ -807,7 +808,7 @@ describe("reTime (AI calendar re-time)", () => {
     );
   });
 
-  it("normalizes a bare datetime to RFC3339 with the +08:00 default offset", async () => {
+  it("normalizes a bare datetime to RFC3339 in the owner's zone", async () => {
     seed([cal("c1", "2026-08-05T15:00:00+08:00", "2026-08-05T16:00:00+08:00")]);
     const jsonLlm: JsonLlmCaller = async () => ({
       start: "2026-08-07T15:00",
@@ -815,8 +816,12 @@ describe("reTime (AI calendar re-time)", () => {
     });
     const api = new CockpitApi({ statePath, personaDir, executor: sendingExecutor, jsonLlm });
     const updated = await api.reTime("c1", "延长半小时");
-    expect(updated.params.start).toBe("2026-08-07T15:00:00+08:00");
-    expect(updated.params.end).toBe("2026-08-07T16:30:00+08:00");
+    // The offset is the machine zone's at that date (it used to be a hardcoded
+    // +08:00). Assert the SHAPE plus agreement with toRfc3339 — hardcoding an
+    // offset here would fail on any machine or CI runner in another zone.
+    expect(updated.params.start).toMatch(/^2026-08-07T15:00:00([+-]\d{2}:\d{2}|Z)$/);
+    expect(updated.params.start).toBe(toRfc3339("2026-08-07T15:00"));
+    expect(updated.params.end).toBe(toRfc3339("2026-08-07T16:30"));
   });
 
   it("rejects unparseable LLM output without touching the card", async () => {
