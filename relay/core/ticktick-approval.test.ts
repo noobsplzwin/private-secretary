@@ -69,7 +69,7 @@ describe("buildUnresolvedLabel", () => {
 
 describe("isExecutableItem", () => {
   it("is false for an ordinary note-to-self line", () => {
-    expect(isExecutableItem("给敏姐打电话")).toBe(false);
+    expect(isExecutableItem("打电话确认时间")).toBe(false);
     expect(isExecutableItem("回复 Kevin：明天给你答复")).toBe(false);
   });
 });
