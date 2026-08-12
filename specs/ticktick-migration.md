@@ -7,15 +7,39 @@ prioritised to-do list, the background needed to act on each item, and
 confirmed calendar events. Scanning is unchanged — 2 Slack accounts, 4
 mailboxes and WeChat already feed the same passes.
 
-## 1. What this is not
+## 1. What TickTick can and cannot trigger
 
-TickTick does **not** become an input. Nothing in TickTick triggers execution in
-v1, so the daemon never polls it for approval. That is a deliberate scope cut,
-and it is what makes v1 safe: there is no gesture in TickTick that can send a
-message to a human.
+TickTick IS an input. The daemon polls it for checklist state, and **two** kinds
+of ticked sub-action execute (owner, 2026-08-12):
 
-The cockpit is NOT retired. It keeps exactly one job — approving reply / relay /
-forward — until the owner decides how sends should work.
+- **sending the invites** for a calendar event that has attendees
+- **creating a tool item**, e.g. a Jira ticket
+
+Everything else there is inert.
+
+A tickable action must pass BOTH tests:
+
+1. **Does the material content fit in ONE LINE?** A checklist item has no
+   description field (`OpenChecklistItem` is only `title / status / sortOrder /
+   startDate / isAllDay / timeZone`), so whatever the line does not say, the
+   owner cannot see before ticking.
+2. **Is a mistake CORRECTABLE afterwards?**
+
+The two exits pass for different reasons, which is worth keeping straight. A
+Jira ticket passes mainly on (2) — its body does not fit in a line, but a wrong
+ticket can be edited or deleted. An invite passes mainly on (1) — who and when
+fit, and a wrong one can at least be updated or cancelled. A reply fails both:
+its wording does not fit, and a sent message cannot be unsent. That is why
+reply / relay / forward keep their cockpit approval — not because they matter
+more.
+
+Whatever the kind, the line must name WHO it reaches by RESOLVED ADDRESS, never
+a display name: "invite Kevin" is not reviewable, `kevin.chen@acme.com` is.
+
+Note the consequence: once polling exists, replies staying inert is a DECISION,
+no longer an architectural impossibility. Do not let it erode by accident.
+
+The cockpit is NOT retired. It keeps approving reply / relay / forward.
 
 ## 2. Decisions (owner, 2026-08-12)
 
@@ -32,13 +56,26 @@ unbidden, and attendee-less events do not reach anybody. **`ALWAYS_CONFIRM` must
 keep `calendar` for the attendee case** — the exemption is checked at execution,
 not by removing the type from the set.
 
-**Sends are inert in TickTick.** reply / relay / forward appear as checklist
-items so the to-do reads completely, but they carry no executable payload and
-ticking one does nothing. Rationale: TickTick's `OpenChecklistItem` has only
-`title / status / sortOrder / startDate / isAllDay / timeZone` — **no
-description field**. A send approved from a checklist item would be approved
-without its draft being visible, which defeats both the wrong-recipient rule and
-the `owner-voice` pass. Reviewing a draft needs a field that can hold it.
+**An event WITH attendees is invited by ticking its sub-action.** The event is
+created on the owner's calendar the same way; the invite emails are the separate,
+ticked step. Three rules make that tick safe enough to be worth it:
+
+1. **The item text carries the resolved EMAIL ADDRESSES and the exact local
+   time** — never display names alone. Wrong-recipient is this product's worst
+   failure, and "invite Kevin" is not reviewable while
+   `kevin.chen@acme.com` is. If the item does not show what the tick will do,
+   the tick is not an approval.
+2. **Unresolvable attendees produce NO executable item.** ASK-not-GUESS is
+   unchanged: the sub-action degrades to a "me" item saying which name could not
+   be resolved. An unresolved name must never reach a tickable send.
+3. **Ticking is idempotent and one-way.** Execution goes through the existing
+   receipt machinery, so a re-poll of an already-executed item does nothing.
+   UN-ticking does NOT cancel and does NOT re-send — undoing a checkbox cannot
+   un-email anybody, so pretending otherwise would be a lie.
+
+**Other sends are inert.** reply / relay / forward appear as checklist items so
+the to-do reads completely, but carry no executable payload — see §1 for why the
+line falls between an invite and a reply.
 
 ## 3. The duplicate problem (the core engineering risk)
 
