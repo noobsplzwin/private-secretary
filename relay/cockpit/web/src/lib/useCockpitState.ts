@@ -75,6 +75,12 @@ export interface QueueAction {
     assignee?: string;
     _edited?: boolean;
     execution_receipt?: { kind: string; at?: string };
+    /**
+     * Owner feedback left ON the card without deciding it (core/addComment).
+     * Appended, never replaced — and it writes no label, so commenting cannot
+     * move the precision numbers the way skipping-to-comment did.
+     */
+    comments?: Array<{ at: string; text: string }>;
   };
   target?: { platform?: string; personaKey?: string };
   context?: {

@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  addComment,
+  readComments,
   approveAction,
   isCalendarRedundant,
   redundantPendingCalendarIds,
@@ -606,5 +608,55 @@ describe("normalizeCalendarTimes — the model stops doing timezone maths", () =
   it("does not touch non-calendar cards", () => {
     const r = validateActionItem({ ...raw({ start: "2026-08-13T15:00", tz: "Europe/Lisbon" }), action_type: "task" });
     expect(r.ok && r.item.params.start).toBe("2026-08-13T15:00");
+  });
+});
+
+describe("addComment — feedback without a decision", () => {
+  const card = (over: Partial<ActionItem> = {}): ActionItem => ({
+    id: "a1",
+    source_message_id: "slack:C1:1",
+    action_type: "task",
+    target: {},
+    reason: "r",
+    confidence: 0.9,
+    params: { title: "t" },
+    status: "suggested",
+    created_at: "2026-08-12T00:00:00Z",
+    ...over,
+  });
+
+  // THE point: leaving feedback used to require skipping, which recorded a
+  // rejection for cards the owner had actually praised.
+  it("never changes status", () => {
+    for (const status of ["suggested", "approved", "executed", "rejected"] as const) {
+      const out = addComment(card({ status }), "looks right", "2026-08-12T01:00:00Z");
+      expect(out.status).toBe(status);
+    }
+  });
+
+  // Appending is what removes the restore → re-skip loop used to revise a note.
+  it("appends instead of replacing", () => {
+    const one = addComment(card(), "first", "2026-08-12T01:00:00Z");
+    const two = addComment(one, "second", "2026-08-12T02:00:00Z");
+    expect(readComments(two)).toEqual([
+      { at: "2026-08-12T01:00:00Z", text: "first" },
+      { at: "2026-08-12T02:00:00Z", text: "second" },
+    ]);
+  });
+
+  it("trims and refuses an empty comment", () => {
+    expect(readComments(addComment(card(), "  padded  ", "t"))[0]!.text).toBe("padded");
+    expect(() => addComment(card(), "   ", "t")).toThrow(/empty/);
+  });
+
+  it("keeps the rest of params intact", () => {
+    const out = addComment(card({ params: { title: "t", start: "x" } }), "c", "t");
+    expect(out.params.title).toBe("t");
+    expect(out.params.start).toBe("x");
+  });
+
+  it("readComments ignores malformed rows rather than throwing", () => {
+    const messy = card({ params: { comments: [{ text: "ok", at: "t" }, "junk", { text: 5 }] } });
+    expect(readComments(messy)).toEqual([{ text: "ok", at: "t" }]);
   });
 });

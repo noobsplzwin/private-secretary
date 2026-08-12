@@ -22,6 +22,7 @@
 //   POST /api/actions/:id/approve   → approve + execute
 //   POST /api/actions/:id/edit      → {draft?, params?}
 //   POST /api/actions/:id/skip
+//   POST /api/actions/:id/comment  → {text}  (annotate; NO status change, NO label)
 //   POST /api/actions/:id/restore
 //   POST /api/actions/:id/mark-sent → {ref?}  (awaiting-manual → executed)
 //   POST /api/flush-auto             → auto-execute task/ignore ≥0.9
@@ -624,6 +625,17 @@ export function createCockpitServer(opts: CockpitServerOptions): {
               note: typeof body.note === "string" ? body.note.slice(0, 500) : undefined,
             }),
           });
+          return;
+        }
+        case "comment": {
+          // Annotating is NOT deciding: no status change, no label. Bounded the
+          // same way the skip note is, so one paste can't bloat loop-state.
+          const text = typeof body.text === "string" ? body.text.slice(0, 2000) : "";
+          if (!text.trim()) {
+            sendJson(res, 400, { error: "comment text is required" });
+            return;
+          }
+          sendJson(res, 200, { action: api.comment(id, text) });
           return;
         }
         case "done":

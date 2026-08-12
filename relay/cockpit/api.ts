@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  addComment,
   approveAction,
   hasReceipt,
   markDone,
@@ -1109,6 +1110,36 @@ export class CockpitApi {
   // reason/field_errors are the P0 typed-skip signal. `deferred` means "the card
   // is right, just not today" and is excluded from the precision denominator —
   // counting a deferral as a false positive would understate real precision.
+  /**
+   * Annotate a card without deciding it.
+   *
+   * Deliberately does NOT call this.label(): a comment is feedback, not a
+   * verdict, and the ledger's precision numbers must stay decisions-only. It
+   * was the absence of this method that made the owner skip 19 cards purely to
+   * leave notes on them — several of which he had praised — which is exactly
+   * the pollution that must not recur.
+   *
+   * Works in any status, and appends rather than replaces, so refining a
+   * comment no longer means restore → re-skip.
+   */
+  comment(id: string, text: string): ActionItem {
+    return this.withLock((state) => {
+      const action = this.findOrThrow(state, id);
+      const updated = addComment(action, text, this.now());
+      this.replace(state, updated);
+      saveState(this.opts.statePath, state);
+      // The activity log is append-only and never pruned, so it — not
+      // loop-state — is the durable home for the text. summary is capped at 300
+      // chars, so the full comment rides in `data`.
+      this.activity(
+        "comment",
+        `commented on ${updated.action_type} "${CockpitApi.headlineOf(updated)}"`,
+        { id, action_type: updated.action_type, text: text.trim(), status: updated.status },
+      );
+      return updated;
+    });
+  }
+
   skip(
     id: string,
     reason?: { existence?: ExistenceVerdict; field_errors?: FieldError[]; note?: string },

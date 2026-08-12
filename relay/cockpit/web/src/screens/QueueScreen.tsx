@@ -368,7 +368,18 @@ export default function QueueScreen() {
   const [editCardId, setEditCardId] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [skipFor, setSkipFor] = useState<string | null>(null);
+  // Annotating a card is SEPARATE from deciding it. Before this existed the
+  // only free-text field lived in the skip panel, so leaving feedback meant
+  // rejecting the card — and revising a note meant restore → re-skip.
+  const [commentFor, setCommentFor] = useState<string | null>(null);
+  const [commentText, setCommentText] = useState("");
   const [skipFields, setSkipFields] = useState<string[]>([]);
+  // Free-text skip reason. The six buttons cover the shapes we can aggregate;
+  // this is for the case they don't fit, which is exactly where the diagnosis
+  // usually lives. Optional and it rides along with whichever button is
+  // clicked — the one-click flow is the whole value of this panel, so typing
+  // must never become a required step.
+  const [skipNote, setSkipNote] = useState("");
   // Approve in flight: the clicked action id, so its button can show a spinner
   // instead of appearing frozen while the approve round-trips.
   const [approvingId, setApprovingId] = useState<string | null>(null);
@@ -652,6 +663,7 @@ export default function QueueScreen() {
       } else if (act === "skip") {
         // P0: skipping asks WHY — one click on a reason completes the skip.
         setSkipFields([]);
+        setSkipNote("");
         setSkipFor(id);
       } else if (act === "skip-reason") {
         const existence = arg;
@@ -659,6 +671,9 @@ export default function QueueScreen() {
         await apiPost(`/api/actions/${encodeURIComponent(id)}/skip`, {
           existence,
           field_errors: skipFields,
+          // Only when actually typed, so the common one-click path sends the
+          // same body it always did.
+          ...(skipNote.trim() ? { note: skipNote.trim() } : {}),
         });
         setSkipFor(null);
         // Select the card that took the skipped one's place. `refresh`
@@ -668,6 +683,20 @@ export default function QueueScreen() {
         const next = fresh ? selectableIds(fresh.clusters ?? []) : [];
         setSelectedId(next.length ? (next[Math.min(idx, next.length - 1)] ?? null) : null);
         setEditCardId(null); // return to the task view
+      } else if (act === "comment") {
+        setCommentText("");
+        setCommentFor(id);
+      } else if (act === "comment-submit") {
+        if (!commentText.trim()) return;
+        await apiPost(`/api/actions/${encodeURIComponent(id)}/comment`, { text: commentText.trim() });
+        // Clear the box but KEEP the panel open: adding a second thought is the
+        // normal case, and it is what the restore → re-skip loop was for.
+        setCommentText("");
+        await refresh();
+        setSelectedId(id);
+      } else if (act === "comment-cancel") {
+        setCommentFor(null);
+        setCommentText("");
       } else if (act === "skip-cancel") {
         setSkipFor(null);
       } else if (act === "mark-sent") {
@@ -1217,6 +1246,66 @@ function renderTaskCard(c: TaskCluster, tierMeta: (typeof TIERS)[number] | null)
   }
 
   // The skip-reason panel: one click on a reason completes the skip.
+  // Annotate without deciding. Existing comments are listed so a second thought
+  // is an APPEND, not a rewrite — which is the whole point: revising a note used
+  // to require restoring the card and skipping it again.
+  function commentPanel(a: QueueAction) {
+    const existing = (a.params?.comments ?? []).filter((c) => typeof c?.text === "string");
+    return (
+      <div className="bg-surface border border-outline rounded-xl px-6 py-4" data-testid="comment-panel">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-label-sm text-on-surface-variant uppercase tracking-wider">
+            Comment — feedback only, the card is not decided
+          </span>
+          <button
+            type="button"
+            className="text-label-sm text-on-surface-variant hover:text-on-surface"
+            onClick={() => handleAct("comment-cancel", a.id)}
+          >
+            Close
+          </button>
+        </div>
+        {existing.length > 0 && (
+          <ul className="mb-3 flex flex-col gap-2">
+            {existing.map((c, i) => (
+              <li key={i} className="text-body-base text-on-surface bg-surface-variant rounded-lg px-3 py-2">
+                <span className="text-label-sm text-on-surface-variant mr-2">
+                  {c.at.slice(0, 16).replace("T", " ")}
+                </span>
+                {c.text}
+              </li>
+            ))}
+          </ul>
+        )}
+        <textarea
+          className="comment-text w-full bg-surface border border-outline rounded-lg px-3 py-2 text-body-base text-on-surface placeholder:text-on-surface-variant focus:border-primary/40 focus:outline-none"
+          rows={3}
+          maxLength={2000}
+          placeholder="What is wrong, or right, about this card? (⌘/Ctrl+Enter to add)"
+          value={commentText}
+          onChange={(e) => setCommentText(e.target.value)}
+          onKeyDown={(e) => {
+            // Plain Enter must stay a newline — these are multi-line notes.
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+              e.preventDefault();
+              void handleAct("comment-submit", a.id);
+            }
+          }}
+        />
+        <div className="flex justify-end mt-2">
+          <button
+            type="button"
+            className="bg-surface text-on-surface text-body-medium px-4 py-2 rounded border border-outline hover:bg-surface-variant disabled:opacity-40"
+            disabled={!commentText.trim()}
+            onClick={() => handleAct("comment-submit", a.id)}
+          >
+            Add comment
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   function skipReasonPanel(id: string) {
     return (
       <div className="bg-surface border border-outline rounded-xl px-6 py-4">
@@ -1244,6 +1333,25 @@ function renderTaskCard(c: TaskCluster, tierMeta: (typeof TIERS)[number] | null)
               {r.label}
             </button>
           ))}
+        </div>
+        <div className="mb-3">
+          <input
+            type="text"
+            className="skip-note w-full bg-surface border border-outline rounded-lg px-3 py-1.5 text-body-base text-on-surface placeholder:text-on-surface-variant focus:border-primary/40 focus:outline-none"
+            placeholder="In your own words (optional) — sent with whichever reason you click; Enter files it as Other"
+            maxLength={500}
+            value={skipNote}
+            onChange={(e) => setSkipNote(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter is the escape hatch for "none of the six fit": it files
+              // the skip as `other` carrying the text, so a reason that only
+              // makes sense in prose still gets recorded instead of lost.
+              if (e.key === "Enter" && skipNote.trim()) {
+                e.preventDefault();
+                void handleAct("skip-reason", id, "other");
+              }
+            }}
+          />
         </div>
         <div className="flex items-center gap-3 text-label-sm text-on-surface-variant border-t border-outline pt-3">
           <span>Also flag wrong fields (optional):</span>
@@ -1285,6 +1393,7 @@ function renderTaskCard(c: TaskCluster, tierMeta: (typeof TIERS)[number] | null)
     // The reason panel belongs to whichever card was clicked — the footer's
     // Skip OR any row's — so a multi-card task can skip a specific sub-action.
     const pendingSkip = skipFor ? c.actions.find((a) => a.id === skipFor) : null;
+    const pendingComment = commentFor ? c.actions.find((a) => a.id === commentFor) : null;
 
     return (
       <div className="w-full max-w-[800px]" data-testid="task-detail">
@@ -1375,7 +1484,9 @@ function renderTaskCard(c: TaskCluster, tierMeta: (typeof TIERS)[number] | null)
           </section>
         )}
 
-        {pendingSkip ? (
+        {pendingComment ? (
+          commentPanel(pendingComment)
+        ) : pendingSkip ? (
           skipReasonPanel(pendingSkip.id)
         ) : (
           <div className="flex items-center justify-between gap-4 bg-surface border border-outline rounded-xl px-6 py-4">
@@ -1414,15 +1525,26 @@ function renderTaskCard(c: TaskCluster, tierMeta: (typeof TIERS)[number] | null)
                 </span>
               )}
             </div>
-            {skipTarget && (
-              <button
-                type="button"
-                className="text-on-surface-variant text-body-medium hover:text-on-surface"
-                onClick={() => handleAct("skip", skipTarget.id)}
-              >
-                Skip
-              </button>
-            )}
+            <div className="flex items-center gap-4">
+              {skipTarget && (
+                <button
+                  type="button"
+                  className="text-on-surface-variant text-body-medium hover:text-on-surface"
+                  onClick={() => handleAct("comment", skipTarget.id)}
+                >
+                  Comment
+                </button>
+              )}
+              {skipTarget && (
+                <button
+                  type="button"
+                  className="text-on-surface-variant text-body-medium hover:text-on-surface"
+                  onClick={() => handleAct("skip", skipTarget.id)}
+                >
+                  Skip
+                </button>
+              )}
+            </div>
           </div>
         )}
       </div>

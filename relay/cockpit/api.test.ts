@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CockpitApi, CockpitBadRequestError, type CockpitExecutor } from "./api.js";
@@ -7,6 +7,7 @@ import { loadState } from "../io/state.js";
 import { toRfc3339 } from "../proc/execute.js";
 import { activityPathFor, appendActivity, readActivity } from "../io/activity-log.js";
 import { loadSettings } from "../io/settings.js";
+import { labelsPathFor } from "../io/labels.js";
 import { __setRunner, type SecurityRunner } from "../io/keychain.js";
 import { _resetIdentity, _setIdentityForTest } from "../io/identity.js";
 import {
@@ -896,5 +897,59 @@ describe("tools config (Settings → Tools)", () => {
     expect(cfg.tools.notion?.label).toBe("Notion");
     expect(cfg.effective.notion?.label).toBe("Notion");
     expect(cfg.effective.jira).toBeDefined(); // built-ins survive the merge
+  });
+});
+
+describe("comment — annotate without deciding", () => {
+  // REGRESSION: the only free-text field used to live in the skip panel, so
+  // leaving feedback rejected the card. 19 cards were annotated that way in one
+  // sitting, several of them praised, and every one landed in the ledger as
+  // `rejected`. A comment must never move a status or write a label.
+  it("leaves the status untouched and writes NO label", () => {
+    seed([action()]);
+    const api = mkApi(sendingExecutor);
+    const countLabels = () =>
+      existsSync(labelsPathFor(statePath))
+        ? readFileSync(labelsPathFor(statePath), "utf8").split("\n").filter(Boolean).length
+        : 0;
+    const before = countLabels();
+
+    const out = api.comment("a1", "  this one is good, wrong date though  ");
+    expect(out.status).toBe("suggested");
+    expect(loadState(statePath).actions[0]!.status).toBe("suggested");
+
+    expect(countLabels()).toBe(before); // the precision ledger stays decisions-only
+  });
+
+  it("appends, so refining a thought no longer needs restore + re-skip", () => {
+    seed([action()]);
+    const api = mkApi(sendingExecutor);
+    api.comment("a1", "first");
+    const out = api.comment("a1", "second");
+    expect((out.params.comments as Array<{ text: string }>).map((c) => c.text)).toEqual([
+      "first",
+      "second",
+    ]);
+  });
+
+  it("carries the full text into the activity log", () => {
+    seed([action()]);
+    mkApi(sendingExecutor).comment("a1", "wrong person — this is for Zack");
+    const rows = readActivity(readFileSync(activityPathFor(statePath), "utf8"));
+    const rec = rows.find((r) => r.kind === "comment");
+    expect(rec).toBeTruthy();
+    expect((rec!.data as { text?: string }).text).toBe("wrong person — this is for Zack");
+  });
+
+  // Commenting on something already decided is legitimate — refusing it would
+  // recreate the coupling this exists to remove.
+  it("works on an executed card too", () => {
+    seed([action({ status: "executed", params: { execution_receipt: { kind: "local", ref: "l", at: "t" } } })]);
+    expect(mkApi(sendingExecutor).comment("a1", "should not have sent this").status).toBe("executed");
+  });
+
+  it("refuses an empty comment", () => {
+    seed([action()]);
+    expect(() => mkApi(sendingExecutor).comment("a1", "   ")).toThrow(/empty/);
   });
 });

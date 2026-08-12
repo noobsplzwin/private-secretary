@@ -169,7 +169,97 @@ describe("QueueScreen", () => {
     });
   });
 
+  // REGRESSION: the only free-text field used to live in the skip panel, so
+  // leaving feedback rejected the card — and revising a note meant restore →
+  // re-skip. Commenting must be its own action.
+  it("(h) Comment posts feedback WITHOUT skipping the card", async () => {
+    renderQueue();
+    await waitFor(() => expect(screen.getByTestId("detail-title").textContent).toBe("Numbers for Bob"));
+    const commentButtons = screen.getAllByRole("button", { name: "Comment" });
+    fireEvent.click(commentButtons[commentButtons.length - 1]!);
+    expect(await screen.findByTestId("comment-panel")).toBeTruthy();
+    fireEvent.change(screen.getByPlaceholderText(/What is wrong, or right/i), {
+      target: { value: "  good card, wrong date  " },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add comment" }));
+    await waitFor(() => {
+      const call = mockApiPost.mock.calls.find(([p]) => p === "/api/actions/a1/comment");
+      expect(call![1]).toEqual({ text: "good card, wrong date" });
+    });
+    // and nothing was skipped
+    expect(mockApiPost.mock.calls.find(([p]) => p === "/api/actions/a1/skip")).toBeUndefined();
+  });
+  it("(i) Add comment stays disabled until something is typed", async () => {
+    renderQueue();
+    await waitFor(() => expect(screen.getByTestId("detail-title").textContent).toBe("Numbers for Bob"));
+    const commentButtons = screen.getAllByRole("button", { name: "Comment" });
+    fireEvent.click(commentButtons[commentButtons.length - 1]!);
+    const submit = await screen.findByRole("button", { name: "Add comment" });
+    expect((submit as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText(/What is wrong, or right/i), { target: { value: "x" } });
+    expect((submit as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("(e) a typed note rides along with the reason button that is clicked", async () => {
+    renderQueue();
+    await waitFor(() => expect(screen.getByTestId("detail-title").textContent).toBe("Numbers for Bob"));
+    const skipButtons = screen.getAllByRole("button", { name: "Skip" });
+    fireEvent.click(skipButtons[skipButtons.length - 1]!);
+    const input = await screen.findByPlaceholderText(/In your own words/i);
+
+    fireEvent.change(input, { target: { value: "  he answered this by phone yesterday  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Already handled" }));
+
+    await waitFor(() => {
+      const skipCall = mockApiPost.mock.calls.find(([p]) => p === "/api/actions/a1/skip");
+      expect(skipCall![1]).toEqual({
+        existence: "already_handled",
+        field_errors: [],
+        note: "he answered this by phone yesterday", // trimmed
+      });
+    });
+  });
+
+  // The one-click path must send exactly what it always did — an optional field
+  // that quietly changes every request would be a regression in itself.
+  it("(f) sends no note key at all when nothing was typed", async () => {
+    renderQueue();
+    await waitFor(() => expect(screen.getByTestId("detail-title").textContent).toBe("Numbers for Bob"));
+    const skipButtons = screen.getAllByRole("button", { name: "Skip" });
+    fireEvent.click(skipButtons[skipButtons.length - 1]!);
+    expect(await screen.findByText(/Why are you skipping/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Not a thing" }));
+
+    await waitFor(() => {
+      const skipCall = mockApiPost.mock.calls.find(([p]) => p === "/api/actions/a1/skip");
+      expect(Object.keys(skipCall![1] as object)).not.toContain("note");
+    });
+  });
+
+  // Enter is the "none of the six fit" path: prose survives instead of being
+  // lost because no button matched it.
+  it("(g) Enter files a prose-only reason as Other, carrying the text", async () => {
+    renderQueue();
+    await waitFor(() => expect(screen.getByTestId("detail-title").textContent).toBe("Numbers for Bob"));
+    const skipButtons = screen.getAllByRole("button", { name: "Skip" });
+    fireEvent.click(skipButtons[skipButtons.length - 1]!);
+    const input = await screen.findByPlaceholderText(/In your own words/i);
+
+    fireEvent.change(input, { target: { value: "this one is really for Zack" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      const skipCall = mockApiPost.mock.calls.find(([p]) => p === "/api/actions/a1/skip");
+      expect(skipCall![1]).toEqual({
+        existence: "other",
+        field_errors: [],
+        note: "this one is really for Zack",
+      });
+    });
+  });
+
   it("(d) approving while editing POSTs the draft edit BEFORE the approve", async () => {
+
     renderQueue();
     await waitFor(() => expect(screen.getByTestId("detail-title").textContent).toBe("Numbers for Bob"));
 
@@ -443,4 +533,3 @@ describe("Show original", () => {
     expect(screen.getAllByText(/U07: yo/).length).toBeGreaterThan(0);
   });
 });
-

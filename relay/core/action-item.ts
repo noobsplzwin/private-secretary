@@ -442,6 +442,51 @@ export function approveAction(
   return { ...a, status: "approved" };
 }
 
+// A note the owner leaves ON a card, as feedback, WITHOUT deciding it.
+//
+// WHY THIS EXISTS: for a while the only free-text field in the cockpit lived in
+// the skip panel, so leaving a comment meant rejecting the card. The owner
+// annotated 19 cards that way in one sitting — including several he had
+// explicitly praised ("这三件事都创建的非常好") — and every one of them landed in
+// the ledger as `rejected`, understating precision. Worse, a note could not be
+// revised, so improving one meant restore → re-skip; one card went through that
+// loop four times.
+//
+// So a comment: changes NO status, writes NO label (a comment is not a
+// decision, and the precision metric must stay decisions-only), and APPENDS —
+// re-commenting is the normal way to refine a thought.
+export interface ActionComment {
+  at: string; // ISO
+  text: string;
+}
+
+export function readComments(a: ActionItem): ActionComment[] {
+  const raw = a.params?.comments;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (c): c is ActionComment =>
+      !!c && typeof (c as ActionComment).text === "string" && typeof (c as ActionComment).at === "string",
+  );
+}
+
+/**
+ * Append a comment. Allowed in EVERY status on purpose — the owner may well
+ * want to say something about a card he already approved, and refusing that
+ * would recreate the coupling this feature exists to remove.
+ *
+ * Stored in `params` rather than as a top-level field so it survives
+ * validateActionItem, which rebuilds known fields explicitly and would
+ * otherwise drop it.
+ */
+export function addComment(a: ActionItem, text: string, at: string): ActionItem {
+  const trimmed = text.trim();
+  if (!trimmed) throw new Error("comment text is empty");
+  return {
+    ...a,
+    params: { ...a.params, comments: [...readComments(a), { at, text: trimmed }] },
+  };
+}
+
 export function rejectAction(a: ActionItem): ActionItem {
   if (a.status !== "suggested") throw new InvalidActionTransition("skip", a.status);
   return { ...a, status: "rejected" };
