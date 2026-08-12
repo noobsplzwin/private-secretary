@@ -256,6 +256,110 @@ export function callResultText(res: unknown): string {
   return JSON.stringify(res);
 }
 
+// A callTool result's DATA rows, flattened.
+//
+// `JSON.parse(callResultText(res))` is the obvious thing and it is wrong: a
+// server may split one logical result across SEVERAL text blocks (TickTick's
+// list_projects returns a JSON object per project), and callResultText joins
+// them with "\n", so the parse dies on "Unexpected non-whitespace character
+// after JSON" at the second document. Handled here, once, because it is a
+// property of MCP and not of any one server:
+//
+//   · structuredContent wins when present — already-typed data, no parsing
+//   · a value shaped {result: X} contributes X (TickTick's envelope)
+//   · an array contributes its elements; anything else is one element
+//   · a text block holding several concatenated JSON values is split
+//   · a non-JSON block is kept as its string, never silently dropped
+export function callResultRows(res: unknown): unknown[] {
+  const r = res as { content?: unknown; structuredContent?: unknown } | null;
+  if (r?.structuredContent !== undefined) return flattenResult(r.structuredContent);
+
+  const content = r?.content;
+  if (!Array.isArray(content)) return flattenResult(res);
+
+  const rows: unknown[] = [];
+  for (const block of content) {
+    const text = (block as { text?: unknown } | null)?.text;
+    if (typeof text !== "string") {
+      rows.push(block);
+      continue;
+    }
+    rows.push(...parseTextBlock(text));
+  }
+  return rows;
+}
+
+// The single object a create/update tool returns. Throws rather than returning
+// undefined: every caller needs the id, and a silent undefined would surface
+// later as "created nothing" with no explanation.
+export function callResultObject(res: unknown): Record<string, unknown> {
+  const first = callResultRows(res)[0];
+  if (first === undefined || typeof first !== "object" || first === null) {
+    throw new Error(`MCP result carried no object (got ${JSON.stringify(first)?.slice(0, 120)})`);
+  }
+  return first as Record<string, unknown>;
+}
+
+function flattenResult(v: unknown): unknown[] {
+  if (v === undefined || v === null) return [];
+  const inner = (v as { result?: unknown }).result;
+  if (inner !== undefined) return flattenResult(inner);
+  return Array.isArray(v) ? v : [v];
+}
+
+function parseTextBlock(text: string): unknown[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  try {
+    return flattenResult(JSON.parse(trimmed));
+  } catch {
+    // Either several JSON values in one block, or not JSON at all.
+  }
+  const docs = splitJsonDocuments(trimmed);
+  const out: unknown[] = [];
+  for (const d of docs) {
+    try {
+      out.push(...flattenResult(JSON.parse(d)));
+    } catch {
+      // An unparsable fragment — skip it, the rest of the block still counts.
+    }
+  }
+  return out.length > 0 ? out : [trimmed];
+}
+
+// Split a string holding one or more concatenated top-level JSON values.
+// String/escape state is tracked so a brace inside a string value cannot shift
+// the nesting depth and truncate a document mid-way.
+function splitJsonDocuments(text: string): string[] {
+  const docs: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]!;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === "{" || ch === "[") {
+      if (depth === 0) start = i;
+      depth++;
+    } else if (ch === "}" || ch === "]") {
+      depth--;
+      if (depth === 0 && start >= 0) {
+        docs.push(text.slice(start, i + 1));
+        start = -1;
+      }
+    }
+  }
+  return docs;
+}
+
 // Trigger ONLY the OAuth handshake for a URL-based MCP tool (no tool call) —
 // the Settings page's "Connect" button. Runs the browser flow, stores the
 // token in Keychain, then disconnects. A tool whose token already exists
