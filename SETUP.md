@@ -143,7 +143,114 @@ to paste them manually. That is intentional, not a missing feature.
 
 ---
 
-## 5. Contact profiles (personas)
+## 5. TickTick (optional — where approved to-dos land)
+
+Without this, an approved `task` card stays local (a `local` receipt) exactly as
+before. With it, the card becomes a real TickTick to-do: title, notes, the
+`next_actions` as a checklist, and a priority mapped from the daily plan's tier
+(**A→high, B→medium, C→low, D→none**).
+
+Add a `ticktick` entry in the cockpit's **Settings → Tools**, or write
+`config/tools.json` directly:
+
+```json
+{
+  "tools": {
+    "ticktick": {
+      "label": "TickTick",
+      "requiredParams": ["title"],
+      "config": {
+        "type": "mcp",
+        "url": "https://mcp.ticktick.com/",
+        "project": "💼Work"
+      }
+    }
+  }
+}
+```
+
+`https://mcp.ticktick.com/` is TickTick's official remote MCP server. It supports
+**dynamic client registration** and PKCE (`S256`), which is exactly what
+`relay/io/mcp-tool.ts` already does — no app to register at
+developer.ticktick.com, no client secret to store. Scopes are `tasks:read` +
+`tasks:write`.
+
+`project` is the destination list **NAME** and must match exactly — resolution is
+ASK-not-GUESS (an exact unambiguous match or an error), so a typo fails loudly
+instead of filing the to-do somewhere you never look. Omit it to use the Inbox.
+The first approve opens a browser for OAuth; the token is stored in Keychain
+under `taiv-secretary-mcp-ticktick`.
+
+**TickTick tokens cannot be silently refreshed.** Its authorisation server
+advertises `grant_types_supported: ["authorization_code"]` only — no
+`refresh_token`. So when the access token expires the daemon cannot renew it in
+the background the way Slack/Google do; you have to re-authorise through the
+browser. Same operational shape as the Gmail note in §3.
+
+Connect (first run opens the browser) and verify — creates nothing:
+
+```bash
+npx tsx scripts/smoke-ticktick.ts
+```
+
+It prints the server's tools and your lists, and fails loudly if the configured
+destination list doesn't resolve — which is where a typo surfaces, rather than at
+approve time.
+
+**Meetings are NOT mirrored into TickTick.** Calendar cards already create a real
+Google Calendar event and email the attendees their invites
+(`sendUpdates: "all"`). To see those in TickTick, subscribe to the calendar in
+TickTick's own settings — that shows the real event, with attendees, and no
+duplicate row to keep in sync.
+
+Four TickTick API limits worth knowing, all of which fail silently:
+
+- `batch_add_tasks` / `batch_update_tasks` **cap at 50 tasks per call and
+  truncate without an error** — ask for 100 and you get 50 back with an *empty*
+  `id2error`. Pinned as `TICKTICK_BATCH_MAX` in `relay/core/mstodo.ts`.
+- `create_task` **ignores `status: 2`** — a task cannot be created already
+  completed; completion is a second `batch_update_tasks` pass.
+- There is **no `completedTime` field at all**, so an original completion date
+  cannot be restored.
+- Completing a task that carries a `repeatFlag` makes TickTick spawn the **next
+  occurrence**, so recurrence must be stripped from anything being archived.
+
+### Migrating a Microsoft To Do export
+
+```bash
+npx tsx scripts/migrate-mstodo-to-ticktick.ts --dry-run
+npx tsx scripts/migrate-mstodo-to-ticktick.ts
+```
+
+Reads `todo-export/todo_export.json`. Completed tasks go to the
+`📥 MS To Do Archive` list, open ones to `--open-list` (default `💼Work`), with
+notes, checklists, due dates and recurrence preserved. Because TickTick cannot
+accept a historical completion date, each task's **real** Microsoft dates are
+written into its notes, and the whole archive will show as completed on the day
+you run it.
+
+Idempotent: a Microsoft id is recorded in `state/mstodo-migration.jsonl` only
+after its whole chunk is confirmed created, and recorded ids are skipped on a
+re-run — so an interrupted, rate-limited or short-counted run just resumes. A
+chunk that comes back short is deliberately left *unrecorded* and the script
+exits non-zero; re-running finishes it.
+
+If a run ever leaves the archive inconsistent (active tasks that should be
+completed, or a ledger claiming more than TickTick holds), this reconciles it
+against TickTick rather than the ledger:
+
+```bash
+npx tsx scripts/repair-mstodo-migration.ts          # read-only report
+npx tsx scripts/repair-mstodo-migration.ts --apply
+```
+
+It matches rows by **fingerprint** (title + notes, `relay/core/mstodo.ts`), not
+by title — 42 of the exported titles repeat, one of them 43 times, so a title
+join would mark 317 uncreated rows as done.
+
+---
+
+## 6. Contact profiles (personas)
 
 The engine works without them but reads intent much worse: no sense of who this
 person is, what they own, or how they write.
@@ -162,7 +269,7 @@ live. Start with your 5–10 most frequent contacts.
 
 ---
 
-## 6. Business facts (recommended)
+## 7. Business facts (recommended)
 
 ```bash
 cp config/business-context.example.md config/business-context.md
@@ -178,7 +285,7 @@ skill). Without it drafts read as generically human rather than as you.
 
 ---
 
-## 7. Run it
+## 8. Run it
 
 ```bash
 # Build the cockpit web app first (React + Vite; only needed after checkout
@@ -210,7 +317,7 @@ with exit 78 and no output. Keep log paths in `~/Library/Logs`.
 
 ---
 
-## 8. Prove it works end-to-end
+## 9. Prove it works end-to-end
 
 ```bash
 npx tsx scripts/run-secretary.ts --once
