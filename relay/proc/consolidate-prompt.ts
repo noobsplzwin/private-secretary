@@ -77,6 +77,19 @@ RULES:
   order task just because they share a person or a loosely-related keyword
   (switcher / 高通 / 开发板 are NOT the same task). A shared KEYWORD is not a shared
   objective.
+- The SAME MESSAGE is not enough either. One message often raises two unrelated
+  things; two cards off one message are still two tasks unless they share the
+  objective.
+- NEVER INVENT AN UMBRELLA. If the only way to describe the group is a CATEGORY
+  (…方案 / …相关事项 / …准备工作 / trip prep / device security), it is not a task —
+  it is a folder, and the cards belong apart. The real failure: "Send Zech a Mac
+  VPN recommendation", "Call Jordan Lee at Mercedes about the Jeep" and "verify a
+  GitHub key for Rob" were merged as "中国出差网络与设备安全方案". Three unrelated
+  outcomes; nothing is finished by doing all three.
+- A title that needs "+" or "与" to join TWO objectives means TWO tasks. "switcher
+  GPIO 独占 + 盒子黑屏排查" is a question to answer and a bug to chase — split them.
+  Test yourself: name the ONE outcome that all the cards together achieve. If you
+  cannot say it in a few words without "and", do not group them.
 - This pass is AUTHORITATIVE: re-list EVERY card that still belongs to a task,
   INCLUDING cards already tagged (reuse the task's exact title). If you OMIT a
   card that currently has a task, it will be DETACHED and become standalone — so

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { consolidateTasks } from "./consolidate.js";
+import { buildConsolidationRequest } from "./consolidate-prompt.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { TaskRegistry } from "../core/tasks.js";
 
@@ -117,5 +118,27 @@ describe("consolidateTasks", () => {
   it("no-ops when the model returns no assignments", async () => {
     const r = await consolidateTasks([card("a"), card("b")], {}, jsonStub([]));
     expect(r.updatedActions).toHaveLength(0);
+  });
+});
+
+// Each of these rules is a merge that really happened and made the owner's list
+// unusable. Deleting one brings that merge back.
+describe("consolidate prompt: what is NOT one task", () => {
+  const system = buildConsolidationRequest({ cards: [], registry: {} }).system;
+
+  it("forbids an invented umbrella, naming the merge that caused the rule", () => {
+    expect(system).toContain("NEVER INVENT AN UMBRELLA");
+    expect(system).toContain("中国出差网络与设备安全方案");
+  });
+
+  it("rejects a title that joins two objectives", () => {
+    expect(system).toContain('needs "+" or "与" to join TWO objectives');
+  });
+
+  it("keeps the same-person, same-supplier, same-keyword and same-message rules", () => {
+    expect(system).toContain("The SAME sender is NOT enough to group");
+    expect(system).toContain("The SAME supplier / vendor / partner");
+    expect(system).toContain("A shared KEYWORD is not a shared");
+    expect(system).toContain("The SAME MESSAGE is not enough");
   });
 });
