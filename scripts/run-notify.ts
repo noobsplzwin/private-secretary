@@ -480,6 +480,7 @@ async function buildRefresh(): Promise<RefreshDeps | undefined> {
       projectCatalog,
       toolKeys: Object.keys(effectiveToolSpecs(statePath)),
       ownerTimeZone,
+      personas: loadPersonas(personaDir),
       ttlMs: refreshTtlMin * 60_000,
       maxPerTick: refreshMaxPerTick,
     };

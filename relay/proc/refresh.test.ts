@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { refreshOpenTasks, _resetRefreshTtl, type RefreshDeps } from "./refresh.js";
+import type { Persona } from "../core/types.js";
 import { clusterKey } from "../core/unit-key.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { DraftedAction } from "./draft-prompt.js";
@@ -158,6 +159,56 @@ describe("refresh prompt: clock anchor", () => {
       nowLocal: "2026-08-02 11:00 (UTC+08:00)",
     });
     expect(req.userText).toContain("CURRENT TIME: 2026-08-02T03:00:00.000Z (UTC) = local 2026-08-02 11:00 (UTC+08:00)");
+  });
+});
+
+// REGRESSION: the invented-name check lived in draft.ts ALONE, and refresh
+// rewrites next_actions on every tick — so the warning evaporated on the first
+// refresh while the invented name stayed. A real card kept "发给 Fabian" on a
+// Cody thread that never says Fabian, with a roster that has no such person and
+// nothing on the card to say so.
+describe("invented names on refreshed cards", () => {
+  const ROSTER: Persona[] = [
+    {
+      key: "cody-taiv",
+      displayName: "Cody Chen",
+      relationship: "android lead",
+      handles: { gmail: "cody@taiv.tv" },
+      language: "en",
+      register: "casual",
+      toneNotes: "direct",
+      context: "hiring",
+    },
+  ];
+  const withSteps = (steps: string[]): DraftedAction => ({
+    ...CAL,
+    action_type: "task",
+    params: { title: "JD 复核" },
+    next_actions: steps,
+  });
+
+  it("flags a name in neither the thread nor the roster", async () => {
+    const r = await refreshOpenTasks(
+      [card("m1")],
+      deps({
+        actions: [withSteps(["把提交记录发给 Fabian 佐证"])],
+        thread: "Cody: JD 改完了，你看一下",
+        personas: ROSTER,
+      }),
+    );
+    expect(r.newActions[0]!.params.unverified_names).toEqual(["Fabian"]);
+  });
+
+  it("stays quiet when the thread names the person", async () => {
+    const r = await refreshOpenTasks(
+      [card("m1")],
+      deps({
+        actions: [withSteps(["把提交记录发给 Darren 佐证"])],
+        thread: "Darren: 我休假前想把 build server 交接掉",
+        personas: ROSTER,
+      }),
+    );
+    expect(r.newActions[0]!.params.unverified_names).toBeUndefined();
   });
 });
 

@@ -11,6 +11,7 @@
 // daemon supplies the WeChat/Slack/Gmail readers and tests stub them).
 
 import { randomUUID } from "node:crypto";
+import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
 import {
   validateActionItem,
   type ActionContext,
@@ -43,6 +44,9 @@ export interface RefreshDeps {
   // Connected tool keys, forwarded to the prompt so a refreshed card can become
   // a ticket with a VALID params.tool instead of a guessed one.
   toolKeys?: string[];
+  // The roster, for the invented-name check below. Without it the check cannot
+  // tell a real colleague from a hallucination, so it is skipped.
+  personas?: Persona[];
   ttlMs?: number;
   // Cap on conversations refreshed per tick (each is one LLM call). The
   // least-recently-refreshed eligible conversations go first, so load spreads
@@ -146,12 +150,25 @@ export async function refreshOpenTasks(
         s.action_type === "reply"
           ? { platform, personaKey: persona?.key ?? null }
           : s.target ?? {};
+      // An INVENTED person in a next_action — the same check draft.ts runs.
+      // It was in draft ALONE, and refresh rewrites next_actions every tick, so
+      // the warning evaporated on the first refresh while the invented name
+      // stayed: "发给 Fabian" survived on a Cody thread that never says Fabian
+      // and a roster that has no such person, with nothing on the card to say so.
+      const params: Record<string, unknown> = { ...(s.params ?? {}) };
+      if (Array.isArray(s.next_actions) && deps.personas) {
+        const unverified = findUnverifiedNames(s.next_actions as string[], {
+          threadText: thread,
+          aliases: rosterAliases(deps.personas),
+        });
+        if (unverified.length > 0) params.unverified_names = unverified;
+      }
       const raw = {
         action_type: s.action_type,
         target,
         reason: s.reason,
         confidence: s.confidence,
-        params: s.params ?? {},
+        params,
         // Same null-tolerance as draft.ts: the model writes explicit nulls
         // for "none", which would fail validation and kill the card.
         ...(typeof s.draft === "string" ? { draft: s.draft } : {}),
