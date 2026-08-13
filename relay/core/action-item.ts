@@ -174,6 +174,21 @@ export function missingInfo(
       // calendar (huizhezheng@gmail.com). A meeting agreed over WeChat has no
       // attendee emails — the people/place go in the title/description instead.
       // Requiring attendees would make every such event un-approvable.
+      //
+      // time_confirmed is REQUIRED, and this is the fail-closed half of "never
+      // invent a clock time". The refresh prompt used to instruct the model to
+      // derive an hour from 上午/下午/晚上 "else a 1h block", so a meeting whose
+      // date was agreed but whose time was not got booked at a fabricated hour —
+      // the owner rejected such a card with "你哪来的20-21时间?". The prompts no
+      // longer ask for that, but a prompt is not enforcement.
+      //
+      // Deliberately NOT verified by searching the thread for the quoted time:
+      // that check was measured against the 9 real pending cards and could not
+      // be made reliable (local-vs-UTC, 12h/24h, CJK forms), so as a hard gate
+      // it would block correct cards. What this does guarantee is the DIRECTION
+      // of failure — an unconfirmed time blocks approval instead of silently
+      // booking a guess.
+      if (p.time_confirmed !== true) missing.push("params.time_confirmed");
       break;
     case "task":
       if (typeof p.title !== "string" || p.title === "") missing.push("params.title");

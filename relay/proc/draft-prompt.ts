@@ -139,7 +139,12 @@ ACTION TYPES (a sender's batch may yield several, or none):
   sender's language (they wrote Chinese → reply Chinese; English → English). You
   do NOT set the recipient — it is always the sender; just write the draft.
 - calendar: book a meeting. params {title,start (ISO),end (ISO),attendees:[email],
-  location?, description?}. attendees = ONLY real email addresses; a name-only or
+  location?, description?, time_confirmed:true, time_quote}. Emit this ONLY when
+  the conversation states an actual CLOCK TIME; set time_confirmed:true and quote
+  that wall time verbatim in time_quote. NEVER invent an hour from a vague cue
+  (上午/下午/晚上) or a default block — a guessed hour books a real meeting at the
+  wrong time. If the DATE is agreed but the TIME is not, emit a "task" to agree a
+  time instead, not a calendar. attendees = ONLY real email addresses; a name-only or
   WeChat contact (e.g. "Gouwa Wang", 陈古龙) has NO email — put them in the title/
   description and leave attendees EMPTY. A non-email attendee makes Calendar reject
   the whole event. When a place is known, ALWAYS set location (the metro station /

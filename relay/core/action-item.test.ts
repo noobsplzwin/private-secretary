@@ -241,13 +241,40 @@ describe("missingInfo", () => {
     expect(missing).not.toContain("params.attendees");
   });
 
-  it("calendar with title/start/end is approvable with no attendees", () => {
+  it("calendar with a CONFIRMED time is approvable with no attendees", () => {
     const cal = item({
       action_type: "calendar",
-      params: { title: "实车测试", start: "2026-06-24T09:30:00+08:00", end: "2026-06-24T11:00:00+08:00" },
+      params: {
+        title: "实车测试",
+        start: "2026-06-24T09:30:00+08:00",
+        end: "2026-06-24T11:00:00+08:00",
+        time_confirmed: true,
+      },
       draft: undefined,
     });
     expect(missingInfo(cal)).toEqual([]);
+  });
+
+  // REGRESSION: the refresh prompt used to tell the model to derive an hour from
+  // 上午/下午/晚上 "else a 1h block", so a meeting whose DATE was agreed but whose
+  // TIME was not got booked at a fabricated hour — rejected by the owner with
+  // "你哪来的20-21时间?". An unconfirmed time must now BLOCK approval rather than
+  // silently book a guess.
+  it("calendar WITHOUT time_confirmed cannot be approved, however complete it looks", () => {
+    const cal = item({
+      action_type: "calendar",
+      params: { title: "拜访办公室", start: "2026-06-24T20:00:00+08:00", end: "2026-06-24T21:00:00+08:00" },
+      draft: undefined,
+    });
+    expect(missingInfo(cal)).toEqual(["params.time_confirmed"]);
+    // and a falsy/stringy value is not a confirmation either
+    for (const v of [false, "true", 1, null]) {
+      expect(missingInfo(item({
+        action_type: "calendar",
+        params: { title: "t", start: "s", end: "e", time_confirmed: v },
+        draft: undefined,
+      }))).toContain("params.time_confirmed");
+    }
   });
 
   it("tool needs a tool key + the tool's required params; assignee optional", () => {

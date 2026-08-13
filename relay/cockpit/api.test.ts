@@ -268,6 +268,7 @@ describe("approve → execute", () => {
           start: "2026-06-15T20:00:00Z",
           end: "2026-06-15T21:00:00Z",
           attendees: ["x@y.com"],
+          time_confirmed: true,
         },
       }),
     ]);
@@ -717,7 +718,13 @@ describe("calendar double-booking guard", () => {
       return { ok: true, action: markExecuted(withReceipt(a, receipt)), receipt, awaitingManual: false };
     };
     const cal = (id: string, title: string, start: string) =>
-      action({ id, action_type: "calendar", draft: undefined, target: {}, params: { title, start, end: start } });
+      action({
+        id,
+        action_type: "calendar",
+        draft: undefined,
+        target: {},
+        params: { title, start, end: start, time_confirmed: true },
+      });
     seed([
       cal("c1", "Q3 评审", "2026-08-02T15:00:00+08:00"),
       cal("c2", "Q3 评审 (refresh dup)", "2026-08-02T15:00:00+08:00"),
@@ -743,7 +750,7 @@ describe("calendarConflicts (pre-check — the card's 有无冲突 line)", () =>
       action_type: "calendar",
       draft: undefined,
       target: {},
-      params: { title: id, start, end, mailbox: "leo@gmail.com" },
+      params: { title: id, start, end, mailbox: "leo@gmail.com", time_confirmed: true },
     });
 
   it("returns conflicts when the proposed window overlaps a busy event", async () => {
