@@ -90,6 +90,12 @@ RULES:
   GPIO 独占 + 盒子黑屏排查" is a question to answer and a bug to chase — split them.
   Test yourself: name the ONE outcome that all the cards together achieve. If you
   cannot say it in a few words without "and", do not group them.
+- THESE TESTS APPLY TO EXISTING TASKS TOO. An existing title is not evidence that
+  the grouping was ever right. If a card currently sits in a task that fails the
+  tests above, do NOT re-list it — OMIT it, so it detaches and stands on its own.
+  That is the only way a bad merge ever gets undone: the umbrella above survived a
+  full re-run because all three cards were already attached and got re-listed for
+  that reason alone.
 - This pass is AUTHORITATIVE: re-list EVERY card that still belongs to a task,
   INCLUDING cards already tagged (reuse the task's exact title). If you OMIT a
   card that currently has a task, it will be DETACHED and become standalone — so
@@ -128,7 +134,7 @@ export function buildConsolidationRequest(opts: {
   const titles = Object.values(opts.registry).map((t) => t.title);
   const existingBlock =
     titles.length > 0
-      ? `\n\nEXISTING TASKS (reuse a title verbatim to attach a card):\n` +
+      ? `\n\nEXISTING TASKS (reuse a title verbatim to attach a card — ONLY if that\ntitle passes the "what is NOT one task" tests; drain it otherwise):\n` +
         titles.map((t) => `- "${t}"`).join("\n")
       : "";
   const userText = `OPEN CARDS:\n${cardBlock}${existingBlock}\n\nGroup the cards that are the same task and return assignments.`;

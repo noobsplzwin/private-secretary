@@ -820,6 +820,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           });
         }
       } catch (e) {
+        // LOUD. This used to go only into sourceErrors, so a consolidation that
+        // stopped working left no trace an operator would ever see: two full
+        // re-runs were spent concluding a grouping rule "did not work" when the
+        // pass had timed out before reading it.
+        console.error(`[consolidate] FAILED, groupings left as-is: ${errString(e)}`);
         await commitUnderLock((fresh) => {
           fresh.sourceErrors["llm:consolidate"] = {
             message: errString(e),

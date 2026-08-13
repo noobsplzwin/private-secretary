@@ -131,6 +131,18 @@ describe("consolidate prompt: what is NOT one task", () => {
     expect(system).toContain("中国出差网络与设备安全方案");
   });
 
+  // The umbrella survived a full re-run because every card was already attached
+  // and the pass re-listed them for that reason alone.
+  it("applies the tests to existing tasks, not just new ones", () => {
+    expect(system).toContain("THESE TESTS APPLY TO EXISTING TASKS TOO");
+    expect(system).toContain("OMIT it, so it detaches");
+    const userText = buildConsolidationRequest({
+      cards: [],
+      registry: { t1: { title: "中国出差网络与设备安全方案", created_at: "x" } },
+    }).userText;
+    expect(userText).toContain("drain it otherwise");
+  });
+
   it("rejects a title that joins two objectives", () => {
     expect(system).toContain('needs "+" or "与" to join TWO objectives');
   });

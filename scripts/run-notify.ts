@@ -10,7 +10,7 @@
 //
 //   npx tsx scripts/run-notify.ts [--state p] [--personas p]
 //     [--wechat-ms 10000] [--gmail-ms 180000] [--slack-ms 600000] [--max-draft N]
-//     [--once]
+//     [--once] [--no-draft] [--consolidate-timeout-ms 600000]
 //
 // --once runs ONE tick per source, in order, then exits 0. This is the only
 // entry point that wires every pass (draft → refresh → consolidate → plan →
@@ -155,6 +155,7 @@ const consolidateEnabled = !process.argv.includes("--no-consolidate");
 // ON by default; --no-refresh opts out. --refresh-ttl-min overrides the cooldown.
 const refreshEnabled = !process.argv.includes("--no-refresh");
 const onceMode = process.argv.includes("--once");
+const consolidateTimeoutMs = num("--consolidate-timeout-ms", 600_000);
 const refreshTtlMin = num("--refresh-ttl-min", 10);
 // How many open conversations to re-read per scan. The default cap of 3 meant a
 // full inbox of ~7 open cards took ~3 scans (~90 min) to all catch up. Cover the
@@ -206,6 +207,14 @@ function releaseDaemonLock(): void {
 }
 
 async function buildDraft(): Promise<DraftDeps | undefined> {
+  // Skipping draft leaves the later passes (refresh/consolidate/plan/sync) to run
+  // over EXISTING cards — which is how you iterate on a grouping or ranking
+  // prompt without a 20-minute drafting round, and without new cards muddying the
+  // before/after.
+  if (process.argv.includes("--no-draft")) {
+    console.log("[notify] drafting DISABLED (--no-draft)");
+    return undefined;
+  }
   try {
     const llm =
       llmMode === "api"
@@ -515,8 +524,14 @@ async function buildConsolidate(): Promise<ConsolidateDeps | undefined> {
         ? await createAnthropicJsonCaller()
         : llmMode === "deepseek"
           ? await createDeepseekJsonCaller({ model: draftModel })
-          : createClaudeCliJsonCaller({ model: draftModel });
-    console.log(`[notify] task consolidation enabled via ${llmMode}`);
+          // Consolidation is ONE call that must re-list every open card, so it
+          // scales with the queue, not with the tick. At 73 open cards it blew
+          // through the 180s default and left every grouping untouched — twice,
+          // silently, while a prompt fix was being "tested" against it.
+          : createClaudeCliJsonCaller({ model: draftModel, timeoutMs: consolidateTimeoutMs });
+    console.log(
+      `[notify] task consolidation enabled via ${llmMode} (timeout ${consolidateTimeoutMs / 1000}s)`,
+    );
     return { json };
   } catch (e) {
     console.log(`[notify] consolidation DISABLED — ${(e as Error).message.split("\n")[0]}`);
