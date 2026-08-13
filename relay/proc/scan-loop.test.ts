@@ -624,6 +624,42 @@ describe("runScanTick", () => {
     expect(saved.actions.find((a) => a.id === "done-cal")!.status).toBe("executed");
   });
 
+  // REGRESSION: refresh used to take `approved` cards as input too. Its own
+  // supersede only drops cards that are still `suggested` (a user-touched card
+  // must never vanish), so an APPROVED card stayed put and the refreshed card
+  // landed beside it — one gmail message, two cards, both eventually executed
+  // (the Rockchip 补丁简报 / First Friday Retro pair).
+  it("refresh: an APPROVED card is not re-drafted into a rival card", async () => {
+    writeFileSync(statePath, JSON.stringify({
+      version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
+      actions: [
+        {
+          id: "approved-1", source_message_id: "wechat:m1", action_type: "reply",
+          target: { platform: "wechat", personaKey: null }, reason: "owner already said yes",
+          confidence: 0.9, params: {}, status: "approved",
+          created_at: "2026-06-23T00:00:00Z", draft: "好的，我明天发你",
+          context: { sender_handle: "张工" },
+        },
+      ],
+    }));
+    let refreshedCards = 0;
+    const refresh = {
+      llm: async () => [{
+        action_type: "reply" as const, reason: "thread moved", confidence: 0.8,
+        draft: "更新后的草稿", headline: "回张工", summary: "s", next_actions: [],
+      }],
+      resolvePersona: () => null,
+      fetchThread: async () => { refreshedCards++; return { text: "张工: 还在等" }; },
+      now: () => "2026-06-23T12:00:00Z",
+    };
+    await runScanTick({ statePath, sources: [], refresh });
+    const saved = loadState(statePath);
+    // the approved card is untouched and NOTHING was drafted beside it
+    expect(refreshedCards).toBe(0);
+    expect(saved.actions).toHaveLength(1);
+    expect(saved.actions[0]!.status).toBe("approved");
+  });
+
   it("Gmail: a real email NOT addressed to Leo still reaches drafting (LLM judges); noreply stays filtered", async () => {
     const slack = slackStub([], {});
     const gmail = gmailStub({ historyId: "1" }, ["GM1", "GM2"], {

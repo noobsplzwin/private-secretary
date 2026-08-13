@@ -848,9 +848,24 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // Supersedes the stale suggested card(s) for each refreshed conversation.
   if (!opts.dryRun && opts.refresh) {
     const snapshot = loadState(opts.statePath);
-    const open = snapshot.actions.filter(
-      (a) => a.status === "suggested" || a.status === "approved",
-    );
+    // SUGGESTED ONLY. `approved` used to be included, and that is where the
+    // duplicate cards came from: refresh re-drafts a conversation and emits a
+    // fresh suggested card, but its supersede below only drops cards that are
+    // still `suggested` — a user-touched card must never vanish. So an APPROVED
+    // card stayed put, the refresh landed beside it, and both eventually
+    // executed. That is the Rockchip 补丁简报 / First Friday Retro pair: one
+    // gmail message, two cards hours apart, both executed.
+    //
+    // Refresh exists to update a card the owner has NOT decided yet. Once he
+    // approves one its content is committed — it may be mid-execution or
+    // waiting for a manual WeChat paste — so re-drafting produces a RIVAL card
+    // rather than an update.
+    //
+    // Given up deliberately: a thread that moves AFTER approval no longer
+    // re-surfaces here. That loss is small, because a real new development
+    // arrives as a new INBOUND message and drafting handles those; refresh is
+    // only for re-reading a thread that nothing new arrived on.
+    const open = snapshot.actions.filter((a) => a.status === "suggested");
     if (open.length > 0) {
       try {
         const { refreshedKeys, newActions } = await refreshOpenTasks(open, opts.refresh);
