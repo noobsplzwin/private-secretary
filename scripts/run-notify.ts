@@ -156,6 +156,12 @@ const consolidateEnabled = !process.argv.includes("--no-consolidate");
 const refreshEnabled = !process.argv.includes("--no-refresh");
 const onceMode = process.argv.includes("--once");
 const consolidateTimeoutMs = num("--consolidate-timeout-ms", 600_000);
+// --no-draft must ALSO stop polling, because a scan without a drafter still
+// ADVANCES CURSORS ("Absent = scan-only (shadow-log + cursors, no queue rows)"),
+// which would permanently skip every message that arrived during the run. It
+// also means a passes-only run cannot hang on a source: the first attempt sat
+// 9 minutes on an unresponsive WeChat MCP server before reaching consolidation.
+const noDraft = process.argv.includes("--no-draft");
 const refreshTtlMin = num("--refresh-ttl-min", 10);
 // How many open conversations to re-read per scan. The default cap of 3 meant a
 // full inbox of ~7 open cards took ~3 scans (~90 min) to all catch up. Cover the
@@ -211,8 +217,8 @@ async function buildDraft(): Promise<DraftDeps | undefined> {
   // over EXISTING cards — which is how you iterate on a grouping or ranking
   // prompt without a 20-minute drafting round, and without new cards muddying the
   // before/after.
-  if (process.argv.includes("--no-draft")) {
-    console.log("[notify] drafting DISABLED (--no-draft)");
+  if (noDraft) {
+    console.log("[notify] drafting DISABLED (--no-draft) — sources are not polled either");
     return undefined;
   }
   try {
@@ -616,7 +622,9 @@ console.log(
       try {
         const r: ScanLoopResult = await runScanTick({
           statePath,
-          sources: [source],
+          // No drafter → nothing to do with inbound messages, and polling would
+          // advance cursors past them. See noDraft above.
+          sources: noDraft ? [] : [source],
           draft,
           consolidate,
           refresh,
