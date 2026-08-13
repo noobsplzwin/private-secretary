@@ -14,6 +14,9 @@ const action = (over: Partial<ActionItem> = {}): ActionItem => ({
   params: { title: "订机票" },
   status: "suggested",
   created_at: "2026-08-12T00:00:00Z",
+  // A real card always has one; unitKey falls back to the action id without it,
+  // which hides the conversation-keying these tests are about.
+  context: { sender_handle: "U_SAM" },
   ...over,
 });
 
@@ -54,11 +57,25 @@ describe("taskUnitsFrom", () => {
   // groupByTask returns ALL standalone actions in one `task_id: null` bucket.
   // That bucket is a rendering convenience, not a task, so it gets split.
   it("splits the ungrouped bucket into one unit per action", () => {
-    const s = state({ actions: [action({ id: "a1" }), action({ id: "a2" })] });
+    const s = state({
+      actions: [action({ id: "a1", headline: "订机票" }), action({ id: "a2", headline: "订酒店" })],
+    });
     const units = taskUnitsFrom(s);
     expect(units).toHaveLength(2);
     expect(units.every((u) => !u.grouped)).toBe(true);
     expect(new Set(units.map((u) => u.unitKey)).size).toBe(2);
+  });
+
+  // Two cards that really do say the same thing share one row, with BOTH as
+  // members — a repeated key is dropped by diffTickTickSync, and dropping is
+  // how three real to-dos went missing.
+  it("merges two ungrouped cards that carry the same headline", () => {
+    const s = state({
+      actions: [action({ id: "a1", headline: "订机票" }), action({ id: "a2", headline: "订机票" })],
+    });
+    const units = taskUnitsFrom(s);
+    expect(units).toHaveLength(1);
+    expect(units[0]!.members).toHaveLength(2);
   });
 
   // A human dragging a task to another tier must survive re-ranking.
@@ -136,6 +153,28 @@ describe("syncToTickTick", () => {
     const r = readbackFromTickTick(st, map, [{ id: "tt1", status: 0, items: [] }]);
     expect(r.doneActionIds).toEqual([]);
     expect(r.map).toEqual(map);
+  });
+
+  // REGRESSION: ungrouped units keyed by CONVERSATION collided, and
+  // diffTickTickSync silently drops a repeated key — one contact's three cards
+  // became one row and two real to-dos vanished with no error anywhere.
+  it("gives each ungrouped card from one contact its own row", () => {
+    const st = state({
+      actions: [
+        action({ id: "a1", headline: "Hand 3 house keys to Sam" }),
+        action({ id: "a2", headline: "Book house cleaner before Sept 1" }),
+      ],
+    });
+    const keys = taskUnitsFrom(st).map((u) => u.unitKey);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  // ...but the row must survive a refresh, which reissues the card with a fresh
+  // id. Same conversation + same headline = same row, updated in place.
+  it("keeps the same row when a card is reissued with the same headline", () => {
+    const one = taskUnitsFrom(state({ actions: [action({ id: "a1", headline: "Same work" })] }));
+    const two = taskUnitsFrom(state({ actions: [action({ id: "FRESH", headline: "Same work" })] }));
+    expect(two[0]!.unitKey).toBe(one[0]!.unitKey);
   });
 
   it("completes a task that is no longer open", async () => {

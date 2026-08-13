@@ -29,7 +29,7 @@ import {
 import { buildTaskPayload, shouldSync, type TaskUnit } from "../core/ticktick-plan.js";
 import { diffTickTickReadback, type RemoteTask } from "../core/ticktick-readback.js";
 import { groupByTask } from "../core/tasks.js";
-import { unitKey } from "../core/unit-key.js";
+import { unitKey, stableHash } from "../core/unit-key.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
 import type { TickTickTaskPayload } from "../core/ticktick.js";
 import type { TrackedApproval } from "../core/ticktick-approval.js";
@@ -70,14 +70,18 @@ export interface SyncReport {
 /**
  * Every task unit worth syncing this cycle.
  *
- * groupByTask puts ALL standalone actions in one `task_id: null` bucket, which
- * is a rendering convenience, not a task — so that bucket is split back into
- * one unit per action, keyed the same way plans are (unitKey).
+ * groupByTask returns one cluster per standalone action, so the loose cards are
+ * re-keyed here: one row per distinct piece of work, merging only cards that
+ * carry the same headline in the same conversation.
  */
 export function taskUnitsFrom(state: LoopState): TaskUnit[] {
   const plans = state.plans ?? {};
   const overrides = state.planOverrides ?? {};
   const units: TaskUnit[] = [];
+  // Hoisted OUT of the cluster loop: groupByTask returns one cluster PER
+  // standalone action (its bucket-of-all comment was wrong), so a per-cluster
+  // map could never merge two of them.
+  const loose = new Map<string, TaskUnit>();
 
   const withTier = (key: string): TaskUnit["plan"] => {
     const plan = plans[key];
@@ -99,19 +103,48 @@ export function taskUnitsFrom(state: LoopState): TaskUnit[] {
       continue;
     }
     for (const action of cluster.actions) {
-      const key = unitKey(action);
-      units.push({
-        unitKey: key,
-        title:
-          action.headline ||
-          (typeof action.params.title === "string" ? action.params.title : "") ||
-          "(untitled)",
+      // TWO DIFFERENT KEYS, on purpose.
+      //
+      // planKey is the CONVERSATION (unit-key.ts): a card that gets superseded
+      // is reissued with a fresh id, so a plan or a manual re-tier keyed to the
+      // card itself would detach on every refresh.
+      //
+      // The TickTick row cannot use that key, because several ungrouped cards
+      // from one contact then collide on it — and diffTickTickSync drops the
+      // repeats. That is not theoretical: one sender's three cards became one
+      // row and "File ticket for detailed UART FIFO report" plus two others
+      // vanished from the list with no error anywhere.
+      //
+      // So the row is keyed by conversation AND headline: two subjects from one
+      // contact are two rows, and a refresh that keeps the headline updates the
+      // row in place. A REWORDED headline does mint a new row and complete the
+      // old one, which is the honest reading — the row says something different
+      // now.
+      const planKey = unitKey(action);
+      const title =
+        action.headline ||
+        (typeof action.params.title === "string" ? action.params.title : "") ||
+        "(untitled)";
+      const rowKey = `__ungrouped_${stableHash(`${planKey}::${title.trim()}`)}`;
+      // Two cards that really do say the same thing MERGE into that row rather
+      // than pushing a second unit under the same key — diffTickTickSync drops a
+      // repeated key, and dropping is how the to-dos went missing in the first
+      // place.
+      const existing = loose.get(rowKey);
+      if (existing) {
+        existing.members = [...existing.members, action];
+        continue;
+      }
+      loose.set(rowKey, {
+        unitKey: rowKey,
+        title,
         grouped: false,
-        plan: withTier(key),
+        plan: withTier(planKey),
         members: [action],
       });
     }
   }
+  units.push(...loose.values());
   return units;
 }
 
