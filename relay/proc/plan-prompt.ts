@@ -33,7 +33,7 @@ const SCHEMA: Record<string, unknown> = {
           entities: {
             type: "array",
             description:
-              "supporting materials this task references — a flight, a file in a chat, a price/quote, a confirmation, a deadline. Pointers + last-known values, do NOT invent.",
+              "supporting materials this task references — a flight, a file in a chat, a price/quote, a confirmation, a deadline. Pointers + last-known values, do NOT invent. NEVER use a platform handle (U031UFWA11S, wxid_…) as a value: it means nothing to Leo, and one was emitted as \"设备/固件标识: U031UFWA11S\" — a Slack user id mislabelled as a device id. An email address is fine; it says who to write to.",
             items: {
               type: "object",
               properties: {

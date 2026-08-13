@@ -247,6 +247,84 @@ describe("due dates are never invented", () => {
   });
 });
 
+describe("stale fields and dropped steps", () => {
+  // REGRESSION: lineFor returns null for an attendee-less calendar card (it is
+  // auto-created, so it is not a step Leo performs). The loop used to `continue`
+  // on that, throwing away the card's next_actions with it — a real task went
+  // from five checklist items to none while TickTick kept displaying the old five.
+  it("keeps the steps of a calendar card that has no summary line", () => {
+    const built = buildTaskPayload(
+      unit({
+        members: [
+          member({
+            action_type: "calendar",
+            params: { title: "rollout 计划会", start: "2026-08-13T15:00:00-05:00", attendees: [] },
+            next_actions: ["确认 franklin/amlogic 用同一 init 文件", "催 Ezra 授权仓库访问"],
+          }),
+        ],
+      }),
+      ZONE,
+    );
+    expect(built.payload.items?.map((i) => i.title)).toEqual([
+      "确认 franklin/amlogic 用同一 init 文件",
+      "催 Ezra 授权仓库访问",
+    ]);
+  });
+
+  it("contributes nothing for an ignore card", () => {
+    const built = buildTaskPayload(
+      unit({
+        members: [member({ action_type: "ignore", next_actions: ["不该出现"] })],
+      }),
+      ZONE,
+    );
+    expect(built.payload.items ?? []).toEqual([]);
+  });
+
+  // REGRESSION: update_task is a PARTIAL patch, so an omitted field keeps
+  // whatever TickTick already has. A task ended up with a TEXT-round `content`
+  // and a CHECKLIST-round `desc` at once, plus a five-item checklist our payload
+  // said was empty — and the hash gate called it "in sync".
+  it("always sends both note fields and items", () => {
+    const checklist = buildTaskPayload(
+      unit({ members: [member({ next_actions: ["一步"] })] }),
+      ZONE,
+    ).payload;
+    expect(checklist.kind).toBe("CHECKLIST");
+    expect(checklist.content).toBe("");
+    expect(checklist.items).toHaveLength(1);
+
+    const text = buildTaskPayload(
+      unit({ members: [member({ action_type: "ignore" })] }),
+      ZONE,
+    ).payload;
+    expect(text.kind).toBe("TEXT");
+    expect(text.desc).toBe("");
+    expect(text.items).toEqual([]);
+  });
+});
+
+describe("entities in the notes", () => {
+  // REGRESSION: the ranking pass wrote "设备/固件标识: U031UFWA11S" — a Slack
+  // user id, mislabelled as a device id, in a note Leo reads.
+  it("drops an entity whose value is an opaque platform id", () => {
+    const built = buildTaskPayload(
+      unit({
+        plan: plan({
+          entities: [
+            { kind: "device", label: "设备/固件标识", value: "U031UFWA11S" },
+            { kind: "person", label: "对接人", value: "ezra@taiv.tv" },
+          ],
+        }),
+      }),
+      ZONE,
+    );
+    const note = built.payload.desc ?? built.payload.content ?? "";
+    expect(note).not.toContain("U031UFWA11S");
+    expect(note).toContain("ezra@taiv.tv"); // an address says who to write to
+  });
+});
+
 describe("wallClockLabel", () => {
   // With no zone to convert into, the literal fields are all there is.
   it("reads the literal wall clock when given no zone", () => {

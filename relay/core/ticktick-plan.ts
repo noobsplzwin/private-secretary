@@ -74,6 +74,11 @@ export function shouldSync(unit: TaskUnit): boolean {
   return unit.members.some((m) => m.status !== "executed" && m.status !== "rejected");
 }
 
+// Action types this mapping renders. An `ignore` card is not work.
+const RENDERED_TYPES = new Set(["calendar", "tool", "reply", "relay", "forward", "task"]);
+// An opaque platform id: a Slack user/channel id or a WeChat wxid.
+const BARE_HANDLE = /^(?:U[A-Z0-9]{8,}|C[A-Z0-9]{8,}|wxid_\S+)$/;
+
 const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
 const DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
@@ -226,7 +231,13 @@ export function deadlineFor(unit: TaskUnit): string | null {
 function describe(unit: TaskUnit): string {
   const blocks: string[] = [];
   if (unit.plan?.why) blocks.push(unit.plan.why);
-  const entities = (unit.plan?.entities ?? []).filter((e) => e.label && e.kind !== "deadline");
+  const entities = (unit.plan?.entities ?? []).filter(
+    // A platform handle is not context: the ranking pass wrote
+    // "设备/固件标识: U031UFWA11S" — a Slack user id, mislabelled as a device id,
+    // in a note Leo reads. An email address IS useful in a note (it says who to
+    // write to), so only opaque ids are dropped.
+    (e) => e.label && e.kind !== "deadline" && !BARE_HANDLE.test((e.value ?? "").trim()),
+  );
   if (entities.length > 0) {
     blocks.push(entities.map((e) => `• ${e.label}${e.value ? `: ${e.value}` : ""}`).join("\n"));
   }
@@ -237,8 +248,10 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
   const lines: ChecklistLine[] = [];
   for (const member of unit.members) {
     if (member.status === "executed" || member.status === "rejected") continue;
+    // An `ignore` card (or an action type this mapping does not render) is not
+    // work; anything else contributes its steps even when it has no summary line.
+    if (!RENDERED_TYPES.has(member.action_type)) continue;
     const line = lineFor(member, zone);
-    if (!line) continue;
     const steps = (member.next_actions ?? []).map((s) => s.trim()).filter((s) => s !== "");
 
     // The member's own line is a SUMMARY of what the card is about, and its
@@ -249,7 +262,12 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
     // So the summary line is kept only when it earns its place: when it is
     // EXECUTABLE (a tickable invite or tool line — that line IS the action, not
     // a description of it), or when there are no steps to replace it.
-    if (line.actionId || steps.length === 0) {
+    // A null line means "no summary line for this member" — an attendee-less
+    // calendar card is auto-created, so it is not a step Leo performs. It used to
+    // `continue`, which threw away that card's next_actions too: a calendar card
+    // with 3 real steps contributed NOTHING, and the task went from 5 checklist
+    // items to none while TickTick kept showing the old five.
+    if (line && (line.actionId || steps.length === 0)) {
       lines.push({
         title: line.title,
         status: 0,
@@ -285,9 +303,23 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
     title: unit.title,
     priority: tierToPriority(unit.plan?.tier),
     tags: [ENGINE_TAG],
+    // BOTH note fields and `items` are ALWAYS sent, even empty.
+    //
+    // update_task is a PARTIAL patch: a field we omit keeps whatever TickTick
+    // already has. Omitting the inactive one left a task carrying a TEXT-round
+    // `content` AND a CHECKLIST-round `desc` at the same time, and omitting
+    // `items` left a stale five-item checklist on a task our payload said had
+    // none — while the hash gate reported "in sync", because the hash only
+    // describes what we MEANT to send. The list Leo reads was showing content
+    // the engine no longer believed.
     ...(lines.length > 0
-      ? { kind: "CHECKLIST" as const, ...(note ? { desc: note } : {}), items: lines.map(({ actionId: _a, ...i }) => i) }
-      : { kind: "TEXT" as const, ...(note ? { content: note } : {}) }),
+      ? {
+          kind: "CHECKLIST" as const,
+          desc: note,
+          content: "",
+          items: lines.map(({ actionId: _a, ...i }) => i),
+        }
+      : { kind: "TEXT" as const, content: note, desc: "", items: [] }),
   };
   const due = deadline ? dueFields(deadline, zone) : null;
   if (due) {
