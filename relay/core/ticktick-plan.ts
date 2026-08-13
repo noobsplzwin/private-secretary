@@ -164,16 +164,26 @@ export function buildTaskPayload(unit: TaskUnit): BuiltTask {
     if (member.status === "executed" || member.status === "rejected") continue;
     const line = lineFor(member);
     if (!line) continue;
-    lines.push({
-      title: line.title,
-      status: 0,
-      sortOrder: lines.length,
-      ...(line.actionId ? { actionId: line.actionId } : {}),
-    });
-    // next_actions are the "me" steps the model spelled out under this member.
-    for (const step of member.next_actions ?? []) {
-      const text = step.trim();
-      if (text) lines.push({ title: text, status: 0, sortOrder: lines.length });
+    const steps = (member.next_actions ?? []).map((s) => s.trim()).filter((s) => s !== "");
+
+    // The member's own line is a SUMMARY of what the card is about, and its
+    // next_actions are the same thing spelled out — emitting both produced
+    // "跟进 200 套 Switcher 发货与运单号" immediately followed by "向温总确认是否
+    // 已寄出", which is one job listed twice.
+    //
+    // So the summary line is kept only when it earns its place: when it is
+    // EXECUTABLE (a tickable invite or tool line — that line IS the action, not
+    // a description of it), or when there are no steps to replace it.
+    if (line.actionId || steps.length === 0) {
+      lines.push({
+        title: line.title,
+        status: 0,
+        sortOrder: lines.length,
+        ...(line.actionId ? { actionId: line.actionId } : {}),
+      });
+    }
+    for (const text of steps) {
+      lines.push({ title: text, status: 0, sortOrder: lines.length });
     }
   }
 

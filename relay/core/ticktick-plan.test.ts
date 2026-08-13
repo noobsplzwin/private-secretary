@@ -86,11 +86,39 @@ describe("buildTaskPayload — the task IS the unit", () => {
     expect(built.payload.desc).not.toContain("截止"); // it becomes the due date
   });
 
-  it("expands next_actions into their own steps", () => {
+  // The member's own line is a SUMMARY and its next_actions are the same thing
+  // spelled out. Emitting both listed one job twice ("跟进…发货与运单号" then
+  // "向温总确认是否已寄出"), so the summary yields to the steps.
+  it("drops the member's summary line when its steps replace it", () => {
     const built = buildTaskPayload(
       unit({ members: [member({ next_actions: ["查签证要求", " ", "收拾行李"] })] }),
     );
-    expect(built.payload.items?.map((i) => i.title)).toEqual(["订机票", "查签证要求", "收拾行李"]);
+    expect(built.payload.items?.map((i) => i.title)).toEqual(["查签证要求", "收拾行李"]);
+  });
+
+  it("keeps the member line when there are no steps to replace it", () => {
+    const built = buildTaskPayload(unit({ members: [member({ next_actions: [] })] }));
+    expect(built.payload.items?.map((i) => i.title)).toEqual(["订机票"]);
+  });
+
+  // An executable line IS the action, not a description of it, so it survives
+  // alongside its steps — dropping it would remove the only tickable thing.
+  it("keeps an executable line even when the member has steps", () => {
+    const built = buildTaskPayload(
+      unit({
+        members: [
+          member({
+            id: "cal1",
+            action_type: "calendar",
+            params: { title: "评审", start: "2026-08-20T09:00:00-05:00", attendees: ["k@x.com"] },
+            next_actions: ["提前发议程"],
+          }),
+        ],
+      }),
+    );
+    expect(built.payload.items).toHaveLength(2);
+    expect(built.payload.items![0]!.title).toContain("k@x.com");
+    expect(built.executable).toEqual([{ sortOrder: 0, actionId: "cal1" }]);
   });
 
   it("skips members that already finished", () => {

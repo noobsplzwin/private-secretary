@@ -40,6 +40,8 @@ import { consolidateTasks, type ConsolidateDeps } from "./consolidate.js";
 import { refreshOpenTasks, type RefreshDeps } from "./refresh.js";
 import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { rankTasks, type PlanDeps } from "./plan.js";
+import { syncToTickTick, type TickTickWriter } from "./ticktick-sync.js";
+import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
 import { scanSlackDirect } from "../sources/slack-direct.js";
 import { resolveSlackUserNames } from "../io/slack-users.js";
@@ -96,6 +98,10 @@ export interface ScanLoopOptions {
   // units A→D with a "why now" + entities, stored in loop-state.plans. See
   // specs/daily-todo.md.
   plan?: PlanDeps;
+  // When provided, the ranked to-do list is pushed into TickTick after the plan
+  // pass (specs/ticktick-migration.md). Absent = no sync, and the cockpit stays
+  // the only surface.
+  ticktickWriter?: TickTickWriter;
   // When provided, a persona-update pass runs after planning: extracts NEW
   // commitments from each open contact's thread and writes them to the persona's
   // Commitments Ledger via the R1 chokepoint (Phase B, specs/persona-v3.md).
@@ -950,6 +956,44 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           };
         }).catch(() => undefined);
       }
+    }
+  }
+
+  // ── PHASE 6b (UNLOCKED, no LLM): push the ranked to-do list into TickTick.
+  // Runs AFTER planning because the tier it writes as the TickTick priority is
+  // what planning just computed. No LLM call, so it is cheap enough to run every
+  // tick; the hash gate in core/ticktick-sync.ts means a tick where nothing
+  // changed makes ZERO API calls. Non-fatal — TickTick being down must never
+  // stop the scan (records llm:ticktick so the cockpit surfaces it).
+  if (!opts.dryRun && opts.ticktickWriter) {
+    try {
+      const snapshot = loadState(opts.statePath);
+      const { map, report } = await syncToTickTick(
+        snapshot,
+        loadSyncMap(opts.statePath),
+        opts.ticktickWriter,
+      );
+      saveSyncMap(opts.statePath, map);
+      if (report.created || report.updated || report.completed || report.failed) {
+        appendActivity(activityPathFor(opts.statePath), {
+          at: new Date().toISOString(),
+          kind: "tick",
+          summary:
+            `ticktick: +${report.created} ~${report.updated} ✓${report.completed} ` +
+            `(${report.skipped} unchanged${report.failed ? `, ${report.failed} FAILED` : ""})`,
+          data: { ...report },
+        });
+      }
+      await commitUnderLock((fresh) => {
+        delete fresh.sourceErrors["llm:ticktick"];
+      }).catch(() => undefined);
+    } catch (e) {
+      await commitUnderLock((fresh) => {
+        fresh.sourceErrors["llm:ticktick"] = {
+          message: errString(e),
+          at: new Date(startedAtMs).toISOString(),
+        };
+      }).catch(() => undefined);
     }
   }
 

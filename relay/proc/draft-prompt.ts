@@ -244,7 +244,12 @@ HARD RULES:
 
 EVERY action you emit MUST also carry these card fields (they are what Leo reads
 in the cockpit, so they replace the raw dump):
-- headline: a <=8-word title naming what the message is ABOUT (not the reason).
+- headline: a <=8-word title naming WHAT LEO DOES — his action, not the message's
+  subject and not what the other person wants. This becomes the to-do's title in
+  his list, so it has to read like something he can act on months later.
+  "Harlan checking supplier wire — asks Leo to resend invoice" is an inbox
+  subject line; "重发 invoice 给 Harlan" is a to-do. Likewise "UART issue needs
+  João's confirmation" → "找 João 确认 UART 问题". Start with the verb.
 - summary: a 1-2 sentence digest of what the sender said — a summary, not the
   raw text. Both headline and summary in Leo's reading language.
 - next_actions: 1-3 short imperative next-step bullets that move the LINKED

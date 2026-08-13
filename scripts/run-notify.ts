@@ -16,6 +16,9 @@ import { execFileSync } from "node:child_process";
 import { describeIdentity } from "../relay/io/identity.js";
 import { loadSettings } from "../relay/io/settings.js";
 import { effectiveToolSpecs } from "../relay/io/tools.js";
+import { createTickTickWriter } from "../relay/io/ticktick-mcp.js";
+import { mcpAuthServiceFor } from "../relay/io/mcp-tool.js";
+import type { TickTickWriter } from "../relay/proc/ticktick-sync.js";
 import { dirname, join, resolve } from "node:path";
 import { runScanTick, type ScanLoopResult } from "../relay/proc/scan-loop.js";
 import { notify } from "../relay/proc/notify.js";
@@ -478,6 +481,23 @@ async function buildRefresh(): Promise<RefreshDeps | undefined> {
   }
 }
 
+// The TickTick sync writer, or undefined when TickTick is not connected — in
+// which case the sync phase is skipped and the cockpit stays the only surface.
+// Same config shape the executor reads (SETUP.md §5).
+function buildTickTickWriter(): TickTickWriter | undefined {
+  const cfg = effectiveToolSpecs(statePath).ticktick?.config ?? {};
+  if (cfg.type !== "mcp" || !cfg.url) {
+    console.log("[notify] TickTick sync OFF — no ticktick url in config/tools.json");
+    return undefined;
+  }
+  console.log(`[notify] TickTick sync ON → ${cfg.project ?? "(Inbox)"}`);
+  return createTickTickWriter({
+    url: cfg.url,
+    authService: mcpAuthServiceFor("ticktick", cfg.authService),
+    ...(cfg.project ? { project: cfg.project } : {}),
+  });
+}
+
 async function buildConsolidate(): Promise<ConsolidateDeps | undefined> {
   if (!consolidateEnabled) return undefined;
   try {
@@ -563,6 +583,7 @@ console.log(
   const refresh = await buildRefresh();
   const plan = await buildPlan();
   const personaUpdate = await buildPersonaUpdate();
+  const ticktickWriter = buildTickTickWriter();
 
   let consecutiveErrors = 0;
 
@@ -577,6 +598,7 @@ console.log(
           refresh,
           plan,
           personaUpdate,
+          ...(ticktickWriter ? { ticktickWriter } : {}),
           maxDraftCandidates: maxDraft,
         });
         if (r.totalInbound > 0 || r.drafted > 0) {

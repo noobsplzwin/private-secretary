@@ -53,8 +53,9 @@ DECIDE from the CURRENT state of the thread:
 Emit a SEPARATE action for EACH distinct open item in the thread — do NOT collapse
 them into one or drop any. If the thread has both a confirmed MEETING and separate
 task/benchmark work, emit BOTH: a calendar action for the meeting AND a task for the
-work. A meeting must never be lost just because the channel also has other topics. EVERY action MUST carry card fields: headline (<=8-word title of what this
-is about), summary (1-2 sentence digest of the CURRENT state), next_actions (1-3
+work. A meeting must never be lost just because the channel also has other topics. EVERY action MUST carry card fields: headline (<=8-word title naming WHAT LEO
+DOES — his action, not the thread's subject and not what the other person wants;
+it becomes the to-do's title in his list, so start with the verb), summary (1-2 sentence digest of the CURRENT state), next_actions (1-3
 concrete next steps, empty if none), and project_id — KEEP the current card's
 project_id above unless the thread clearly shows it belongs to a different
 project. All in Leo's reading language.
