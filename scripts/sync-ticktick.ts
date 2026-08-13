@@ -18,10 +18,14 @@ import { loadSyncMap, saveSyncMap, syncPathFor } from "../relay/io/ticktick-sync
 import { syncToTickTick, taskUnitsFrom } from "../relay/proc/ticktick-sync.js";
 import { buildTaskPayload, shouldSync } from "../relay/core/ticktick-plan.js";
 import { diffTickTickSync, summarize } from "../relay/core/ticktick-sync.js";
+import { loadSettings, machineTimeZone } from "../relay/io/settings.js";
 
 const argv = process.argv.slice(2);
 const dryRun = argv.includes("--dry-run");
 const statePath = argv.includes("--state") ? argv[argv.indexOf("--state") + 1]! : "state/loop-state.json";
+
+// Same zone the daemon uses, so a dry-run shows the real due dates and labels.
+const zone = loadSettings(statePath).timezone || machineTimeZone();
 
 const state = loadState(statePath);
 const map = loadSyncMap(statePath);
@@ -31,7 +35,7 @@ const eligible = units.filter(shouldSync);
 console.log(`open task units: ${units.length}  →  eligible to sync: ${eligible.length}`);
 console.log(`sync map: ${Object.keys(map).length} already tracked (${syncPathFor(statePath)})`);
 
-const desired = eligible.map((u) => ({ unitKey: u.unitKey, payload: buildTaskPayload(u).payload }));
+const desired = eligible.map((u) => ({ unitKey: u.unitKey, payload: buildTaskPayload(u, zone).payload }));
 const counts = summarize(diffTickTickSync(desired, map));
 console.log(
   `\nwould: create ${counts.create}  update ${counts.update}  complete ${counts.complete}  skip ${counts.skip}`,
@@ -40,7 +44,7 @@ console.log(
 if (dryRun) {
   console.log("\n--- the first few tasks as TickTick would get them ---");
   for (const u of eligible.slice(0, 5)) {
-    const p = buildTaskPayload(u).payload;
+    const p = buildTaskPayload(u, zone).payload;
     console.log(`\n[priority ${p.priority}] ${p.title}`);
     if (p.dueDate) console.log(`  due: ${p.dueDate}`);
     for (const i of p.items ?? []) console.log(`  ☐ ${i.title}`);
@@ -62,7 +66,7 @@ const writer = createTickTickWriter({
   ...(cfg.project ? { project: cfg.project } : {}),
 });
 
-const { map: next, report } = await syncToTickTick(state, map, writer);
+const { map: next, report } = await syncToTickTick(state, map, writer, zone);
 saveSyncMap(statePath, next);
 console.log(
   `\ncreated ${report.created}, updated ${report.updated}, completed ${report.completed}, ` +

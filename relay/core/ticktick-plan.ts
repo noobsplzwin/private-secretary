@@ -21,6 +21,7 @@
 
 import type { ActionItem } from "./action-item.js";
 import type { TaskPlan } from "./tasks.js";
+import { zoneOffsetAt } from "./when.js";
 import { tierToPriority, ENGINE_TAG, type TickTickTaskPayload } from "./ticktick.js";
 import {
   buildInviteLabel,
@@ -68,13 +69,71 @@ export function shouldSync(unit: TaskUnit): boolean {
   return unit.members.some((m) => m.status !== "executed" && m.status !== "rejected");
 }
 
-// "2026-08-20T09:00:00-05:00" → "8/20 09:00". Reads the LITERAL wall-clock
-// fields: the string already carries its own offset, so there is nothing to
-// convert and no zone to get wrong.
-export function wallClockLabel(iso: string): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(iso.trim());
+const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
+const DATE_TIME = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?$/;
+
+/**
+ * "2026-08-20T09:00:00-05:00" → "8/20 09:00", in the OWNER's zone.
+ *
+ * Reading the literal wall-clock fields was wrong whenever the drafter chose a
+ * different offset than the owner's. A real card: a 15:00 Lisbon call came back
+ * as "2026-08-13T22:00:00+08:00" — the right INSTANT (UTC 14:00), written with a
+ * China offset — and the literal read put "8/13 22:00" on the owner's checklist
+ * for a call he takes at 09:00. So a string carrying an offset is converted to
+ * `zone`; one without an offset has no instant to convert and is read literally.
+ */
+export function wallClockLabel(iso: string, zone?: string): string | null {
+  const s = iso.trim();
+  if (zone && ZONED.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) {
+      const p: Record<string, string> = {};
+      for (const { type, value } of new Intl.DateTimeFormat("en-CA", {
+        timeZone: zone,
+        hour12: false,
+        month: "numeric",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }).formatToParts(d)) {
+        p[type] = value;
+      }
+      const hour = p.hour === "24" ? "00" : p.hour;
+      // Number() strips the leading zero Intl keeps even at month:"numeric", so
+      // this reads identically to the literal branch below.
+      if (p.month && p.day && hour && p.minute)
+        return `${Number(p.month)}/${Number(p.day)} ${hour}:${p.minute}`;
+    }
+  }
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(s);
   if (!m) return null;
   return `${Number(m[2])}/${Number(m[3])} ${m[4]}:${m[5]}`;
+}
+
+/**
+ * A deadline as TickTick's `dueDate` / `isAllDay`, or null if it is not a date.
+ *
+ * create_task declares dueDate as `format: date-time`, so a BARE date is a
+ * validation error, not an all-day task — it is expanded to local midnight and
+ * flagged all-day. A datetime keeps its own offset; one without an offset gets
+ * the owner's offset FOR THAT DATE, so a summer deadline set in winter is still
+ * right.
+ */
+export function dueFields(
+  deadline: string,
+  zone: string,
+): { dueDate: string; isAllDay: boolean } | null {
+  const s = deadline.trim();
+  if (DATE_ONLY.test(s)) {
+    const wall = `${s}T00:00:00`;
+    return { dueDate: `${wall}${zoneOffsetAt(wall, zone) ?? "Z"}`, isAllDay: true };
+  }
+  if (!DATE_TIME.test(s)) return null;
+  const iso = s.replace(" ", "T");
+  const full = /T\d{2}:\d{2}$/.test(iso) ? `${iso}:00` : iso;
+  if (ZONED.test(full)) return { dueDate: full, isAllDay: false };
+  return { dueDate: `${full}${zoneOffsetAt(full, zone) ?? "Z"}`, isAllDay: false };
 }
 
 function emails(value: unknown): string[] {
@@ -92,7 +151,7 @@ function str(v: unknown): string {
 }
 
 /** The one-line label for a member action, plus whether ticking it executes. */
-function lineFor(a: ActionItem): { title: string; actionId?: string } | null {
+function lineFor(a: ActionItem, zone: string): { title: string; actionId?: string } | null {
   const p = a.params;
   switch (a.action_type) {
     case "calendar": {
@@ -102,7 +161,7 @@ function lineFor(a: ActionItem): { title: string; actionId?: string } | null {
       // parked in params.attendees_unresolved. Still read non-emails out of
       // `attendees` as well, for cards drafted before that landed.
       const unresolved = [...nonEmails(p.attendees), ...nonEmails(p.attendees_unresolved)];
-      const when = wallClockLabel(str(p.start)) ?? "";
+      const when = wallClockLabel(str(p.start), zone) ?? "";
       // ASK-not-GUESS: a name that did not resolve to an address must never sit
       // behind a tickable send, so the whole line degrades to a manual one.
       if (unresolved.length > 0) return { title: buildUnresolvedLabel(unresolved) };
@@ -143,8 +202,15 @@ function lineFor(a: ActionItem): { title: string; actionId?: string } | null {
 
 /** The task's real deadline, if it has one. Never invented — see the header. */
 export function deadlineFor(unit: TaskUnit): string | null {
-  const entity = unit.plan?.entities?.find((e) => e.kind === "deadline" && e.value);
-  if (entity?.value && /^\d{4}-\d{2}-\d{2}/.test(entity.value)) return entity.value;
+  // The whole value must be a date or a datetime. A `deadline` entity is FREE
+  // TEXT the ranking model writes, and "2026-08-13 15:00 Portugal time" is one
+  // it really produced: the old PREFIX test matched it and sent that string as
+  // dueDate, TickTick rejected the create, and an A-tier task silently never
+  // reached the list. Salvaging the "15:00" would be worse than dropping it —
+  // that clock is Lisbon's, and stamping the owner's offset on it moves the call
+  // six hours. The dated calendar member below is the trustworthy source.
+  const raw = unit.plan?.entities?.find((e) => e.kind === "deadline" && e.value)?.value?.trim();
+  if (raw && (DATE_ONLY.test(raw) || DATE_TIME.test(raw))) return raw;
   const dated = unit.members
     .filter((m) => m.action_type === "calendar" && typeof m.params.start === "string")
     .map((m) => m.params.start as string)
@@ -162,11 +228,11 @@ function describe(unit: TaskUnit): string {
   return blocks.join("\n\n");
 }
 
-export function buildTaskPayload(unit: TaskUnit): BuiltTask {
+export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
   const lines: ChecklistLine[] = [];
   for (const member of unit.members) {
     if (member.status === "executed" || member.status === "rejected") continue;
-    const line = lineFor(member);
+    const line = lineFor(member, zone);
     if (!line) continue;
     const steps = (member.next_actions ?? []).map((s) => s.trim()).filter((s) => s !== "");
 
@@ -218,10 +284,10 @@ export function buildTaskPayload(unit: TaskUnit): BuiltTask {
       ? { kind: "CHECKLIST" as const, ...(note ? { desc: note } : {}), items: lines.map(({ actionId: _a, ...i }) => i) }
       : { kind: "TEXT" as const, ...(note ? { content: note } : {}) }),
   };
-  if (deadline) {
-    payload.dueDate = deadline;
-    // A bare date is an all-day deadline; one carrying a clock time is not.
-    payload.isAllDay = !/T\d{2}:\d{2}/.test(deadline);
+  const due = deadline ? dueFields(deadline, zone) : null;
+  if (due) {
+    payload.dueDate = due.dueDate;
+    payload.isAllDay = due.isAllDay;
   }
 
   return {

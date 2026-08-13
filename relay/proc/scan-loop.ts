@@ -42,6 +42,7 @@ import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { rankTasks, type PlanDeps } from "./plan.js";
 import { syncToTickTick, type TickTickWriter } from "./ticktick-sync.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
+import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
 import { scanSlackDirect } from "../sources/slack-direct.js";
 import { resolveSlackUserNames } from "../io/slack-users.js";
@@ -102,6 +103,8 @@ export interface ScanLoopOptions {
   // pass (specs/ticktick-migration.md). Absent = no sync, and the cockpit stays
   // the only surface.
   ticktickWriter?: TickTickWriter;
+  /** Owner's IANA zone for TickTick due dates / time labels. */
+  ownerTimeZone?: string;
   // When provided, a persona-update pass runs after planning: extracts NEW
   // commitments from each open contact's thread and writes them to the persona's
   // Commitments Ledger via the R1 chokepoint (Phase B, specs/persona-v3.md).
@@ -972,6 +975,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         snapshot,
         loadSyncMap(opts.statePath),
         opts.ticktickWriter,
+        opts.ownerTimeZone ?? machineTimeZone(),
       );
       saveSyncMap(opts.statePath, map);
       if (report.created || report.updated || report.completed || report.failed) {

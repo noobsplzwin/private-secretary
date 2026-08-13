@@ -606,6 +606,7 @@ console.log(
           refresh,
           plan,
           personaUpdate,
+          ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
           maxDraftCandidates: maxDraft,
         });

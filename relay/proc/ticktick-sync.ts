@@ -112,6 +112,10 @@ export async function syncToTickTick(
   state: LoopState,
   map: SyncMap,
   writer: TickTickWriter,
+  // The owner's zone, for due dates and the wall-clock labels on calendar
+  // lines. Explicit rather than read here: core cannot reach io/settings, and a
+  // defaulted offset is how a 15:00 call ends up labelled 22:00.
+  zone: string,
 ): Promise<{ map: SyncMap; report: SyncReport }> {
   const desired: DesiredTask[] = [];
   // itemIds come back positionally, so remember which slots are executable.
@@ -119,7 +123,7 @@ export async function syncToTickTick(
 
   for (const unit of taskUnitsFrom(state)) {
     if (!shouldSync(unit)) continue;
-    const built = buildTaskPayload(unit);
+    const built = buildTaskPayload(unit, zone);
     desired.push({ unitKey: unit.unitKey, payload: built.payload });
     executableByUnit.set(unit.unitKey, built.executable);
   }

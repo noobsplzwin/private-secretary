@@ -85,7 +85,7 @@ describe("syncToTickTick", () => {
 
   it("creates a task it has never synced and records its id", async () => {
     const w = writer();
-    const { map, report } = await syncToTickTick(grouped(), {}, w);
+    const { map, report } = await syncToTickTick(grouped(), {}, w, "America/Winnipeg");
     expect(w.createTask).toHaveBeenCalledOnce();
     expect(report.created).toBe(1);
     expect(map.T1!.ticktickId).toBe("tt1");
@@ -95,10 +95,10 @@ describe("syncToTickTick", () => {
   // gets rate limited rewriting 40 unchanged tasks every 30 minutes.
   it("makes ZERO calls when nothing changed", async () => {
     const w1 = writer();
-    const { map } = await syncToTickTick(grouped(), {}, w1);
+    const { map } = await syncToTickTick(grouped(), {}, w1, "America/Winnipeg");
 
     const w2 = writer();
-    const { report } = await syncToTickTick(grouped(), map, w2);
+    const { report } = await syncToTickTick(grouped(), map, w2, "America/Winnipeg");
     expect(w2.createTask).not.toHaveBeenCalled();
     expect(w2.updateTask).not.toHaveBeenCalled();
     expect(w2.completeTasks).not.toHaveBeenCalled();
@@ -106,19 +106,19 @@ describe("syncToTickTick", () => {
   });
 
   it("updates in place when the plan changed", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer());
+    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
     const w = writer();
     const retiered = grouped({ plans: { T1: { tier: "C", rank: 9, why: "缓了", at: "x" } } });
-    const { report } = await syncToTickTick(retiered, map, w);
+    const { report } = await syncToTickTick(retiered, map, w, "America/Winnipeg");
     expect(w.updateTask).toHaveBeenCalledOnce();
     expect(report.updated).toBe(1);
     expect(w.createTask).not.toHaveBeenCalled(); // NOT a second copy
   });
 
   it("completes a task that is no longer open", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer());
+    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
     const w = writer();
-    const { map: after, report } = await syncToTickTick(state(), map, w);
+    const { map: after, report } = await syncToTickTick(state(), map, w, "America/Winnipeg");
     expect(w.completeTasks).toHaveBeenCalledWith([{ id: "tt1", projectId: "p" }]);
     expect(report.completed).toBe(1);
     expect(after.T1).toBeUndefined();
@@ -139,7 +139,7 @@ describe("syncToTickTick", () => {
     const w = writer({
       createTask: vi.fn(async () => ({ id: "tt1", projectId: "p", itemIds: ["i0", "i1"] })),
     });
-    const { map } = await syncToTickTick(s, {}, w);
+    const { map } = await syncToTickTick(s, {}, w, "America/Winnipeg");
     // slot 1 is the invite line; slot 0 is the plain 订机票 step
     expect(map.T1!.items).toEqual([{ itemId: "i1", actionId: "cal1" }]);
   });
@@ -153,7 +153,7 @@ describe("syncToTickTick", () => {
         throw new Error("429");
       }),
     });
-    const { map, report } = await syncToTickTick(grouped(), {}, w);
+    const { map, report } = await syncToTickTick(grouped(), {}, w, "America/Winnipeg");
     expect(map.T1).toBeUndefined();
     expect(report.created).toBe(0);
     expect(report.failed).toBe(1);
@@ -175,7 +175,7 @@ describe("syncToTickTick", () => {
         return { id: "tt2", projectId: "p", itemIds: [] };
       }),
     });
-    const { report } = await syncToTickTick(s, {}, w);
+    const { report } = await syncToTickTick(s, {}, w, "America/Winnipeg");
     expect(report.created).toBe(1);
     expect(report.failed).toBe(1);
   });
@@ -183,13 +183,13 @@ describe("syncToTickTick", () => {
   // A complete that threw must stay in the map, or the task is orphaned:
   // dropped from our records while still sitting open in TickTick.
   it("keeps a failed complete in the map so it retries", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer());
+    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
     const w = writer({
       completeTasks: vi.fn(async () => {
         throw new Error("nope");
       }),
     });
-    const { map: after, report } = await syncToTickTick(state(), map, w);
+    const { map: after, report } = await syncToTickTick(state(), map, w, "America/Winnipeg");
     expect(after.T1).toBeDefined();
     expect(report.completed).toBe(0);
     expect(report.failed).toBe(1);
@@ -204,7 +204,7 @@ describe("syncToTickTick", () => {
       },
     });
     const w = writer();
-    const { report } = await syncToTickTick(s, {}, w);
+    const { report } = await syncToTickTick(s, {}, w, "America/Winnipeg");
     expect(w.createTask).not.toHaveBeenCalled();
     expect(report.created).toBe(0);
   });
