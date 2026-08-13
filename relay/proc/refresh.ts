@@ -17,6 +17,8 @@ import {
   type ActionContext,
   type ActionItem,
   type TranscriptMessage,
+  initialStatus,
+  type ActionType,
 } from "../core/action-item.js";
 import type { Persona, Platform } from "../core/types.js";
 import { nowLocalIn } from "../core/when.js";
@@ -177,7 +179,7 @@ export async function refreshOpenTasks(
         ...(Array.isArray(s.next_actions) ? { next_actions: s.next_actions } : {}),
         // Prefer the LLM's fresh project link; fall back to the rep card's.
         ...(s.project_id ?? rep.project_id ? { project_id: s.project_id ?? rep.project_id } : {}),
-        status: "suggested" as const,
+        status: initialStatus(s.action_type as ActionType),
         // Keep the rep's source id so clusterKey + task grouping stay coherent.
         source_message_id: rep.source_message_id,
         context: ctx,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  initialStatus,
   addComment,
   readComments,
   approveAction,
@@ -685,5 +686,18 @@ describe("addComment — feedback without a decision", () => {
   it("readComments ignores malformed rows rather than throwing", () => {
     const messy = card({ params: { comments: [{ text: "ok", at: "t" }, "junk", { text: 5 }] } });
     expect(readComments(messy)).toEqual([{ text: "ok", at: "t" }]);
+  });
+});
+
+describe("initialStatus", () => {
+  // An `ignore` is BORN DONE: there is no decision left for a human, and it never
+  // becomes a line in the list. Left `suggested`, the refresh pass's one
+  // "the matter is resolved" signal closed nothing — it replaced the open cards
+  // with another open card, and the task stayed on the list.
+  it("closes an ignore at birth and leaves everything else open", () => {
+    expect(initialStatus("ignore")).toBe("executed");
+    for (const t of ["reply", "relay", "forward", "calendar", "task", "tool"] as const) {
+      expect(initialStatus(t)).toBe("suggested");
+    }
   });
 });

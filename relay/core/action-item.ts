@@ -30,6 +30,24 @@ export type ActionType =
 // the guarantee, not "never send".
 export type ActionStatus = "suggested" | "approved" | "executed" | "rejected";
 
+/**
+ * The status a freshly produced action carries.
+ *
+ * An `ignore` is BORN DONE. It is the pass's judgment that the thread asks
+ * nothing of Leo — there is no decision left for a human to make, and it never
+ * becomes a line in his list. Leaving it `suggested` is how the refresh pass's
+ * one "the matter is resolved" signal closed nothing at all: it replaced the
+ * open cards with another open card. Two were sitting in the queue, one of them
+ * `{category:"resolved"}`, while the task it resolved stayed on the list.
+ *
+ * `executed` because there is no "no action needed" status; it is already what a
+ * hand-finished action carries. `rejected` would be a lie and would poison the
+ * label corpus the validation gate reads.
+ */
+export function initialStatus(actionType: ActionType): ActionStatus {
+  return actionType === "ignore" ? "executed" : "suggested";
+}
+
 // Proof an executor's platform side-effect already happened. Written before the
 // terminal transition; on retry, a present receipt means skip the API call and go
 // straight to terminal — so replaying an approved action never double-sends.

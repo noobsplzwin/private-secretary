@@ -20,6 +20,8 @@ import {
   validateActionItem,
   type ActionContext,
   type ActionItem,
+  initialStatus,
+  type ActionType,
 } from "../core/action-item.js";
 import type { InboundMessage, Persona } from "../core/types.js";
 import { nowLocalIn } from "../core/when.js";
@@ -351,7 +353,7 @@ export async function draftActions(
         ...(typeof s.summary === "string" ? { summary: s.summary } : {}),
         ...(Array.isArray(s.next_actions) ? { next_actions: s.next_actions } : {}),
         ...(typeof s.project_id === "string" ? { project_id: s.project_id } : {}),
-        status: "suggested" as const,
+        status: initialStatus(s.action_type as ActionType),
         source_message_id: latest.id,
         context: ctx,
       };
