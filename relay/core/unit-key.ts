@@ -85,10 +85,38 @@ export function inheritSupersededTaskIds(
     if (k && !byKey.has(k)) byKey.set(k, s.task_id);
   }
   if (byKey.size === 0) return incoming;
+
+  // ONLY when the replacement is unambiguous: exactly one incoming card for
+  // that conversation.
+  //
+  // WHY: inheritance is keyed by conversation (platform::sender), so when one
+  // dropped card's task_id met SEVERAL fresh cards, every one of them claimed
+  // it. One tick produced three cards from Cody — an applicant review, a
+  // background check on Kevin Yang, and a Jira ticket he sent — and all three
+  // were absorbed into "Senior Android JD 修订版", a task minted three days
+  // earlier for a different subject. Repeat that and a contact's task_id
+  // accumulates everything they ever say, under whichever title came first.
+  // That is what made the owner's list unusable.
+  //
+  // It also contradicted consolidate-prompt, which already states the right
+  // rule — "The SAME sender is NOT enough to group" — and then lost to this,
+  // because this runs on every tick.
+  //
+  // A 1:1 supersede still inherits, which is the case P1 was about: one chatty
+  // contact, one evolving card, whose plan/override must not detach. When a
+  // conversation yields several fresh cards there is no basis for saying which
+  // one continues the old task, so none does and consolidate decides on merit.
+  const incomingPerKey = new Map<string, number>();
+  for (const a of incoming) {
+    const k = clusterKey(a);
+    if (k) incomingPerKey.set(k, (incomingPerKey.get(k) ?? 0) + 1);
+  }
+
   return incoming.map((a) => {
     if (a.task_id) return a;
     const k = clusterKey(a);
-    const inherited = k ? byKey.get(k) : undefined;
+    if (!k || incomingPerKey.get(k) !== 1) return a;
+    const inherited = byKey.get(k);
     return inherited ? { ...a, task_id: inherited } : a;
   });
 }

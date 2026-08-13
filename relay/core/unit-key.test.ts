@@ -90,6 +90,41 @@ describe("inheritSupersededTaskIds", () => {
     expect(out[0]!.id).toBe("new");
   });
 
+  // REGRESSION: inheritance is keyed by conversation, so one dropped card's
+  // task_id used to be claimed by EVERY fresh card from that sender. One tick
+  // produced three cards from Cody — an applicant review, a background check,
+  // and a Jira ticket he sent — and all three were absorbed into "Senior
+  // Android JD 修订版", a task minted three days earlier for another subject.
+  // Repeated, a contact's task_id accumulates everything they ever say under
+  // whichever title came first, which is what made the owner's list unusable.
+  it("does NOT inherit when the conversation yielded SEVERAL fresh cards", () => {
+    const doomed = [card("old", { task_id: "task_jd" })];
+    const out = inheritSupersededTaskIds(
+      [card("applicant"), card("diligence"), card("jira")],
+      doomed,
+    );
+    expect(out.map((a) => a.task_id)).toEqual([undefined, undefined, undefined]);
+  });
+
+  // The 1:1 case is what P1 was about — one chatty contact, one evolving card,
+  // whose plan/override must not detach — so it still inherits.
+  it("still inherits on a 1:1 supersede, per P1", () => {
+    const doomed = [card("old", { task_id: "task_zf" })];
+    expect(inheritSupersededTaskIds([card("new")], doomed)[0]!.task_id).toBe("task_zf");
+  });
+
+  // Per conversation, not globally: a second contact's single card is still an
+  // unambiguous replacement even while the first contact yielded several.
+  it("counts fresh cards per conversation", () => {
+    const other = (id: string) => card(id, { context: { sender_handle: "李工" } });
+    const doomed = [card("oldA", { task_id: "task_a" }), other("oldB")];
+    doomed[1]!.task_id = "task_b";
+    const out = inheritSupersededTaskIds([card("a1"), card("a2"), other("b1")], doomed);
+    expect(out[0]!.task_id).toBeUndefined(); // 张工 sent two → ambiguous
+    expect(out[1]!.task_id).toBeUndefined();
+    expect(out[2]!.task_id).toBe("task_b"); // 李工 sent one → inherits
+  });
+
   it("fills only MISSING task_ids — never overwrites", () => {
     const doomed = [card("old", { task_id: "task_zf" })];
     const out = inheritSupersededTaskIds([card("new", { task_id: "task_own" })], doomed);
