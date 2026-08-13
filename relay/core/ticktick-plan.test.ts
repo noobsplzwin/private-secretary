@@ -197,6 +197,9 @@ describe("due dates are never invented", () => {
       unit({ plan: plan({ entities: [{ kind: "deadline", label: "交付", value: "2026-08-20" }] }) }), ZONE);
     expect(built.payload.dueDate).toBe("2026-08-20T00:00:00-05:00");
     expect(built.payload.isAllDay).toBe(true);
+    // Sent explicitly: the TickTick ACCOUNT default was America/New_York, an
+    // hour off the owner's zone, and it silently applied to every dated item.
+    expect(built.payload.timeZone).toBe(ZONE);
   });
 
   // REGRESSION: a `deadline` entity is free text the ranking model writes, and

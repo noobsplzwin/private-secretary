@@ -47,6 +47,11 @@ export interface TickTickTaskPayload {
   // urgent item makes Today meaningless within a week.
   dueDate?: string;
   isAllDay?: boolean;
+  // The zone TickTick renders the date in. Sent with every dueDate because the
+  // ACCOUNT default is whatever the app was first set up with — this one reads
+  // "America/New_York" while the owner's engine zone is America/Winnipeg, so
+  // every timed item displayed an hour late until this was passed explicitly.
+  timeZone?: string;
 }
 
 export const TIER_PRIORITY: Record<TaskPlan["tier"], TickTickPriority> = {

@@ -288,6 +288,7 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
   if (due) {
     payload.dueDate = due.dueDate;
     payload.isAllDay = due.isAllDay;
+    payload.timeZone = zone;
   }
 
   return {
