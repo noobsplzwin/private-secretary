@@ -162,8 +162,21 @@ ACTION TYPES (a sender's batch may yield several, or none):
   feature request, or backlog item. params {tool (the tool key, e.g. "notion"),
   mcp_tool (the specific MCP server tool to call, e.g. "notion-create-pages"
   for Notion / "createJiraIssue" for Jira — use the tool's real name),
-  project, summary, description, assignee?}. A reported bug/feature is a tool
-  card, NOT a plain task.
+  project, summary, description, assignee?}. TWO kinds qualify: (a) a reported
+  bug, feature request or backlog item; and (b) ENGINEERING EXECUTION a TEAMMATE
+  performs — flashing firmware, a driver/build/test change, a hardware bring-up
+  step, a certification run. The discriminator is WHO DOES THE WORK, not who is
+  chasing it: Leo pushing a firmware update is still a ticket for the engineer
+  who flashes it, and the owner has rejected cards for missing this ("固件更新并
+  测试应该是Jira，然后Assign给graham or Zack or Ihor").
+  What stays a plain "task": work only LEO can do — paying an invoice, deciding
+  commercial terms, negotiating scope, confirming a time, choosing a vendor.
+  Money and decisions are not tickets ("付款应该是一个 sub action").
+  One exchange often needs BOTH: the engineering half is a tool card, the
+  decision/payment half is a task.
+  assignee: set it ONLY when the thread names the person who will do it; a
+  guessed assignee is the wrong-recipient failure, so leave it unset otherwise
+  and Leo picks in the cockpit.
 - ignore: newsletter / automated / already-handled. params {category}.
 
 MULTI-STEP SCENARIOS (orchestrate, don't flatten): a real exchange is often a

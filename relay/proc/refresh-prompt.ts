@@ -39,6 +39,14 @@ DECIDE from the CURRENT state of the thread:
   emit a plain reply/task (no calendar) when NO date is agreed yet.
 - If Leo still owes a reply or an action, emit the UPDATED reply/task reflecting
   the latest messages (a reply draft mirrors the sender's language).
+- If the open work is ENGINEERING EXECUTION a TEAMMATE performs — flashing
+  firmware, a driver/build/test change, a hardware bring-up step, a certification
+  run — emit a "tool" action (a ticket), NOT a task. The discriminator is WHO
+  DOES THE WORK, not who is chasing it. params {tool, mcp_tool?, project,
+  summary, description, assignee?}; set assignee ONLY when the thread names who
+  will do it, never guessed. Work only LEO can do — paying, deciding commercial
+  terms, negotiating, choosing a vendor — stays a task. One thread often needs
+  BOTH: the engineering half a ticket, the payment/decision half a task.
 - If the matter is fully resolved and needs nothing from Leo, emit an "ignore"
   with params {category:"resolved"}.
 
@@ -82,6 +90,10 @@ export function buildRefreshRequest(opts: {
   // (21 bogus events had to be deleted from the live calendar).
   now?: string;
   nowLocal?: string;
+  // The connected tool keys, same as drafting. Without them the model is told it
+  // may emit a `tool` action but not which params.tool values exist, so it
+  // guesses a key the registry rejects and the card lands as needs-info.
+  toolKeys?: string[];
 }): DraftRequest {
   const c = opts.card;
   const cardBlock =
@@ -94,12 +106,16 @@ export function buildRefreshRequest(opts: {
   const catalogBlock = opts.projectCatalog?.trim()
     ? `\n\nPROJECT CATALOG — set project_id to the BEST-FITTING id by topic/domain (keep the card's current project_id unless the thread clearly fits a different one; "MISC" only if none fit):\n${opts.projectCatalog.trim()}`
     : "";
+  const toolBlock =
+    opts.toolKeys && opts.toolKeys.length > 0
+      ? `\n\nCONNECTED MCP TOOLS (for params.tool — pick from these keys): ${opts.toolKeys.join(", ")}`
+      : "";
   const timeLine = opts.now
     ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""} — resolve all relative dates in the thread (明天/下周三/next Friday) against THIS date, never your own knowledge of the calendar.\n\nTIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the thread states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon"). "Thursday 3pm Portugal time" is start "2026-08-13T15:00" with tz "Europe/Lisbon". The conversion is done for you, and a refreshed card must name the SAME instant as before unless the meeting actually moved.\n\n`
     : "";
   const userText =
     timeLine +
-    `${describePersona(opts.persona)}\n\n${cardBlock}${catalogBlock}\n\n` +
+    `${describePersona(opts.persona)}\n\n${cardBlock}${catalogBlock}${toolBlock}\n\n` +
     `FULL RECENT THREAD (both sides, newest last):\n${opts.thread}\n\n` +
     `Re-decide what this card should be now and call ${TOOL_NAME}.`;
   return { system: SYSTEM, userText, toolName: TOOL_NAME, toolInputSchema: ACTION_ITEM_TOOL_SCHEMA };

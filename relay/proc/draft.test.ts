@@ -543,3 +543,33 @@ describe("answered threads: mined for commitments, never re-replied", () => {
     expect(r.actions.map((a) => a.action_type)).toEqual(["reply"]);
   });
 });
+
+// The routing rule these pin is prompt-level, so the tests are too: there is no
+// deterministic way for core to decide whether something is engineering work.
+// What they DO prevent is the rule being silently dropped by a later edit — the
+// owner rejected five cards for exactly this ("这个应该创建Jira").
+describe("task vs tool routing lives in the prompt", () => {
+  it("draft states that WHO DOES THE WORK decides ticket vs task", () => {
+    const req = buildDraftRequest({ persona: michael, messages: [msg()], knownPersonaKeys: [] });
+    expect(req.system).toContain("WHO DOES THE WORK");
+    expect(req.system).toContain("ENGINEERING EXECUTION");
+    // and that Leo's own work is NOT a ticket
+    expect(req.system).toMatch(/paying an invoice/);
+  });
+
+  it("draft forbids a guessed assignee", () => {
+    const req = buildDraftRequest({ persona: michael, messages: [msg()], knownPersonaKeys: [] });
+    expect(req.system).toMatch(/ONLY when the thread names the person/);
+  });
+
+  it("draft lists the connected tool keys so params.tool is not guessed", () => {
+    const req = buildDraftRequest({
+      persona: michael,
+      messages: [msg()],
+      knownPersonaKeys: [],
+      toolKeys: ["jira", "ticktick"],
+    });
+    // draft puts the tool keys in the SYSTEM prompt (refresh puts them in userText)
+    expect(req.system).toContain("jira, ticktick");
+  });
+});

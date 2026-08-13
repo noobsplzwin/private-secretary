@@ -40,6 +40,9 @@ export interface RefreshDeps {
   // Full project catalog (renderProjectCatalog) so refresh can re-assign a wrong
   // project_id (e.g. a MISC card that actually belongs to a project).
   projectCatalog?: string;
+  // Connected tool keys, forwarded to the prompt so a refreshed card can become
+  // a ticket with a VALID params.tool instead of a guessed one.
+  toolKeys?: string[];
   ttlMs?: number;
   // Cap on conversations refreshed per tick (each is one LLM call). The
   // least-recently-refreshed eligible conversations go first, so load spreads
@@ -114,7 +117,7 @@ export async function refreshOpenTasks(
     const nowLocal = nowLocalIn(nowIso, ownerZone);
     let actions;
     try {
-      actions = await deps.llm(buildRefreshRequest({ card: rep, thread, persona, projectCatalog: deps.projectCatalog, now: nowIso, nowLocal }));
+      actions = await deps.llm(buildRefreshRequest({ card: rep, thread, persona, projectCatalog: deps.projectCatalog, toolKeys: deps.toolKeys, now: nowIso, nowLocal }));
     } catch {
       continue; // a single conversation's failure must not sink the pass
     }

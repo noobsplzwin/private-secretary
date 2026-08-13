@@ -190,3 +190,26 @@ describe("sender name on refreshed cards", () => {
     expect(r.newActions[0]?.context?.sender_name).toBeUndefined();
   });
 });
+
+// REGRESSION: refresh's DECIDE list offered only calendar/reply/task/ignore, so
+// a card that should be a ticket was re-emitted as a task on every refresh —
+// undoing the drafting fix on the next tick.
+describe("refresh can turn open work into a ticket", () => {
+  it("offers the tool action and the WHO-DOES-THE-WORK discriminator", () => {
+    const req = buildRefreshRequest({ card: card("c1"), thread: "t", persona: null });
+    expect(req.system).toContain('emit a "tool" action');
+    expect(req.system).toContain("DOES THE WORK, not who is chasing it");
+  });
+
+  // Told it may emit a ticket but not which keys exist, the model guesses a
+  // params.tool the registry rejects and the card lands as needs-info.
+  it("passes the connected tool keys through", () => {
+    const req = buildRefreshRequest({
+      card: card("c1"),
+      thread: "t",
+      persona: null,
+      toolKeys: ["jira", "ticktick"],
+    });
+    expect(req.userText).toContain("jira, ticktick");
+  });
+});

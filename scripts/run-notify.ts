@@ -15,6 +15,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "
 import { execFileSync } from "node:child_process";
 import { describeIdentity } from "../relay/io/identity.js";
 import { loadSettings } from "../relay/io/settings.js";
+import { effectiveToolSpecs } from "../relay/io/tools.js";
 import { dirname, join, resolve } from "node:path";
 import { runScanTick, type ScanLoopResult } from "../relay/proc/scan-loop.js";
 import { notify } from "../relay/proc/notify.js";
@@ -459,7 +460,18 @@ async function buildRefresh(): Promise<RefreshDeps | undefined> {
     const { resolve: resolvePersona } = buildPersonaResolver(loadPersonas(personaDir));
     const projectCatalog = renderProjectCatalog(loadProjects(projectsDir));
     console.log(`[notify] task refresh enabled via ${llmMode} (TTL ${refreshTtlMin}min)`);
-    return { llm, resolvePersona, fetchThread, projectCatalog, ownerTimeZone, ttlMs: refreshTtlMin * 60_000, maxPerTick: refreshMaxPerTick };
+    // Same tool keys drafting gets: refresh can now emit a ticket, and without
+    // the keys it would guess a params.tool the registry rejects.
+    return {
+      llm,
+      resolvePersona,
+      fetchThread,
+      projectCatalog,
+      toolKeys: Object.keys(effectiveToolSpecs(statePath)),
+      ownerTimeZone,
+      ttlMs: refreshTtlMin * 60_000,
+      maxPerTick: refreshMaxPerTick,
+    };
   } catch (e) {
     console.log(`[notify] refresh DISABLED — ${(e as Error).message.split("\n")[0]}`);
     return undefined;
