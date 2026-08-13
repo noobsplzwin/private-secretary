@@ -128,8 +128,9 @@ export async function syncToTickTick(
   // itemIds come back positionally, so remember which slots are executable.
   const executableByUnit = new Map<string, Array<{ sortOrder: number; actionId: string }>>();
 
+  const nowMs = Date.now();
   for (const unit of taskUnitsFrom(state)) {
-    if (!shouldSync(unit)) continue;
+    if (!shouldSync(unit, nowMs)) continue;
     const built = buildTaskPayload(unit, zone);
     desired.push({ unitKey: unit.unitKey, payload: built.payload });
     executableByUnit.set(unit.unitKey, built.executable);

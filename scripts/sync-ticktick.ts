@@ -31,7 +31,7 @@ const state = loadState(statePath);
 const map = loadSyncMap(statePath);
 
 const units = taskUnitsFrom(state);
-const eligible = units.filter(shouldSync);
+const eligible = units.filter((u) => shouldSync(u, Date.now()));
 console.log(`open task units: ${units.length}  →  eligible to sync: ${eligible.length}`);
 console.log(`sync map: ${Object.keys(map).length} already tracked (${syncPathFor(statePath)})`);
 

@@ -67,11 +67,34 @@ export interface BuiltTask {
  * task — surfacing every one as a top-level to-do is the same failure, so a lone
  * card still needs top tier.
  */
-export function shouldSync(unit: TaskUnit): boolean {
+export function shouldSync(unit: TaskUnit, nowMs?: number): boolean {
   const tier = unit.plan?.tier;
   if (tier !== "A" && tier !== "B") return false;
   if (!unit.grouped && tier !== "A") return false;
-  return unit.members.some((m) => m.status !== "executed" && m.status !== "rejected");
+  const live = unit.members.filter((m) => m.status !== "executed" && m.status !== "rejected");
+  if (live.length === 0) return false;
+  // An EVENT that already happened is over. Only when every live member is such
+  // an event — a unit that also carries a task or a reply still has work in it.
+  if (nowMs !== undefined && live.every((m) => isPastEvent(m, nowMs))) return false;
+  return true;
+}
+
+// A DEADLINE in the past is the opposite of finished: unpaid, unsigned, unsent
+// work is MORE urgent once its date slips, and hiding it would be the worst
+// possible reading of "drop what has passed". Only a calendar EVENT is judged
+// here — the visit happened, the call was taken.
+//
+// The grace window is a day. params.start is a wall clock whose zone lives in
+// params.tz, so parsing it here is accurate only to within a day's offsets; a
+// day of slack also keeps something happening later today on the list.
+const PAST_EVENT_GRACE_MS = 24 * 60 * 60 * 1000;
+
+function isPastEvent(m: ActionItem, nowMs: number): boolean {
+  if (m.action_type !== "calendar") return false;
+  const start = typeof m.params.start === "string" ? m.params.start : "";
+  const t = Date.parse(start);
+  if (Number.isNaN(t)) return false;
+  return t + PAST_EVENT_GRACE_MS < nowMs;
 }
 
 // Action types this mapping renders. An `ignore` card is not work.

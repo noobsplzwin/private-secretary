@@ -66,6 +66,39 @@ describe("shouldSync — keeps the list short", () => {
     expect(shouldSync(unit({ grouped: false, plan: plan({ tier: "A" }) }))).toBe(true);
   });
 
+  // An EVENT that already happened is over. This is what made a site visit
+  // agreed two weeks earlier reappear at the top of the list every week.
+  const DAY = 24 * 60 * 60 * 1000;
+  const at = (iso: string) => member({ action_type: "calendar", params: { start: iso } });
+
+  it("drops a unit whose only live members are events that already happened", () => {
+    const u = unit({ members: [at("2026-08-06T14:00:00-05:00")] });
+    expect(shouldSync(u, Date.parse("2026-08-13T12:00:00-05:00"))).toBe(false);
+  });
+
+  it("keeps an event still to come, and one from earlier today", () => {
+    const now = Date.parse("2026-08-13T12:00:00-05:00");
+    expect(shouldSync(unit({ members: [at("2026-08-20T14:00:00-05:00")] }), now)).toBe(true);
+    // Within the day of grace: params.start is a wall clock whose zone lives in
+    // params.tz, so same-day parsing is only accurate to within a day.
+    expect(shouldSync(unit({ members: [at("2026-08-13T09:00:00-05:00")] }), now)).toBe(true);
+  });
+
+  // A DEADLINE that slipped is the opposite of finished — unpaid work is more
+  // urgent once its date passes, not less.
+  it("keeps a task whose deadline passed", () => {
+    const u = unit({
+      plan: plan({ entities: [{ kind: "deadline", label: "付款", value: "2026-08-01" }] }),
+      members: [member({ action_type: "task" })],
+    });
+    expect(shouldSync(u, Date.parse("2026-08-13T12:00:00-05:00"))).toBe(true);
+  });
+
+  it("keeps a unit that also holds non-event work", () => {
+    const u = unit({ members: [at("2026-08-06T14:00:00-05:00"), member({ action_type: "task" })] });
+    expect(shouldSync(u, Date.parse("2026-08-13T12:00:00-05:00"))).toBe(true);
+  });
+
   it("drops a task whose members are all finished", () => {
     expect(shouldSync(unit({ members: [member({ status: "executed" })] }))).toBe(false);
   });

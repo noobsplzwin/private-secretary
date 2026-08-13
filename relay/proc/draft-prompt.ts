@@ -12,6 +12,7 @@
 // enhancement — the LlmCaller interface leaves room for it.
 
 import { loadBusinessContext } from "../io/business-context.js";
+import { ITEM_STANDARD } from "./item-standard.js";
 import type { InboundMessage } from "../core/types.js";
 import type { Persona } from "../core/types.js";
 
@@ -78,18 +79,18 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           headline: {
             type: "string",
             description:
-              "REQUIRED. A short title (<= 8 words) naming what this message is ABOUT — not the action, not the reason. E.g. 'NDA counter-signed back to Renesas', 'Casual sign-off'. In Leo's reading language.",
+              "REQUIRED. A short title (<= 8 words) naming what this message is ABOUT — not the action, not the reason. E.g. 'NDA counter-signed back to Renesas', 'Casual sign-off'. In the SOURCE thread's language: WeChat → Chinese, Slack/Gmail → English.",
           },
           summary: {
             type: "string",
             description:
-              "REQUIRED. 1-2 sentence digest of what the sender actually said. A summary, NOT a paste of the original text. In Leo's reading language.",
+              "REQUIRED. 1-2 sentence digest of what the sender actually said. A summary, NOT a paste of the original text. In the SOURCE thread's language: WeChat → Chinese, Slack/Gmail → English.",
           },
           next_actions: {
             type: "array",
             items: { type: "string" },
             description:
-              "1-3 concrete next-step bullets for Leo that MOVE THE LINKED PROJECT forward at its current stage (use the project's open needs/gaps/blockers below). Each a short imperative phrase. Empty array for pure FYI / ignore where Leo need do nothing.",
+              "1-3 concrete next-step bullets for Leo that MOVE THE LINKED PROJECT forward at its current stage (use the project's open needs/gaps/blockers below). Each a short imperative phrase, in the SOURCE thread's language. Each must pass WHAT EARNS A LINE in the system prompt: only work needing Leo's own time, no bare 确认/核对/跟进, no chasing what someone else owns. Empty array for pure FYI / ignore where Leo need do nothing.",
           },
           project_id: {
             type: "string",
@@ -251,10 +252,12 @@ in the cockpit, so they replace the raw dump):
   subject line; "重发 invoice 给 Harlan" is a to-do. Likewise "UART issue needs
   João's confirmation" → "找 João 确认 UART 问题". Start with the verb.
 - summary: a 1-2 sentence digest of what the sender said — a summary, not the
-  raw text. Both headline and summary in Leo's reading language.
+  raw text. Both headline and summary follow the SOURCE's language (see below).
 - next_actions: 1-3 short imperative next-step bullets that move the LINKED
   PROJECT forward at its current stage (cite the project's open needs/gaps).
-  Empty for pure FYI / ignore.
+  Empty for pure FYI / ignore. EVERY bullet must pass WHAT EARNS A LINE below.
+
+${ITEM_STANDARD}
 - project_id: the id of the tracked project this advances (copy EXACTLY from a
   PROJECT block), or "MISC" if none. Almost every real card belongs to a project
   — only truly personal/one-off chatter is MISC. Read the message AGAINST the
@@ -376,7 +379,9 @@ export function buildDraftRequest(opts: {
   const personaBlock = describePersona(opts.persona);
   const msgBlock = opts.messages.map(describeMessage).join("\n\n");
   const timeLine = opts.now
-    ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""} — the sender's local timezone is the local one unless thread context says otherwise. Resolve relative dates (明天/今晚/next Friday) against the per-message timestamps below, in the sender's local date.\n\nTIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the conversation states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon", "Asia/Shanghai"). "Thursday 3pm Portugal time" is start "2026-08-13T15:00" with tz "Europe/Lisbon". The conversion is done for you; doing it yourself has produced the wrong hour.\n\n`
+    ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""} — the sender's local timezone is the local one unless thread context says otherwise. Resolve relative dates (明天/今晚/next Friday) against the per-message timestamps below, in the sender's local date.\n\nTIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the conversation states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon", "Asia/Shanghai"). A message sent on <MSG_DATE> saying "Thursday 3pm Portugal time" is the FIRST Thursday on or after <MSG_DATE>, at 15:00, tz "Europe/Lisbon" — resolved against THAT message's own at= stamp, never against CURRENT TIME. The conversion is done for you; doing it yourself has produced the wrong hour.
+
+ANCHOR TO THE MESSAGE, NOT TO TODAY. A thread from two weeks ago that says "Thursday 2-3pm" means the Thursday after THAT message — it does NOT mean this week. Re-anchoring an old relative date onto the current week is how a visit that happened last week kept reappearing as if it were today, week after week, and could never expire. If the anchoring message is old and the event has passed, the matter is over: say so instead of moving the date forward.\n\n`
     : "";
   const recipientHint =
     opts.knownPersonaKeys.length > 0

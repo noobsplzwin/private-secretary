@@ -345,8 +345,16 @@ async function fetchThread(card: ActionItem): Promise<FetchedThread | null> {
           const nameOf = (u?: string): string =>
             u === self ? "me" : (u ? names.get(u) ?? u : "?");
           const atOf = (ts?: string): number => (ts ? Math.round(Number(ts) * 1000) : 0);
+          // Each line carries its own DATE. Without it the refresh pass has only
+          // CURRENT TIME to anchor against, so "Thursday 2-3pm" written two weeks
+          // ago resolves onto THIS week — every tick — and a visit that already
+          // happened can never expire off the list.
+          const dayOf = (ts?: string): string => {
+            const ms = atOf(ts);
+            return ms > 0 ? new Date(ms).toISOString().slice(0, 10) : "?";
+          };
           for (const m of ordered) {
-            lines.push(`${m.user === self ? "me" : (m.user ?? "?")}: ${m.text ?? ""}`);
+            lines.push(`[${dayOf(m.ts)}] ${m.user === self ? "me" : (m.user ?? "?")}: ${m.text ?? ""}`);
             structured.push({
               speaker: nameOf(m.user),
               self: m.user === self,
@@ -390,8 +398,14 @@ async function fetchThread(card: ActionItem): Promise<FetchedThread | null> {
       const t = await gmailClientFor(mailbox).getThread({ id: threadId, format: "full" });
       const msgs = t.messages ?? [];
       return {
+        // Dated, for the same reason as the Slack lines above: a relative date in
+        // an old mail must resolve against ITS date, not against today.
         text: msgs
-          .map((m) => `From ${getHeader(m.payload, "From") ?? "?"}:\n${extractText(m)}`)
+          .map((m) => {
+            const ms = Number(m.internalDate ?? 0);
+            const day = ms > 0 ? new Date(ms).toISOString().slice(0, 10) : "?";
+            return `[${day}] From ${getHeader(m.payload, "From") ?? "?"}:\n${extractText(m)}`;
+          })
           .join("\n---\n"),
         messages: msgs.map((m) => ({
           speaker: getHeader(m.payload, "From") ?? "?",

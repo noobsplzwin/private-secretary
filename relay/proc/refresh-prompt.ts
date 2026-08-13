@@ -10,6 +10,7 @@
 // action — including emitting a calendar action when a meeting was agreed, or an
 // ignore when the matter resolved.
 
+import { ITEM_STANDARD } from "./item-standard.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { Persona } from "../core/types.js";
 import { ACTION_ITEM_TOOL_SCHEMA, TOOL_NAME, type DraftRequest } from "./draft-prompt.js";
@@ -58,7 +59,9 @@ DOES — his action, not the thread's subject and not what the other person want
 it becomes the to-do's title in his list, so start with the verb), summary (1-2 sentence digest of the CURRENT state), next_actions (1-3
 concrete next steps, empty if none), and project_id — KEEP the current card's
 project_id above unless the thread clearly shows it belongs to a different
-project. All in Leo's reading language.
+project.
+
+${ITEM_STANDARD}
 
 Do not re-litigate settled points or re-ask things already answered in the thread.
 
@@ -112,7 +115,7 @@ export function buildRefreshRequest(opts: {
       ? `\n\nCONNECTED MCP TOOLS (for params.tool — pick from these keys): ${opts.toolKeys.join(", ")}`
       : "";
   const timeLine = opts.now
-    ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""} — resolve all relative dates in the thread (明天/下周三/next Friday) against THIS date, never your own knowledge of the calendar.\n\nTIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the thread states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon"). "Thursday 3pm Portugal time" is start "2026-08-13T15:00" with tz "Europe/Lisbon". The conversion is done for you, and a refreshed card must name the SAME instant as before unless the meeting actually moved.\n\n`
+    ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""}.\n\nANCHOR RELATIVE DATES TO THE LINE THAT SAYS THEM, NOT TO NOW. Every thread line starts with its own date, "[YYYY-MM-DD]". "明天" on a [2026-03-03] line is 2026-03-04 — not tomorrow. This instruction used to say the opposite (resolve against CURRENT TIME), and the result was that a visit agreed two weeks ago kept being re-dated onto the current week on every refresh: it always looked like it was happening today, so it could never expire, and the owner struck it off the list week after week.\n\nWHEN THE ANCHORED DATE HAS PASSED, THE MATTER IS OVER. Do not move it forward. Emit an "ignore" with params {category:"resolved"} unless the thread itself shows the event was rescheduled.\n\nTIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the thread states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon"). A [<DATE>] line saying "Thursday 3pm Portugal time" is the first Thursday on or after <DATE>, at 15:00, tz "Europe/Lisbon". The conversion is done for you, and a refreshed card must name the SAME instant as before unless the meeting actually moved.\n\n`
     : "";
   const userText =
     timeLine +
