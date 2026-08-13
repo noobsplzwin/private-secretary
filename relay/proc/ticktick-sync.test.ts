@@ -108,7 +108,9 @@ describe("syncToTickTick", () => {
   it("updates in place when the plan changed", async () => {
     const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
     const w = writer();
-    const retiered = grouped({ plans: { T1: { tier: "C", rank: 9, why: "缓了", at: "x" } } });
+    // A→B, not A→C: C is no longer synced at all, so a C re-tier is a DE-LIST
+    // (completed) rather than the in-place update this test is about.
+    const retiered = grouped({ plans: { T1: { tier: "B", rank: 9, why: "缓了", at: "x" } } });
     const { report } = await syncToTickTick(retiered, map, w, "America/Winnipeg");
     expect(w.updateTask).toHaveBeenCalledOnce();
     expect(report.updated).toBe(1);

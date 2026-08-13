@@ -42,8 +42,21 @@ describe("shouldSync — keeps the list short", () => {
     expect(shouldSync(unit())).toBe(true);
   });
 
-  it("drops D-tier as noise", () => {
+  // Only A and B. At "drop D, keep the rest" the list reached 23 rows — the
+  // 20-40 row list the owner asked not to have.
+  it("keeps only A and B", () => {
+    expect(shouldSync(unit({ plan: plan({ tier: "A" }) }))).toBe(true);
+    expect(shouldSync(unit({ plan: plan({ tier: "B" }) }))).toBe(true);
+    expect(shouldSync(unit({ plan: plan({ tier: "C" }) }))).toBe(false);
     expect(shouldSync(unit({ plan: plan({ tier: "D" }) }))).toBe(false);
+  });
+
+  // The ranking pass runs every tick, so an unranked task waits a round rather
+  // than arriving in the list unsorted.
+  it("drops a unit the plan has not ranked", () => {
+    const u = unit();
+    delete (u as { plan?: unknown }).plan;
+    expect(shouldSync(u)).toBe(false);
   });
 
   // The 20-40 row list the owner does not want comes from surfacing every

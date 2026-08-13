@@ -57,14 +57,19 @@ export interface BuiltTask {
 /**
  * Whether this unit earns a row in the owner's Work list.
  *
- * D-tier is noise by definition. An UNGROUPED card is one message the
- * consolidate pass could not attach to a task — surfacing every one of those as
- * a top-level to-do is exactly the 20-40 row list the owner does not want, so
- * only a top-tier one gets through on its own.
+ * ONLY A and B (owner, 2026-08-13). At "drop D, keep the rest" the list reached
+ * 23 rows, which is the 20-40 row list he asked not to have; C is "matters, no
+ * immediate clock" and belongs in the queue, not in the list he works from. An
+ * UNRANKED unit is also out: the ranking pass runs every tick, so a task the
+ * plan has not judged yet simply waits a round rather than arriving unsorted.
+ *
+ * An UNGROUPED card is one message the consolidate pass could not attach to a
+ * task — surfacing every one as a top-level to-do is the same failure, so a lone
+ * card still needs top tier.
  */
 export function shouldSync(unit: TaskUnit): boolean {
   const tier = unit.plan?.tier;
-  if (tier === "D") return false;
+  if (tier !== "A" && tier !== "B") return false;
   if (!unit.grouped && tier !== "A") return false;
   return unit.members.some((m) => m.status !== "executed" && m.status !== "rejected");
 }

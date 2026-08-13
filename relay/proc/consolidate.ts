@@ -40,7 +40,7 @@ export interface ConsolidateResult {
 // Deterministic, stable task_id from a title: same title → same id across ticks
 // and restarts, so re-running the pass is idempotent. (dedupTaskMints still
 // guards against a pre-existing entry with the same title but a different id.)
-function stableTaskId(title: string): string {
+export function stableTaskId(title: string): string {
   return "task_" + createHash("sha256").update(normalizeTaskTitle(title)).digest("hex").slice(0, 12);
 }
 
