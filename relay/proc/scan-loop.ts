@@ -40,7 +40,7 @@ import { consolidateTasks, type ConsolidateDeps } from "./consolidate.js";
 import { refreshOpenTasks, type RefreshDeps } from "./refresh.js";
 import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { rankTasks, type PlanDeps } from "./plan.js";
-import { syncToTickTick, type TickTickWriter } from "./ticktick-sync.js";
+import { syncToTickTick, readbackFromTickTick, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
@@ -103,6 +103,8 @@ export interface ScanLoopOptions {
   // pass (specs/ticktick-migration.md). Absent = no sync, and the cockpit stays
   // the only surface.
   ticktickWriter?: TickTickWriter;
+  /** Read side: completions the owner ticked off in TickTick (PHASE 6a). */
+  ticktickReader?: TickTickReader;
   /** Owner's IANA zone for TickTick due dates / time labels. */
   ownerTimeZone?: string;
   // When provided, a persona-update pass runs after planning: extracts NEW
@@ -964,6 +966,50 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           };
         }).catch(() => undefined);
       }
+    }
+  }
+
+  // ── PHASE 6a (UNLOCKED, no LLM): pull completions BACK from TickTick.
+  //
+  // Runs BEFORE the push, so a task the owner just finished is closed here and
+  // is no longer eligible in the push below — rather than being re-written and
+  // only closed on the next tick.
+  //
+  // Non-fatal, like the push: TickTick being unreachable must never stop a scan.
+  if (!opts.dryRun && opts.ticktickReader) {
+    try {
+      const remote = await opts.ticktickReader.listActive();
+      const snapshot = loadState(opts.statePath);
+      const { doneActionIds, map, unitsClosed } = readbackFromTickTick(
+        snapshot,
+        loadSyncMap(opts.statePath),
+        remote,
+      );
+      if (doneActionIds.length > 0) {
+        const done = new Set(doneActionIds);
+        await commitUnderLock((fresh) => {
+          fresh.actions = fresh.actions.map((a) =>
+            done.has(a.id) && (a.status === "suggested" || a.status === "approved")
+              ? { ...a, status: "executed" as const }
+              : a,
+          );
+        });
+        saveSyncMap(opts.statePath, map);
+        console.log(
+          `[ticktick] read back ${doneActionIds.length} finished item(s), ${unitsClosed} task(s) closed`,
+        );
+      }
+      await commitUnderLock((fresh) => {
+        delete fresh.sourceErrors["llm:ticktick-readback"];
+      }).catch(() => undefined);
+    } catch (e) {
+      console.error(`[ticktick] read-back FAILED: ${errString(e)}`);
+      await commitUnderLock((fresh) => {
+        fresh.sourceErrors["llm:ticktick-readback"] = {
+          message: errString(e),
+          at: new Date(startedAtMs).toISOString(),
+        };
+      }).catch(() => undefined);
     }
   }
 

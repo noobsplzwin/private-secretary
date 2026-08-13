@@ -27,6 +27,7 @@ import {
   type SyncResult,
 } from "../core/ticktick-sync.js";
 import { buildTaskPayload, shouldSync, type TaskUnit } from "../core/ticktick-plan.js";
+import { diffTickTickReadback, type RemoteTask } from "../core/ticktick-readback.js";
 import { groupByTask } from "../core/tasks.js";
 import { unitKey } from "../core/unit-key.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
@@ -35,6 +36,12 @@ import type { TrackedApproval } from "../core/ticktick-approval.js";
 import type { LoopState } from "../io/state.js";
 
 /** The TickTick calls this pass needs. Narrow on purpose. */
+/** Read side: what the owner has already ticked off in TickTick. */
+export interface TickTickReader {
+  /** The project's ACTIVE tasks, with their checklist items' status. */
+  listActive(project?: string): Promise<RemoteTask[]>;
+}
+
 export interface TickTickWriter {
   /** Create one task; must return its id and its checklist items' ids. */
   createTask(payload: TickTickTaskPayload): Promise<{
@@ -195,4 +202,39 @@ export async function syncToTickTick(
       failed,
     },
   };
+}
+
+
+/**
+ * Pull completions back from TickTick: whatever the owner finished there is
+ * marked `executed` here, so it stops being resurfaced.
+ *
+ * `executed` is the right status even though no executor ran: it is already what
+ * a hand-completed action carries (an approved WeChat send waits at `approved`
+ * until the owner marks it executed). There is no "done elsewhere" status, and
+ * `rejected` would be a lie that also poisons the label corpus.
+ *
+ * Returns the ids to mark and the map with finished units dropped — a unit whose
+ * task is gone must leave the map, or the next sync would try to complete a task
+ * that no longer exists.
+ */
+export function readbackFromTickTick(
+  state: LoopState,
+  map: SyncMap,
+  remote: readonly RemoteTask[],
+): { doneActionIds: string[]; map: SyncMap; unitsClosed: number } {
+  const { doneActionIds, doneUnitKeys } = diffTickTickReadback(map, remote);
+  const done = new Set(doneActionIds);
+
+  const gone = new Set(doneUnitKeys);
+  for (const unit of taskUnitsFrom(state)) {
+    if (!gone.has(unit.unitKey)) continue;
+    for (const m of unit.members) {
+      if (m.status === "suggested" || m.status === "approved") done.add(m.id);
+    }
+  }
+
+  const next: SyncMap = {};
+  for (const [k, v] of Object.entries(map)) if (!gone.has(k)) next[k] = v;
+  return { doneActionIds: [...done], map: next, unitsClosed: gone.size };
 }

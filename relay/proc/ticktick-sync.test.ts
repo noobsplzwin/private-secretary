@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { syncToTickTick, taskUnitsFrom, type TickTickWriter } from "./ticktick-sync.js";
+import { readbackFromTickTick, syncToTickTick, taskUnitsFrom, type TickTickWriter } from "./ticktick-sync.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { LoopState } from "../io/state.js";
@@ -115,6 +115,27 @@ describe("syncToTickTick", () => {
     expect(w.updateTask).toHaveBeenCalledOnce();
     expect(report.updated).toBe(1);
     expect(w.createTask).not.toHaveBeenCalled(); // NOT a second copy
+  });
+
+
+  // READ-BACK. The whole point: work finished in TickTick must stop being
+  // resurfaced. The owner's OSYX task was done and shipped and its cards stayed
+  // open forever, because a card only left `suggested` via a cockpit click.
+  it("read-back marks a gone task's live members done and drops it from the map", () => {
+    const st = grouped();
+    const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h" } };
+    const r = readbackFromTickTick(st, map, []); // tt1 no longer active
+    expect(r.doneActionIds).toEqual(st.actions.map((a) => a.id));
+    expect(r.map).toEqual({});
+    expect(r.unitsClosed).toBe(1);
+  });
+
+  it("read-back leaves an active task alone", () => {
+    const st = grouped();
+    const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h" } };
+    const r = readbackFromTickTick(st, map, [{ id: "tt1", status: 0, items: [] }]);
+    expect(r.doneActionIds).toEqual([]);
+    expect(r.map).toEqual(map);
   });
 
   it("completes a task that is no longer open", async () => {

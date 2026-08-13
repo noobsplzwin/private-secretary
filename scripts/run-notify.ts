@@ -23,9 +23,9 @@ import { execFileSync } from "node:child_process";
 import { describeIdentity } from "../relay/io/identity.js";
 import { loadSettings } from "../relay/io/settings.js";
 import { effectiveToolSpecs } from "../relay/io/tools.js";
-import { createTickTickWriter } from "../relay/io/ticktick-mcp.js";
+import { createTickTickWriter, createTickTickReader } from "../relay/io/ticktick-mcp.js";
 import { mcpAuthServiceFor } from "../relay/io/mcp-tool.js";
-import type { TickTickWriter } from "../relay/proc/ticktick-sync.js";
+import type { TickTickWriter, TickTickReader } from "../relay/proc/ticktick-sync.js";
 import { dirname, join, resolve } from "node:path";
 import { runScanTick, type ScanLoopResult } from "../relay/proc/scan-loop.js";
 import { notify } from "../relay/proc/notify.js";
@@ -522,6 +522,19 @@ function buildTickTickWriter(): TickTickWriter | undefined {
   });
 }
 
+// The read side (PHASE 6a). Same config as the writer — if the push is on, the
+// read-back is on, because a list you write to but never read from is exactly
+// how finished work stayed open forever.
+function buildTickTickReader(): TickTickReader | undefined {
+  const cfg = effectiveToolSpecs(statePath).ticktick?.config ?? {};
+  if (cfg.type !== "mcp" || !cfg.url || !cfg.project) return undefined;
+  return createTickTickReader({
+    url: cfg.url,
+    authService: mcpAuthServiceFor("ticktick", cfg.authService),
+    project: cfg.project,
+  });
+}
+
 async function buildConsolidate(): Promise<ConsolidateDeps | undefined> {
   if (!consolidateEnabled) return undefined;
   try {
@@ -614,6 +627,7 @@ console.log(
   const plan = await buildPlan();
   const personaUpdate = await buildPersonaUpdate();
   const ticktickWriter = buildTickTickWriter();
+  const ticktickReader = buildTickTickReader();
 
   let consecutiveErrors = 0;
 
@@ -632,6 +646,7 @@ console.log(
           personaUpdate,
           ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
+          ...(ticktickReader ? { ticktickReader } : {}),
           maxDraftCandidates: maxDraft,
         });
         if (r.totalInbound > 0 || r.drafted > 0) {

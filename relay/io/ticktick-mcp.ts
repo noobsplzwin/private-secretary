@@ -18,7 +18,7 @@
 import { callMcpTool, callResultObject, callResultRows } from "./mcp-tool.js";
 import { resolveTickTickProject, type TickTickProject } from "../core/ticktick.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
-import type { TickTickWriter } from "../proc/ticktick-sync.js";
+import type { TickTickWriter, TickTickReader } from "../proc/ticktick-sync.js";
 import type { ToolRunner } from "../proc/execute.js";
 
 const projectIdCache = new Map<string, string>();
@@ -106,6 +106,42 @@ export function clearTickTickProjectCache(): void {
 // approves. TickTick echoes `items` in the order it received them; the pass
 // records the pairing and specs/ticktick-migration.md §1 explains why a wrong
 // pairing matters (a ticked item pointing at nothing, or at the wrong action).
+/**
+ * The project's ACTIVE tasks, for the completion read-back.
+ *
+ * ONE call: get_project_with_undone_tasks returns every undone task with its
+ * checklist items and their per-item status, which is exactly what
+ * core/ticktick-readback.ts needs. Fetching each tracked task by id would be
+ * ~20 round trips per poll for the same answer.
+ */
+export function createTickTickReader(opts: TickTickToolOptions): TickTickReader {
+  return {
+    async listActive(project?: string) {
+      const name = project ?? opts.project;
+      const projectId = name ? await resolveProjectId(opts.url, opts.authService, name) : undefined;
+      if (!projectId) throw new Error("ticktick: cannot read back without a project");
+      const res = await callMcpTool(opts.url, opts.authService, "get_project_with_undone_tasks", {
+        project_id: projectId,
+      });
+      const raw = callResultObject(res).tasks;
+      if (!Array.isArray(raw)) return [];
+      return raw.flatMap((t) => {
+        const o = t as { id?: unknown; status?: unknown; items?: unknown };
+        if (typeof o.id !== "string") return [];
+        const items = Array.isArray(o.items)
+          ? o.items.flatMap((i) => {
+              const it = i as { id?: unknown; status?: unknown };
+              return typeof it.id === "string"
+                ? [{ id: it.id, status: typeof it.status === "number" ? it.status : 0 }]
+                : [];
+            })
+          : [];
+        return [{ id: o.id, status: typeof o.status === "number" ? o.status : 0, items }];
+      });
+    },
+  };
+}
+
 export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter {
   const resolve = async (project?: string): Promise<string | undefined> => {
     const name = project ?? opts.project;
