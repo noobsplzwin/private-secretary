@@ -96,14 +96,16 @@ async function buildDraft(args: Args): Promise<DraftDeps | undefined> {
               model: draftModel,
             })
           : createClaudeCliLlmCaller({ model: draftModel });
-    const { resolve: resolvePersona, keys } = buildPersonaResolver(
-      loadPersonas(args.personaDir),
-    );
+    const personas = loadPersonas(args.personaDir);
+    const { resolve: resolvePersona, keys } = buildPersonaResolver(personas);
     console.log(`[secretary] drafting enabled via ${mode} (${keys.length} personas indexed)`);
     return {
       llm,
       resolvePersona,
       knownPersonaKeys: keys,
+      // The roster, so an attendee NAME resolves to that person's address
+      // (core/attendee-resolver.ts). run-notify already passed it for P10.
+      personas,
       // Connected MCP tools the LLM may route tool cards to.
       toolKeys: Object.keys(effectiveToolSpecs(args.statePath)),
     };

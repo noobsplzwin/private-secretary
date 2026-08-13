@@ -573,3 +573,53 @@ describe("task vs tool routing lives in the prompt", () => {
     expect(req.system).toContain("jira, ticktick");
   });
 });
+
+// The owner asked for internal colleagues ON the invite ("加 Michael 和 zech 到
+// 参加人"), but the model only writes the NAME it read, and buildCalendarEvent
+// keeps only entries that are already addresses — so they were silently left off.
+describe("calendar attendees: names become addresses at creation", () => {
+  const resolver = buildPersonaResolver([michael]);
+  const roster = [michael];
+  const deps = (llm: LlmCaller) => ({
+    llm,
+    resolvePersona: resolver.resolve,
+    knownPersonaKeys: resolver.keys,
+    personas: roster,
+    now: () => "2026-06-14T12:00:00Z",
+  });
+  const cal = (attendees: unknown[]): LlmCaller => async () => [
+    {
+      action_type: "calendar",
+      reason: "agreed in thread",
+      confidence: 0.9,
+      params: { title: "评审", start: "2026-08-20T09:00", end: "2026-08-20T10:00", attendees },
+    } as DraftedAction,
+  ];
+
+  it("resolves a first name to the persona's address", async () => {
+    const r = await draftActions([msg()], deps(cal(["Michael"])));
+    expect(r.actions[0]!.params.attendees).toEqual(["michael@taiv.tv"]);
+    expect(r.actions[0]!.params.attendees_unresolved).toBeUndefined();
+  });
+
+  // Never guessed: an invite reaches a real inbox, so an unresolvable name is
+  // reported on the card instead.
+  it("reports an unresolvable name instead of inventing an address", async () => {
+    const r = await draftActions([msg()], deps(cal(["Michael", "Gouwa Wang"])));
+    expect(r.actions[0]!.params.attendees).toEqual(["michael@taiv.tv"]);
+    expect(r.actions[0]!.params.attendees_unresolved).toEqual(["Gouwa Wang"]);
+  });
+
+  it("leaves an address the thread stated untouched", async () => {
+    const r = await draftActions([msg()], deps(cal(["outside@partner.com"])));
+    expect(r.actions[0]!.params.attendees).toEqual(["outside@partner.com"]);
+  });
+
+  it("does not touch a non-calendar card's params", async () => {
+    const llm: LlmCaller = async () => [
+      { action_type: "task", reason: "r", confidence: 0.9, params: { title: "t", attendees: ["Michael"] } } as DraftedAction,
+    ];
+    const r = await draftActions([msg()], deps(llm));
+    expect(r.actions[0]!.params.attendees).toEqual(["Michael"]);
+  });
+});

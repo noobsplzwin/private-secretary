@@ -226,3 +226,50 @@ describe("wallClockLabel", () => {
     expect(wallClockLabel("next week")).toBeNull();
   });
 });
+
+describe("attendees after draft-time resolution", () => {
+  // Names now become addresses at draft time; whatever could not be resolved is
+  // parked in params.attendees_unresolved. ASK-not-GUESS still holds: an
+  // unresolved name must not sit behind a tickable send.
+  it("a resolved invite is tickable and names the addresses", () => {
+    const built = buildTaskPayload(
+      unit({
+        members: [
+          member({
+            id: "cal1",
+            action_type: "calendar",
+            params: {
+              title: "评审",
+              start: "2026-08-20T09:00:00-05:00",
+              attendees: ["michael@taiv.tv", "zech@taiv.tv"],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(built.payload.items![0]!.title).toContain("michael@taiv.tv");
+    expect(built.executable).toEqual([{ sortOrder: 0, actionId: "cal1" }]);
+  });
+
+  it("an unresolved name in attendees_unresolved blocks the tickable line", () => {
+    const built = buildTaskPayload(
+      unit({
+        members: [
+          member({
+            id: "cal1",
+            action_type: "calendar",
+            params: {
+              title: "评审",
+              start: "2026-08-20T09:00:00-05:00",
+              attendees: ["michael@taiv.tv"],
+              attendees_unresolved: ["Gouwa Wang"],
+            },
+          }),
+        ],
+      }),
+    );
+    expect(built.payload.items![0]!.title).toContain("无法解析");
+    expect(built.payload.items![0]!.title).toContain("Gouwa Wang");
+    expect(built.executable).toEqual([]);
+  });
+});

@@ -28,6 +28,7 @@ import { buildDraftRequest, type DraftedAction } from "./draft-prompt.js";
 import { selectProjects, renderProjectContext, renderProjectCatalog, type Project } from "../core/project.js";
 import { detectMentions } from "../core/mentions.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
+import { resolveAttendees } from "../core/attendee-resolver.js";
 
 // The injected LLM call: takes the assembled request, returns the parsed
 // suggested actions (the adapter extracts them from the tool call).
@@ -62,6 +63,11 @@ export interface DraftDeps {
   // `leoProfile` = how Leo decides (conditions the analysis). Absent = persona-only.
   projects?: Project[];
   leoProfile?: string;
+  // P10 multi-party awareness + attendee resolution. `personas` = the full
+  // roster; core/attendee-resolver.ts also reads it to turn an attendee NAME
+  // ("Michael") into that person's address. Absent = names pass through and get
+  // dropped downstream, the pre-resolution behaviour.
+  //
   // P10 multi-party awareness. `personas` = the full roster, scanned to detect
   // which OTHER known contacts a message/thread mentions (e.g. 古龙's trip thread
   // names 金总). `fetchRelatedThread` pulls that third party's recent conversation
@@ -291,6 +297,25 @@ export async function draftActions(
       ) {
         const fallback = (s.headline ?? s.summary ?? "").trim();
         if (fallback) baseParams.title = fallback;
+      }
+      // Internal colleagues onto the invite. The model only ever writes the NAME
+      // it read in the thread ("Michael", "zech"), and buildCalendarEvent keeps
+      // only entries that are already addresses — so those people were silently
+      // left off every event, which is the opposite of what the owner asked for
+      // ("加 Michael 和 zech 到参加人").
+      //
+      // Resolved HERE, at creation, so everything downstream sees real
+      // addresses: the executor, and the tickable invite line in TickTick that
+      // must name who it will email. A name meaning two people, or one with no
+      // address on file, is left in params.attendees_unresolved for the card to
+      // show — never guessed at, because an invite reaches a real inbox.
+      if (s.action_type === "calendar" && Array.isArray(baseParams.attendees) && deps.personas) {
+        const names = (baseParams.attendees as unknown[]).filter(
+          (a): a is string => typeof a === "string",
+        );
+        const { emails, unresolved } = resolveAttendees(names, deps.personas);
+        baseParams.attendees = emails;
+        if (unresolved.length > 0) baseParams.attendees_unresolved = unresolved;
       }
       // Assemble the full ActionItem shape the validator + queue expect.
       // Optional fields pass through ONLY when they carry the right type —

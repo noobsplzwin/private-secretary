@@ -97,7 +97,11 @@ function lineFor(a: ActionItem): { title: string; actionId?: string } | null {
   switch (a.action_type) {
     case "calendar": {
       const resolved: ResolvedAttendee[] = emails(p.attendees).map((email) => ({ email }));
-      const unresolved = nonEmails(p.attendees);
+      // Names are resolved to addresses at draft time now
+      // (core/attendee-resolver.ts), and whatever could NOT be resolved is
+      // parked in params.attendees_unresolved. Still read non-emails out of
+      // `attendees` as well, for cards drafted before that landed.
+      const unresolved = [...nonEmails(p.attendees), ...nonEmails(p.attendees_unresolved)];
       const when = wallClockLabel(str(p.start)) ?? "";
       // ASK-not-GUESS: a name that did not resolve to an address must never sit
       // behind a tickable send, so the whole line degrades to a manual one.

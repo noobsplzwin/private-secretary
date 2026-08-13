@@ -396,3 +396,30 @@ export function mcpAuthServiceFor(toolKey: string, configured?: string): string 
 export async function clearMcpTokens(authService: string, account: string): Promise<void> {
   await deleteSecret(authService, account);
 }
+
+/**
+ * Full OAuth reset for one tool: tokens AND the dynamically-registered client.
+ *
+ * WHY BOTH: abandoning the browser consent leaves the registration saved but no
+ * token, and the server can put that half-finished client into a state where it
+ * answers every /authorize with a 500. Every retry then reads the same dead
+ * client_id out of Keychain and fails identically — the connection is bricked
+ * with no way out, which is exactly what happened to Jira (client
+ * YM-Rz7OVYmnggW_r → 500 forever, while a freshly registered client → 200).
+ *
+ * Clearing the client info makes the SDK register a new one on the next
+ * attempt. Safe to run any time: it only discards credentials, and the next
+ * connect re-obtains them.
+ */
+export async function resetMcpAuth(url: string, authService: string): Promise<void> {
+  // The provider keys both entries by the server URL (see connect()).
+  //
+  // Each delete tolerates a MISSING entry, because the state this exists to
+  // clean up is precisely a partial one: client registration saved, token never
+  // obtained. deleteSecret throws KeychainEntryMissing, so a strict version
+  // would die on the absent token and never reach the client entry — failing in
+  // the only case that matters.
+  for (const service of [authService, `${authService}-client`]) {
+    await deleteSecret(service, url).catch(() => undefined);
+  }
+}
