@@ -10,6 +10,13 @@
 //
 //   npx tsx scripts/run-notify.ts [--state p] [--personas p]
 //     [--wechat-ms 10000] [--gmail-ms 180000] [--slack-ms 600000] [--max-draft N]
+//     [--once]
+//
+// --once runs ONE tick per source, in order, then exits 0. This is the only
+// entry point that wires every pass (draft → refresh → consolidate → plan →
+// TickTick sync), so it is also how you re-run the full pipeline over existing
+// state after changing prompt or mapping logic. run-secretary.ts --once passes
+// `draft` ALONE: it produces cards that are never grouped, tiered, or synced.
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -147,6 +154,7 @@ const consolidateEnabled = !process.argv.includes("--no-consolidate");
 // for conversations with an open card + emit calendar actions on agreed meetings.
 // ON by default; --no-refresh opts out. --refresh-ttl-min overrides the cooldown.
 const refreshEnabled = !process.argv.includes("--no-refresh");
+const onceMode = process.argv.includes("--once");
 const refreshTtlMin = num("--refresh-ttl-min", 10);
 // How many open conversations to re-read per scan. The default cap of 3 meant a
 // full inbox of ~7 open cards took ~3 scans (~90 min) to all catch up. Cover the
@@ -619,8 +627,19 @@ console.log(
       }
     });
 
-  // Stagger the initial ticks so they don't queue up at once; then interval.
   const sources: Source[] = ["wechat", "gmail", "slack"];
+
+  // One tick per source, sequentially, then exit — no timers, no daemon. tick()
+  // already swallows its own errors, so a failing source cannot strand the run
+  // with the lock held.
+  if (onceMode) {
+    for (const s of sources) await tick(s);
+    console.log("[notify] --once complete");
+    releaseDaemonLock();
+    process.exit(0);
+  }
+
+  // Stagger the initial ticks so they don't queue up at once; then interval.
   sources.forEach((s, i) => {
     setTimeout(() => void tick(s), i * 2000);
     setInterval(() => void tick(s), intervals[s]);
