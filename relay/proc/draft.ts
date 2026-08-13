@@ -29,6 +29,7 @@ import { selectProjects, renderProjectContext, renderProjectCatalog, type Projec
 import { detectMentions } from "../core/mentions.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
+import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
 
 // The injected LLM call: takes the assembled request, returns the parsed
 // suggested actions (the adapter extracts them from the tool call).
@@ -63,12 +64,12 @@ export interface DraftDeps {
   // `leoProfile` = how Leo decides (conditions the analysis). Absent = persona-only.
   projects?: Project[];
   leoProfile?: string;
-  // P10 multi-party awareness + attendee resolution. `personas` = the full
-  // roster; core/attendee-resolver.ts also reads it to turn an attendee NAME
-  // ("Michael") into that person's address. Absent = names pass through and get
-  // dropped downstream, the pre-resolution behaviour.
+  // `personas` = the full roster, used for THREE things: P10 multi-party
+  // awareness (below), turning an attendee NAME into an address
+  // (core/attendee-resolver.ts), and checking an addressed name in next_actions
+  // against the roster (core/name-check.ts). Absent = all three are skipped.
   //
-  // P10 multi-party awareness. `personas` = the full roster, scanned to detect
+  // P10: the roster is scanned to detect
   // which OTHER known contacts a message/thread mentions (e.g. 古龙's trip thread
   // names 金总). `fetchRelatedThread` pulls that third party's recent conversation
   // so the draft is informed by it AND can emit a follow-up toward them (sync the
@@ -220,6 +221,11 @@ export async function draftActions(
       messages: batch,
       knownPersonaKeys: deps.knownPersonaKeys,
       toolKeys: deps.toolKeys,
+      // Real names, not just keys — the model had no roster of display names to
+      // draw on when writing prose, which is how it invented "Fabian".
+      ...(deps.personas
+        ? { knownPeople: deps.personas.map((p) => `${p.key} = ${p.displayName}`) }
+        : {}),
       leoProfile: deps.leoProfile,
       projectContext,
       projectCatalog,
@@ -309,6 +315,19 @@ export async function draftActions(
       // must name who it will email. A name meaning two people, or one with no
       // address on file, is left in params.attendees_unresolved for the card to
       // show — never guessed at, because an invite reaches a real inbox.
+      // An INVENTED person in a next_action. The model wrote "回 Fabian：…" on a
+      // card whose sender was Cody — no Fabian persona, and the word appears
+      // nowhere in the thread. next_actions were never validated, yet they are
+      // the checklist items the owner works from in TickTick, so a wrong name
+      // there sends him to the wrong person. Reported on the card, not dropped:
+      // the STEP is usually right and only the name is suspect.
+      if (Array.isArray(s.next_actions) && deps.personas) {
+        const unverified = findUnverifiedNames(s.next_actions as string[], {
+          threadText: `${ctx.original_message ?? ""} ${latest.threadContext ?? ""}`,
+          aliases: rosterAliases(deps.personas),
+        });
+        if (unverified.length > 0) baseParams.unverified_names = unverified;
+      }
       if (s.action_type === "calendar" && Array.isArray(baseParams.attendees) && deps.personas) {
         const names = (baseParams.attendees as unknown[]).filter(
           (a): a is string => typeof a === "string",

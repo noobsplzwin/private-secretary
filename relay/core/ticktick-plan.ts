@@ -191,7 +191,24 @@ export function buildTaskPayload(unit: TaskUnit): BuiltTask {
     }
   }
 
-  const note = describe(unit);
+  // A name the drafter used in an addressing position that is in neither the
+  // thread nor the roster (core/name-check.ts). Surfaced at the TOP of the
+  // notes, because the steps below may tell the owner to contact that person —
+  // "回 Fabian" on a card whose sender was Cody is the case this exists for.
+  const unverified = [
+    ...new Set(
+      unit.members.flatMap((m) => {
+        const raw = m.params?.unverified_names;
+        return Array.isArray(raw) ? raw.filter((n): n is string => typeof n === "string") : [];
+      }),
+    ),
+  ];
+  const note = [
+    unverified.length > 0 ? `⚠️ 姓名未核实（会话和人物档案里都没有）：${unverified.join("、")}` : "",
+    describe(unit),
+  ]
+    .filter((b) => b !== "")
+    .join("\n\n");
   const deadline = deadlineFor(unit);
   const payload: TickTickTaskPayload = {
     title: unit.title,

@@ -354,6 +354,10 @@ export function buildDraftRequest(opts: {
   persona: Persona | null;
   messages: InboundMessage[];
   knownPersonaKeys: string[];
+  // "key = Display Name" lines. The prompt used to send KEYS ONLY, so the model
+  // had no real names to draw on when writing prose — which is how it invented
+  // "Fabian". Falls back to the bare keys when absent.
+  knownPeople?: string[];
   leoProfile?: string;
   projectContext?: string;
   projectCatalog?: string;
@@ -376,7 +380,12 @@ export function buildDraftRequest(opts: {
     : "";
   const recipientHint =
     opts.knownPersonaKeys.length > 0
-      ? `\n\nKNOWN PERSONA KEYS (for target.personaKey — exact match only): ${opts.knownPersonaKeys.join(", ")}`
+      ? `\n\nKNOWN PEOPLE — "persona key = Display Name". Use the KEY for
+target.personaKey (exact match only) and the NAME when you write a person into
+prose. NEVER name anyone who is neither in this list nor in the thread: the
+model once wrote "回 Fabian" on a card whose sender was Cody, and there is no
+Fabian. If you do not know a name, describe the role ("回对方") instead of
+inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.knownPersonaKeys.join(", ")}`
       : "";
   // Project block: grounds the action in what's actually open on the project.
   // It is CONTEXT to read, NOT new facts to invent — same rule as thread context.

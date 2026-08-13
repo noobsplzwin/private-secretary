@@ -273,3 +273,28 @@ describe("attendees after draft-time resolution", () => {
     expect(built.executable).toEqual([]);
   });
 });
+
+describe("unverified names surface in the notes", () => {
+  // The steps below may tell the owner to contact that person, so the warning
+  // goes at the TOP of the notes rather than being left implicit.
+  it("names them, deduped across members", () => {
+    const built = buildTaskPayload(
+      unit({
+        members: [
+          member({ id: "m1", params: { title: "t", unverified_names: ["Fabian"] } }),
+          member({ id: "m2", params: { title: "t2", unverified_names: ["Fabian", "Rajat"] } }),
+        ],
+      }),
+    );
+    const note = built.payload.desc ?? built.payload.content ?? "";
+    expect(note).toContain("姓名未核实");
+    expect(note.match(/Fabian/g)).toHaveLength(1);
+    expect(note).toContain("Rajat");
+    expect(note.startsWith("⚠️")).toBe(true); // first thing read
+  });
+
+  it("says nothing when every name checked out", () => {
+    const note = buildTaskPayload(unit()).payload.desc ?? buildTaskPayload(unit()).payload.content ?? "";
+    expect(note).not.toContain("姓名未核实");
+  });
+});

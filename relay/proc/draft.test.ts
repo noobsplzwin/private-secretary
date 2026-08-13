@@ -623,3 +623,52 @@ describe("calendar attendees: names become addresses at creation", () => {
     expect(r.actions[0]!.params.attendees).toEqual(["Michael"]);
   });
 });
+
+// REGRESSION: the model wrote "回 Fabian：…" on a card whose sender was Cody.
+// No Fabian persona, and the word appears nowhere in the thread. next_actions
+// were never validated, yet they are the checklist items the owner works from.
+describe("an invented name in next_actions is reported", () => {
+  const resolver = buildPersonaResolver([michael]);
+  const deps = (llm: LlmCaller) => ({
+    llm,
+    resolvePersona: resolver.resolve,
+    knownPersonaKeys: resolver.keys,
+    personas: [michael],
+    now: () => "2026-06-14T12:00:00Z",
+  });
+  const withSteps = (steps: string[]): LlmCaller => async () => [
+    { action_type: "task", reason: "r", confidence: 0.9, params: { title: "t" }, next_actions: steps } as DraftedAction,
+  ];
+
+  it("flags a name in neither the thread nor the roster", async () => {
+    const r = await draftActions([msg()], deps(withSteps(["回 Fabian：4 点须列为 hard must-have"])));
+    expect(r.actions[0]!.params.unverified_names).toEqual(["Fabian"]);
+    // the STEP is kept — usually only the name is wrong
+    expect(r.actions[0]!.next_actions).toHaveLength(1);
+  });
+
+  it("stays quiet for a roster name", async () => {
+    const r = await draftActions([msg()], deps(withSteps(["同步 Michael 最新进度"])));
+    expect(r.actions[0]!.params.unverified_names).toBeUndefined();
+  });
+
+  it("stays quiet for a name the thread itself used", async () => {
+    const r = await draftActions(
+      [msg({ text: "Darren: 我休假前想交接 build server" })],
+      deps(withSteps(["回 Darren 确认交接人"])),
+    );
+    expect(r.actions[0]!.params.unverified_names).toBeUndefined();
+  });
+
+  it("sends real display names to the model, not just keys", async () => {
+    let seenText = "";
+    const llm: LlmCaller = async (req) => {
+      seenText = req.userText;
+      return [{ action_type: "task", reason: "r", confidence: 0.9, params: { title: "t" } } as DraftedAction];
+    };
+    await draftActions([msg()], deps(llm));
+    // the roster rides in userText, alongside the messages it applies to
+    expect(seenText).toContain("michael-dobosz = Michael Dobosz");
+    expect(seenText).toContain("NEVER name anyone");
+  });
+});
