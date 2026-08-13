@@ -43,8 +43,21 @@ function norm(s: string): string {
 // ordered, so "回复" wins over "回" at the same position — matching the short
 // verb inside the long one turned "回复报价" into a person called 复报价.
 const byLengthDesc = (a: string, b: string) => b.length - a.length;
+// After a Chinese verb, only a LATIN name is captured.
+//
+// The CJK branch used to capture 2-3 characters here and it did not survive
+// contact with real output: of 15 freshly drafted cards it fired 5 times and was
+// wrong every time — 负责该, 现场设, 清哪几, 报与, 三家是 are sentence fragments
+// from "找负责该…", "问清哪几…". A 33% false-positive rate is precisely the
+// noisy warning this file's header says people learn to ignore, so it earns
+// nothing and costs the credibility of the true positives.
+//
+// Chinese names go unchecked as a result, which is a real gap: the Fabian case
+// happened to be Latin, but an invented 张工 would pass. Restoring coverage
+// needs the candidate anchored to something — a 百家姓 surname table is the
+// obvious next step, since 张工/李冰 match a surname and 负责该/清哪几 do not.
 const CJK_RE = new RegExp(
-  `(?:${[...CJK_VERBS].sort(byLengthDesc).join("|")})\\s*([A-Z][A-Za-z.'-]+|[\\u4e00-\\u9fa5]{2,3})`,
+  `(?:${[...CJK_VERBS].sort(byLengthDesc).join("|")})\\s*([A-Z][A-Za-z.'-]+)`,
   "gu",
 );
 // The verb's first letter accepts either case ("Ping" and "ping"), while the

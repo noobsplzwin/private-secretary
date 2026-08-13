@@ -53,6 +53,29 @@ describe("findUnverifiedNames", () => {
     ).toEqual([]);
   });
 
+  // REGRESSION, from real output: capturing 2-3 CJK characters after a Chinese
+  // verb fired on 5 of 15 freshly drafted cards and was wrong every time. Only
+  // a LATIN name is captured after a Chinese verb now.
+  it("does not mistake a Chinese sentence fragment for a name", () => {
+    expect(
+      findUnverifiedNames(
+        [
+          "找负责该问题的同事确认",
+          "问清哪几处需要改",
+          "通报与客户的进展",
+          "联系三家是否都到位",
+          "同步现场设备状态",
+        ],
+        { threadText: "", aliases },
+      ),
+    ).toEqual([]);
+  });
+
+  // A Latin name after a Chinese verb is still caught — that is the Fabian shape.
+  it("still catches a Latin name after a Chinese verb", () => {
+    expect(findUnverifiedNames(["找 Rajat 确认"], { threadText: "", aliases })).toEqual(["Rajat"]);
+  });
+
   it("ignores a lowercase word after an English verb", () => {
     expect(findUnverifiedNames(["ask around for a quote"], { threadText: "", aliases })).toEqual([]);
   });
