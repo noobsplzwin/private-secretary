@@ -18,7 +18,7 @@
 // state after changing prompt or mapping logic. run-secretary.ts --once passes
 // `draft` ALONE: it produces cards that are never grouped, tiered, or synced.
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { describeIdentity } from "../relay/io/identity.js";
 import { loadSettings } from "../relay/io/settings.js";
@@ -30,6 +30,8 @@ import { dirname, join, resolve } from "node:path";
 import { runScanTick, type ScanLoopResult } from "../relay/proc/scan-loop.js";
 import { notify } from "../relay/proc/notify.js";
 import { loadPersonas } from "../relay/io/personas.js";
+import { readPersonaV3File } from "../relay/io/persona-store.js";
+import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
 import { loadProjects, loadLeoProfile } from "../relay/io/projects.js";
 import { renderProjectCatalog } from "../relay/core/project.js";
@@ -709,6 +711,22 @@ console.log(
   const personaUpdate = await buildPersonaUpdate();
   const ticktickWriter = buildTickTickWriter();
   const ticktickReader = buildTickTickReader();
+  // Shadow list (PHASE 6c): re-read the ledgers from disk each call, because
+  // the persona-update phase earlier in the same tick may have just changed
+  // them — a cached copy would diff against stale commitments.
+  const shadowPersonas = (): Array<{ key: string; commitments?: Commitment[] }> => {
+    const out: Array<{ key: string; commitments?: Commitment[] }> = [];
+    for (const f of readdirSync(personaDir)) {
+      if (!f.endsWith(".yaml")) continue;
+      try {
+        const p = readPersonaV3File(join(personaDir, f));
+        out.push({ key: p.key, ...(p.commitments ? { commitments: p.commitments } : {}) });
+      } catch {
+        /* unreadable persona — the shadow list just won't see it */
+      }
+    }
+    return out;
+  };
 
   let consecutiveErrors = 0;
 
@@ -728,6 +746,7 @@ console.log(
           ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
           ...(ticktickReader ? { ticktickReader } : {}),
+          shadowPersonas,
           maxDraftCandidates: maxDraft,
         });
         if (r.totalInbound > 0 || r.drafted > 0) {

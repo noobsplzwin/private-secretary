@@ -15,6 +15,7 @@
 // existing semantics so swapping the skill out for a daemon is a no-op
 // from loop-state's point of view.
 
+import { appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendShadowRecord } from "../io/shadow-log.js";
 import {
@@ -40,7 +41,10 @@ import { consolidateTasks, type ConsolidateDeps } from "./consolidate.js";
 import { refreshOpenTasks, type RefreshDeps } from "./refresh.js";
 import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { rankTasks, type PlanDeps } from "./plan.js";
-import { syncToTickTick, readbackFromTickTick, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
+import { syncToTickTick, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
+import { shouldSync } from "../core/ticktick-plan.js";
+import { deriveShadowList, diffShadow } from "../core/shadow-list.js";
+import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
@@ -105,6 +109,8 @@ export interface ScanLoopOptions {
   ticktickWriter?: TickTickWriter;
   /** Read side: completions the owner ticked off in TickTick (PHASE 6a). */
   ticktickReader?: TickTickReader;
+  /** Personas WITH their commitment ledgers, for the shadow list (PHASE 6c). */
+  shadowPersonas?: () => ReadonlyArray<{ key: string; commitments?: Commitment[] }>;
   /** Owner's IANA zone for TickTick due dates / time labels. */
   ownerTimeZone?: string;
   // When provided, a persona-update pass runs after planning: extracts NEW
@@ -1014,6 +1020,33 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           at: new Date(startedAtMs).toISOString(),
         };
       }).catch(() => undefined);
+    }
+  }
+
+  // ── PHASE 6c (UNLOCKED, no LLM, no writes to state): the SHADOW list.
+  // Phase 3 of specs/person-first-consolidation.md: derive a list from the
+  // commitment ledger (who=me ∧ open), diff it against what the real pipeline
+  // is about to sync, and append one JSONL row. Nothing reads this file yet —
+  // the diff IS the deliverable, measuring ledger coverage before anything
+  // switches over. Runs whenever personas are available; never fatal.
+  if (!opts.dryRun && opts.shadowPersonas) {
+    try {
+      const snapshot = loadState(opts.statePath);
+      const shadow = deriveShadowList(opts.shadowPersonas());
+      const nowMs = Date.now();
+      const real = taskUnitsFrom(snapshot)
+        .filter((u) => shouldSync(u, nowMs))
+        .map((u) => u.title);
+      const diff = diffShadow(new Date().toISOString(), shadow, real);
+      appendFileSync(
+        join(dirname(opts.statePath), "shadow-list.jsonl"),
+        JSON.stringify(diff) + "\n",
+      );
+      console.log(
+        `[shadow] ${shadow.length} derived | ${real.length} real | matched ${diff.matched.length}, real-only ${diff.realOnly.length}, shadow-only ${diff.shadowOnly.length}`,
+      );
+    } catch (e) {
+      console.error(`[shadow] FAILED (non-fatal): ${errString(e)}`);
     }
   }
 
