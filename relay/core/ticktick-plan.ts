@@ -98,7 +98,7 @@ function isPastEvent(m: ActionItem, nowMs: number): boolean {
 }
 
 // Action types this mapping renders. An `ignore` card is not work.
-const RENDERED_TYPES = new Set(["calendar", "tool", "reply", "relay", "forward", "task"]);
+const RENDERED_TYPES = new Set(["calendar", "tool", "task"]);
 // An opaque platform id: a Slack user/channel id or a WeChat wxid.
 const BARE_HANDLE = /^(?:U[A-Z0-9]{8,}|C[A-Z0-9]{8,}|wxid_\S+)$/;
 
@@ -219,15 +219,12 @@ function lineFor(a: ActionItem, zone: string): { title: string; actionId?: strin
     }
     case "reply":
     case "relay":
-    case "forward": {
-      // Inert on purpose: a checklist item cannot show the draft, so ticking it
-      // would be a blind approval — and with the cockpit retired (owner,
-      // 2026-08-14) there is no other review surface. The line just names the
-      // reply Leo owes; he writes it himself where the conversation lives.
-      const who = a.context?.sender_name ?? a.context?.sender_handle ?? "";
-      const what = a.headline || str(p.title) || "回复";
-      return { title: `✉️ ${what}${who ? ` · ${who}` : ""}` };
-    }
+    case "forward":
+      // Retired from production (owner, 2026-08-14: "AI暂时不帮我回复") — the
+      // passes no longer emit these, and a legacy card still in state must not
+      // render: an owed answer surfaces as a `task` line instead. One-click
+      // reply drafting is shelved (specs/person-first-consolidation.md §3.5).
+      return null;
     case "task":
       return { title: str(p.title) || a.headline || "(untitled)" };
     default:

@@ -3,9 +3,10 @@
 Scans Slack + Gmail + WeChat on an interval, understands each new message with
 sender context, and maintains the owner's to-do surface in TickTick: tiered
 tasks with grounded checklists, completions read back every tick. The local
-cockpit UI is RETIRED (owner, 2026-08-14) — TickTick is the only surface;
-reply / relay / forward drafts surface as inert checklist lines until
-tick-to-execute (specs/ticktick-migration.md §1) lands.
+cockpit UI is RETIRED (owner, 2026-08-14) — TickTick is the only surface.
+reply / relay / forward are retired from production too (same day): a thread
+needing Leo's answer becomes a `task` naming it; one-click reply drafting is
+shelved (specs/person-first-consolidation.md §3.5).
 
 Specs: `specs/action-item-engine.md` (engine), `specs/persona-v3.md` (personas),
 `specs/roadmap.md` (what shipped, what each phase means, open items).

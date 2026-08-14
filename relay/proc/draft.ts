@@ -268,26 +268,21 @@ export async function draftActions(
     const senderErrors: string[] = [];
     const senderActions: ActionItem[] = [];
     for (const s of suggested) {
-      // Cross-platform relay/forward is disabled (v1): we only reply to the
-      // sender on the platform they messaged from. Drop any the model emits.
-      if (s.action_type === "relay" || s.action_type === "forward") {
-        senderErrors.push(
-          `dropped ${s.action_type}: relay/forward disabled — reply on the source platform only`,
-        );
+      // reply/relay/forward are ALL retired from production (owner,
+      // 2026-08-14: "AI暂时不帮我回复"). A thread that needs Leo's answer
+      // becomes a `task` naming the reply he owes; the engine drafts nothing
+      // human-facing. One-click reply drafting is a shelved feature
+      // (specs/person-first-consolidation.md §3.5) — the executors and the
+      // owner-voice skill stay for when it lands.
+      if (s.action_type === "reply" || s.action_type === "relay" || s.action_type === "forward") {
+        senderErrors.push(`dropped ${s.action_type}: message drafting is retired — emit a task instead`);
         continue;
       }
-      // A reply's recipient is unambiguously the sender, on the platform the
-      // message arrived on (Gmail in → Gmail reply, Slack in → Slack reply).
-      // Force it deterministically rather than trusting the model's target.
-      const target =
-        s.action_type === "reply"
-          ? { platform: latest.platform, personaKey: persona?.key ?? null }
-          : s.target ?? {};
-      // Gmail reply routing: the executor builds the reply MIME + threads the
-      // draft from these. The mailbox is encoded in the source ("gmail:<email>").
-      // Without them the Gmail draft can't be created (the bug where approve
-      // said "Draft created" but no draft existed). The LLM never sets these,
-      // so the source facts are authoritative.
+      const target = s.target ?? {};
+      // Gmail thread locators, kept on every gmail-sourced card even with reply
+      // drafting retired: thread_id is how fetchThread re-reads the conversation
+      // (refresh / persona-update), and the shelved one-click reply button will
+      // need mailbox + in_reply_to to thread its draft when it lands.
       const gmailParams: Record<string, unknown> = {};
       if (latest.platform === "gmail") {
         if (latest.source.startsWith("gmail:")) gmailParams.mailbox = latest.source.slice("gmail:".length);

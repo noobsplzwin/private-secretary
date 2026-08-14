@@ -146,12 +146,10 @@ export async function refreshOpenTasks(
     };
     let produced = 0;
     for (const s of actions) {
-      // Cross-platform relay/forward stays disabled (same as drafting).
-      if (s.action_type === "relay" || s.action_type === "forward") continue;
-      const target =
-        s.action_type === "reply"
-          ? { platform, personaKey: persona?.key ?? null }
-          : s.target ?? {};
+      // reply/relay/forward are retired from production (owner, 2026-08-14) —
+      // same rule as drafting: a needed answer is a task, never a drafted reply.
+      if (s.action_type === "reply" || s.action_type === "relay" || s.action_type === "forward") continue;
+      const target = s.target ?? {};
       // An INVENTED person in a next_action — the same check draft.ts runs.
       // It was in draft ALONE, and refresh rewrites next_actions every tick, so
       // the warning evaporated on the first refresh while the invented name

@@ -138,20 +138,20 @@ describe("draftActions orchestrator", () => {
     expect(r.actions).toHaveLength(1); // draft still produced
   });
 
-  it("turns a valid suggested reply into an ActionItem with id + context", async () => {
+  it("turns a valid suggested task into an ActionItem with id + context", async () => {
     const llm: LlmCaller = async () => [
       {
-        action_type: "reply",
-        target: { platform: "slack", personaKey: "michael-dobosz" },
-        reason: "answer the supply question",
+        action_type: "task",
+        target: {},
+        reason: "Leo owes Michael a spec answer",
         confidence: 0.95,
-        draft: "25-30W is fine",
+        params: { title: "回复 Michael 供电规格" },
       } as DraftedAction,
     ];
     const r = await draftActions([msg()], deps(llm));
     expect(r.actions).toHaveLength(1);
     const a = r.actions[0]!;
-    expect(a.action_type).toBe("reply");
+    expect(a.action_type).toBe("task");
     expect(a.status).toBe("suggested");
     expect(a.id).toBeTruthy();
     expect(a.source_message_id).toBe("slack:C1:1.0");
@@ -163,11 +163,11 @@ describe("draftActions orchestrator", () => {
   it("context carries sender_name when the batch was name-resolved at scan time", async () => {
     const llm: LlmCaller = async () => [
       {
-        action_type: "reply",
-        target: { platform: "slack", personaKey: "michael-dobosz" },
+        action_type: "task",
+        target: {},
         reason: "answer the supply question",
         confidence: 0.95,
-        draft: "25-30W is fine",
+        params: { title: "回复 Michael 供电规格" },
       } as DraftedAction,
     ];
     const r = await draftActions([msg({ senderName: "Michael" })], deps(llm));
@@ -176,9 +176,12 @@ describe("draftActions orchestrator", () => {
     expect(r.actions[0]!.context?.sender_name).toBe("Michael");
   });
 
-  it("a Gmail reply carries the mailbox + thread + Re: subject so the executor can draft it", async () => {
+  // Thread locators ride on EVERY gmail-sourced card now: refresh/persona-update
+  // re-read the conversation through thread_id, and the shelved one-click reply
+  // button will need mailbox + in_reply_to when it lands.
+  it("a gmail-sourced card carries the mailbox + thread + Re: subject", async () => {
     const llm: LlmCaller = async () => [
-      { action_type: "reply", reason: "ack", confidence: 0.7, draft: "Thanks!", headline: "x", summary: "y" },
+      { action_type: "task", reason: "ack", confidence: 0.7, params: { title: "回复 Alfredo" }, headline: "x", summary: "y" },
     ];
     const gmailMsg = msg({
       id: "gmail:abc123",
@@ -199,7 +202,7 @@ describe("draftActions orchestrator", () => {
 
   it("does not double-prefix Re: on an already-Re: subject", async () => {
     const llm: LlmCaller = async () => [
-      { action_type: "reply", reason: "ack", confidence: 0.7, draft: "ok", headline: "x", summary: "y" },
+      { action_type: "task", reason: "ack", confidence: 0.7, params: { title: "回信" }, headline: "x", summary: "y" },
     ];
     const r = await draftActions(
       [msg({ platform: "gmail", source: "gmail:leo@taiv.tv", subject: "Re: already a reply" })],
@@ -343,79 +346,19 @@ describe("draftActions orchestrator", () => {
     expect(r.actions.map((a) => a.params.title)).toEqual(["S1", "S2", "S3"]);
   });
 
-  it("forces a reply's target to the source platform + sender (ignores the model's target)", async () => {
-    // Slack message in, but the model wrongly says gmail → must be corrected to slack.
+  // reply/relay/forward are ALL retired from production (owner, 2026-08-14:
+  // "AI暂时不帮我回复"). The model is told not to emit them, and code enforces
+  // it — an owed answer arrives as a `task` instead.
+  it("drops reply, relay and forward alike", async () => {
     const llm: LlmCaller = async () => [
-      { action_type: "reply", target: { platform: "gmail", personaKey: "someone-else" }, reason: "x", confidence: 0.7, draft: "hi" } as DraftedAction,
+      { action_type: "reply", reason: "r", confidence: 0.9, draft: "hi" } as DraftedAction,
+      { action_type: "relay", target: { platform: "wechat", personaKey: "x" }, reason: "r", confidence: 0.9, draft: "转发" } as DraftedAction,
+      { action_type: "forward", target: { platform: "gmail", personaKey: "x" }, reason: "r", confidence: 0.9, draft: "fwd" } as DraftedAction,
+      { action_type: "task", reason: "r", confidence: 0.9, params: { title: "回复 Michael 供电规格" } } as DraftedAction,
     ];
-    const r = await draftActions([msg({ platform: "slack", senderHandle: "UMICHAEL" })], deps(llm));
+    const r = await draftActions([msg()], deps(llm));
     expect(r.actions).toHaveLength(1);
-    expect(r.actions[0]!.target?.platform).toBe("slack"); // source platform
-    expect(r.actions[0]!.target?.personaKey).toBe("michael-dobosz"); // the sender
-  });
-
-  it("drops relay/forward (cross-platform forwarding disabled)", async () => {
-    const llm: LlmCaller = async () => [
-      { action_type: "relay", target: { platform: "slack", personaKey: "zech" }, reason: "fwd", confidence: 0.8, draft: "fyi" } as DraftedAction,
-      { action_type: "forward", reason: "fwd2", confidence: 0.8, draft: "fyi2" } as DraftedAction,
-      { action_type: "task", reason: "keep", confidence: 0.9, params: { title: "t" } } as DraftedAction,
-    ];
-    const r = await draftActions([msg()], deps(llm));
-    expect(r.actions).toHaveLength(1); // only the task survives
     expect(r.actions[0]!.action_type).toBe("task");
-    expect(r.dropped[0]!.errors.join(" ")).toMatch(/relay\/forward disabled/);
-  });
-
-  it("reply with null recipient still becomes an item (needs-info, not dropped)", async () => {
-    const llm: LlmCaller = async () => [
-      { action_type: "reply", target: { platform: "slack", personaKey: null }, reason: "x", confidence: 0.7, draft: "hi" } as DraftedAction,
-    ];
-    const r = await draftActions([msg()], deps(llm));
-    expect(r.actions).toHaveLength(1); // validateActionItem accepts it; missingInfo flags later
-  });
-});
-
-describe("time_quote verification (fail-closed)", () => {
-  const resolver = buildPersonaResolver([michael]);
-  const deps = (llm: LlmCaller) => ({
-    llm,
-    resolvePersona: resolver.resolve,
-    knownPersonaKeys: resolver.keys,
-    now: () => "2026-06-14T12:00:00Z",
-  });
-  const cal = (params: Record<string, unknown>): DraftedAction =>
-    ({
-      action_type: "calendar",
-      target: {},
-      reason: "meeting agreed",
-      confidence: 0.8,
-      params: { title: "评审", start: "2026-08-20T09:00:00", end: "2026-08-20T10:00:00", ...params },
-    }) as DraftedAction;
-
-  // time_quote has demanded a verbatim quote since it shipped and nothing ever
-  // checked one. A quote that is not in the thread is decoration over a guess.
-  it("strips time_confirmed when the quote is not in the thread", async () => {
-    const llm: LlmCaller = async () => [
-      cal({ time_confirmed: true, time_quote: "Thursday at 9am sharp" }),
-    ];
-    const r = await draftActions([msg({ text: "let's sync on rev5 sometime" })], deps(llm));
-    expect(r.actions[0]!.params.time_confirmed).toBeUndefined();
-    expect(r.actions[0]!.params.time_quote_unverified).toBe("Thursday at 9am sharp");
-  });
-
-  it("keeps time_confirmed when the thread really says it", async () => {
-    const llm: LlmCaller = async () => [
-      cal({ time_confirmed: true, time_quote: "Thursday at 9am sharp" }),
-    ];
-    const r = await draftActions([msg({ text: "ok — Thursday at 9am sharp, my desk" })], deps(llm));
-    expect(r.actions[0]!.params.time_confirmed).toBe(true);
-  });
-
-  it("a confirmed flag with NO quote at all fails closed too", async () => {
-    const llm: LlmCaller = async () => [cal({ time_confirmed: true })];
-    const r = await draftActions([msg()], deps(llm));
-    expect(r.actions[0]!.params.time_confirmed).toBeUndefined();
-    expect(r.actions[0]!.params.time_quote_unverified).toBe("(missing)");
   });
 });
 
@@ -568,7 +511,9 @@ describe("answered threads: mined for commitments, never re-replied", () => {
     ];
     const r = await draftActions([msg({ threadAnsweredByUserAfter: true })], deps(llm));
     expect(r.actions.map((a) => a.action_type)).toEqual(["task"]);
-    expect(r.dropped[0]!.errors.join()).toContain("already replied");
+    // Retirement now drops it before the answered-thread gate would; either
+    // way a reply never survives and the task beside it does.
+    expect(r.dropped.length).toBeGreaterThan(0);
   });
 
   it("drops it for the last-sender signal too, not just the in-thread one", async () => {
@@ -579,12 +524,14 @@ describe("answered threads: mined for commitments, never re-replied", () => {
     expect(r.actions).toHaveLength(0);
   });
 
-  it("still allows a reply on a thread Leo has NOT answered", async () => {
+  // "still allows a reply on an unanswered thread" retired with reply
+  // production itself (owner, 2026-08-14) — no thread state re-enables it.
+  it("drops a reply even on a thread Leo has NOT answered", async () => {
     const llm: LlmCaller = async () => [
       { action_type: "reply", reason: "r", confidence: 0.9, draft: "d" } as DraftedAction,
     ];
     const r = await draftActions([msg()], deps(llm));
-    expect(r.actions.map((a) => a.action_type)).toEqual(["reply"]);
+    expect(r.actions).toHaveLength(0);
   });
 });
 

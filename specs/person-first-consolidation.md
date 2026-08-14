@@ -140,6 +140,13 @@ shipped in PHASE 6a records completion only and does NOT execute — that half i
 still to be built, and the "ticking never executes" wording in its commit
 overstates a deferral as a principle. It is a deferral.
 
+reply/relay/forward are RETIRED from production entirely (owner, 2026-08-14:
+"AI暂时不帮我回复"). A thread that needs Leo's answer surfaces as a `task`
+naming the reply he owes — never a drafted message. SHELVED, on the owner's
+todo: a one-click "起草回复" button that drafts the reply on demand (the
+executors, the owner-voice skill, and the gmail thread locators carried on
+every gmail-sourced card are kept for exactly that).
+
 ## 4. Code touch-points
 
 | Area | Change |

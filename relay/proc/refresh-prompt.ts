@@ -37,9 +37,10 @@ DECIDE from the CURRENT state of the thread:
   once they do. Do NOT emit a calendar action in that case. Put people +
   place in title/description (attendees empty — books on Leo's own calendar). Set a
   real location + map link only when a place is known; never invent an address. Only
-  emit a plain reply/task (no calendar) when NO date is agreed yet.
-- If Leo still owes a reply or an action, emit the UPDATED reply/task reflecting
-  the latest messages (a reply draft mirrors the sender's language).
+  emit a plain task (no calendar) when NO date is agreed yet.
+- If Leo still owes an answer or an action, emit the UPDATED task reflecting the
+  latest messages. NEVER emit "reply" — message drafting is retired; an owed
+  answer is a task naming it ("回复 Noah 确认时间点").
 - If the open work is ENGINEERING EXECUTION a TEAMMATE performs — flashing
   firmware, a driver/build/test change, a hardware bring-up step, a certification
   run — emit a "tool" action (a ticket), NOT a task. The discriminator is WHO

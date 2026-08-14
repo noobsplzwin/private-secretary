@@ -223,13 +223,13 @@ describe("buildTaskPayload — executable lines", () => {
     expect(built.executable).toEqual([{ sortOrder: 0, actionId: "j1" }]);
   });
 
-  it("a reply is listed but NOT executable", () => {
+  // reply/relay/forward are retired from production (owner, 2026-08-14) — a
+  // legacy card still in state renders nothing; the owed answer arrives as a
+  // fresh `task` from the passes instead.
+  it("a legacy reply card renders no line at all", () => {
     const built = buildTaskPayload(
-      unit({ members: [member({ id: "r1", action_type: "reply", headline: "回复报价" })] }), ZONE);
-    expect(built.payload.items![0]!.title).toContain("回复报价");
-    // The cockpit is retired (owner, 2026-08-14) — the line must not point at a
-    // review surface that no longer exists.
-    expect(built.payload.items![0]!.title).not.toContain("cockpit");
+      unit({ members: [member({ id: "r1", action_type: "reply", headline: "回复报价", next_actions: ["不该出现"] })] }), ZONE);
+    expect(built.payload.items ?? []).toEqual([]);
     expect(built.executable).toEqual([]);
   });
 });

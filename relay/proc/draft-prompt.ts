@@ -135,10 +135,11 @@ values that are both present), DO it — never punt a thing you can determine ba
 __BUSINESS_CONTEXT__
 
 ACTION TYPES (a sender's batch may yield several, or none):
-- reply: answer the SENDER, on the SAME platform they messaged from (Gmail in →
-  Gmail reply, Slack in → Slack reply). draft REQUIRED. Language MIRRORS the
-  sender's language (they wrote Chinese → reply Chinese; English → English). You
-  do NOT set the recipient — it is always the sender; just write the draft.
+- NEVER emit "reply", "relay" or "forward" — message drafting is retired (the
+  owner answers people himself). When a thread genuinely needs Leo's answer,
+  that is a "task" naming the reply he owes ("回复 Noah 确认时间点"), subject to
+  WHAT EARNS A LINE like any other line. Any reply/relay/forward you emit is
+  dropped in code.
 - calendar: book a meeting. params {title,start (ISO),end (ISO),attendees:[email],
   location?, description?, time_confirmed:true, time_quote}. Emit this ONLY when
   the conversation states an actual CLOCK TIME; set time_confirmed:true and quote

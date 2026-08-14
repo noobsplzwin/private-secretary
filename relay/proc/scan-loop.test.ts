@@ -377,7 +377,7 @@ describe("runScanTick", () => {
           releaseLock(dir);
         }
         return [
-          { action_type: "reply" as const, target: { platform: "slack" as const, personaKey: null }, reason: "r", confidence: 0.9, draft: "hey" },
+          { action_type: "task" as const, target: {}, reason: "r", confidence: 0.9, params: { title: "回复 hey" } },
         ];
       },
       resolvePersona: () => null,
@@ -423,7 +423,7 @@ describe("runScanTick", () => {
         };
         cursorOnDiskDuringDraft = onDisk.marks._slackDirect?.channels?.C1?.lastTs;
         return [
-          { action_type: "reply" as const, target: { platform: "slack" as const, personaKey: null }, reason: "r", confidence: 0.9, draft: "hey" },
+          { action_type: "task" as const, target: {}, reason: "r", confidence: 0.9, params: { title: "回复 hey" } },
         ];
       },
       resolvePersona: () => null,
@@ -443,8 +443,8 @@ describe("runScanTick", () => {
     const draft = {
       llm: async () => [
         {
-          action_type: "reply" as const,
-          target: { platform: "slack" as const, personaKey: null },
+          action_type: "task" as const,
+          target: {},
           reason: "answer",
           confidence: 0.9,
           draft: "hey",
@@ -463,7 +463,7 @@ describe("runScanTick", () => {
     expect(r.drafted).toBe(1);
     const saved = loadState(statePath);
     expect(saved.actions).toHaveLength(1);
-    expect(saved.actions[0]!.action_type).toBe("reply");
+    expect(saved.actions[0]!.action_type).toBe("task");
     expect(saved.actions[0]!.status).toBe("suggested");
   });
 
@@ -480,8 +480,8 @@ describe("runScanTick", () => {
     const draft = {
       llm: async () => [
         {
-          action_type: "reply" as const,
-          target: { platform: "slack" as const, personaKey: null },
+          action_type: "task" as const,
+          target: {},
           reason: "answer",
           confidence: 0.9,
           draft: "hey",
@@ -509,8 +509,8 @@ describe("runScanTick", () => {
     const draft = {
       llm: async () => [
         {
-          action_type: "reply" as const,
-          target: { platform: "slack" as const, personaKey: null },
+          action_type: "task" as const,
+          target: {},
           reason: "answer",
           confidence: 0.9,
           draft: "hey",
@@ -645,8 +645,8 @@ describe("runScanTick", () => {
     let refreshedCards = 0;
     const refresh = {
       llm: async () => [{
-        action_type: "reply" as const, reason: "thread moved", confidence: 0.8,
-        draft: "更新后的草稿", headline: "回张工", summary: "s", next_actions: [],
+        action_type: "task" as const, reason: "thread moved", confidence: 0.8,
+        params: { title: "回张工" }, headline: "回张工", summary: "s", next_actions: [],
       }],
       resolvePersona: () => null,
       fetchThread: async () => { refreshedCards++; return { text: "张工: 还在等" }; },
@@ -719,11 +719,11 @@ describe("runScanTick", () => {
   it("sources:[wechat] drafts a new 1:1 WeChat message into the queue", async () => {
     const llm = vi.fn(async () => [
       {
-        action_type: "reply" as const,
-        target: { platform: "wechat" as const, personaKey: null },
+        action_type: "task" as const,
+        target: {},
         reason: "answer",
         confidence: 0.5,
-        draft: "好的",
+        params: { title: "回复金小奇" },
       },
     ]);
     const r = await runScanTick({
@@ -747,11 +747,11 @@ describe("runScanTick", () => {
     const HIST1 = "[2026-06-14 21:39] 金小奇 芯联集成: 那很好啊";
     const llm = vi.fn(async () => [
       {
-        action_type: "reply" as const,
-        target: { platform: "wechat" as const, personaKey: null },
+        action_type: "task" as const,
+        target: {},
         reason: "answer",
         confidence: 0.5,
-        draft: "好的",
+        params: { title: "回复金小奇" },
       },
     ]);
     const draft = { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
@@ -801,11 +801,11 @@ describe("runScanTick", () => {
       `最近 1 个会话:\n\n[${ts}] 金小奇 芯联集成 (${unread}条未读)\n  文本: ${text}`;
     const llm = vi.fn(async () => [
       {
-        action_type: "reply" as const,
-        target: { platform: "wechat" as const, personaKey: null },
+        action_type: "task" as const,
+        target: {},
         reason: "answer",
         confidence: 0.5,
-        draft: "好的",
+        params: { title: "回复金小奇" },
       },
     ]);
     const draft = { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
@@ -843,11 +843,11 @@ describe("runScanTick", () => {
       `最近 1 个会话:\n\n[${ts}] 金小奇 芯联集成 (${unread}条未读)\n  文本: ${text}`;
     const llm = vi.fn(async () => [
       {
-        action_type: "reply" as const,
-        target: { platform: "wechat" as const, personaKey: null },
+        action_type: "task" as const,
+        target: {},
         reason: "answer",
         confidence: 0.5,
-        draft: "好的",
+        params: { title: "回复金小奇" },
       },
     ]);
     const draft = { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
@@ -904,11 +904,11 @@ describe("runScanTick", () => {
     }));
     const llm = vi.fn(async () => [
       {
-        action_type: "reply" as const,
-        target: { platform: "wechat" as const, personaKey: null },
+        action_type: "task" as const,
+        target: {},
         reason: "answer",
         confidence: 0.5,
-        draft: "好的",
+        params: { title: "回复金小奇" },
       },
     ]);
     const r = await runScanTick({
@@ -923,7 +923,7 @@ describe("runScanTick", () => {
     // The committed-meeting card survived the redraft; the task card did not.
     expect(after.some((a) => a.id === "cal1")).toBe(true);
     expect(after.some((a) => a.id === "task1")).toBe(false); // task still supersedes
-    expect(after.some((a) => a.action_type === "reply")).toBe(true); // fresh card appended
+    expect(after.some((a) => a.params.title === "回复金小奇")).toBe(true); // fresh card appended
     expect(after).toHaveLength(2);
 
     // The exempt calendar is NOT labelled "superseded" (it wasn't superseded);
@@ -947,11 +947,11 @@ describe("runScanTick", () => {
     }));
     const llm = vi.fn(async () => [
       {
-        action_type: "reply" as const,
-        target: { platform: "wechat" as const, personaKey: null },
+        action_type: "task" as const,
+        target: {},
         reason: "answer",
         confidence: 0.5,
-        draft: "好的",
+        params: { title: "回复金小奇" },
       },
     ]);
     await runScanTick({
@@ -964,7 +964,7 @@ describe("runScanTick", () => {
     const after = loadState(statePath).actions;
     expect(after.some((a) => a.id === "cal1")).toBe(false); // superseded
     expect(after).toHaveLength(1);
-    expect(after[0]!.action_type).toBe("reply");
+    expect(after[0]!.action_type).toBe("task");
   });
 
   it("supersede-keep-calendar: phase-5 refresh also keeps a suggested calendar WITH start (time change → both cards coexist)", async () => {
@@ -1034,8 +1034,8 @@ describe("runScanTick", () => {
     const draft = {
       llm: async () => [
         {
-          action_type: "reply" as const,
-          target: { platform: "slack" as const, personaKey: null },
+          action_type: "task" as const,
+          target: {},
           reason: "answer",
           confidence: 0.9,
           draft: "ok",
@@ -1069,8 +1069,8 @@ describe("runScanTick", () => {
     const draft = {
       llm: async () => [
         {
-          action_type: "reply" as const,
-          target: { platform: "slack" as const, personaKey: null },
+          action_type: "task" as const,
+          target: {},
           reason: "answer",
           confidence: 0.9,
           draft: "ok",
@@ -1149,8 +1149,8 @@ describe("runScanTick", () => {
     const goodDraft = {
       llm: async () => [
         {
-          action_type: "reply" as const,
-          target: { platform: "slack" as const, personaKey: null },
+          action_type: "task" as const,
+          target: {},
           reason: "answer",
           confidence: 0.9,
           draft: "ok",
