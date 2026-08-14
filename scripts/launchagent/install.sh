@@ -1,7 +1,6 @@
 #!/bin/bash
 # Install the Taiv Secretary LaunchAgents on macOS:
-#   tv.taiv.secretary         → the notification daemon (run-notify.ts)
-#   tv.taiv.secretary.cockpit → the localhost triage UI (run-cockpit.ts :4317)
+#   tv.taiv.secretary → the notification daemon (run-notify.ts)
 #
 # Substitutes @REPO_ROOT@ / @HOME@ / @NPX_PATH@ / @LOG_DIR@ in each template,
 # writes to ~/Library/LaunchAgents, (re)loads it. Idempotent.
@@ -54,13 +53,9 @@ install_agent() {
 }
 
 install_agent "tv.taiv.secretary"
-install_agent "tv.taiv.secretary.cockpit"
 
 echo
 echo "   daemon logs : ${LOG_DIR}/secretary.{out,err}.log   (heartbeat: notify-heartbeat.json)"
-echo "   cockpit logs: ${LOG_DIR}/cockpit.{out,err}.log"
-echo "   cockpit URL : http://127.0.0.1:4317"
 echo
 echo "   tail -F ${LOG_DIR}/secretary.out.log"
 echo "   launchctl unload ~/Library/LaunchAgents/tv.taiv.secretary.plist"
-echo "   launchctl unload ~/Library/LaunchAgents/tv.taiv.secretary.cockpit.plist"

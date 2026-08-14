@@ -10,13 +10,8 @@
     "types": ["vitest/globals", "node"],
     // shadcn/ui resolves the "@" alias from here to write/import the web app's
     // components. The web app itself has its OWN @ → ./src alias in
-    // relay/cockpit/web (tsconfig + vite) — this entry exists so shadcn lands
-    // components in relay/cockpit/web/src/components/ui.
-    "paths": { "@/*": ["./relay/cockpit/web/src/*"] }
   },
   "include": ["relay/**/*.ts", "scripts/**/*.ts"],
-  // The cockpit React app has its own tsconfig (relay/cockpit/web/tsconfig.json
-  // — JSX, DOM lib, bundler resolution) checked by `npm run cockpit:typecheck`.
   // Excluded here so the Node-oriented settings above don't reject JSX.
-  "exclude": ["relay/cockpit/web"]
+  "exclude": []
 }

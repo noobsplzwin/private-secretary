@@ -1,10 +1,11 @@
 # Personal Secretary — Action Item Engine
 
-Scans Slack + Gmail on an interval, understands each new message with sender
-context, and writes suggested Action Items (reply / relay / forward / calendar /
-task / ignore) into a local pending queue. The user reviews each card and
-approves, edits or skips it; approved items execute via the matching executor.
-Relay (EN<->ZH cross-platform forwarding) is one action type.
+Scans Slack + Gmail + WeChat on an interval, understands each new message with
+sender context, and maintains the owner's to-do surface in TickTick: tiered
+tasks with grounded checklists, completions read back every tick. The local
+cockpit UI is RETIRED (owner, 2026-08-14) — TickTick is the only surface;
+reply / relay / forward drafts surface as inert checklist lines until
+tick-to-execute (specs/ticktick-migration.md §1) lands.
 
 Specs: `specs/action-item-engine.md` (engine), `specs/persona-v3.md` (personas),
 `specs/roadmap.md` (what shipped, what each phase means, open items).
@@ -35,13 +36,12 @@ The layout is discoverable from the tree; what is NOT discoverable:
 
 - `npm test` (vitest) and `npm run typecheck` (tsc --noEmit) — run both before
   claiming a change works.
-- `npm run cockpit:build` — the cockpit serves a stale bundle until you do.
 - `npm run relay <subcommand> state/loop-state.json` — subcommands in `relay/cli.ts`.
 - Pipe JSON into the CLI from bash, never Windows PowerShell 5.1: PS transcodes
   stdin to the OEM codepage and turns non-ASCII (CJK, em dashes, arrows) into
   `?`. The CLI strips a UTF-8 BOM itself.
-- First run needs `config/identity.json`, which is gitignored — the cockpit's
-  Connections screen writes it. Without it nothing polls and Connect is inert.
+- First run needs `config/identity.json`, which is gitignored — hand-written
+  JSON (see relay/io/identity.ts for the shape). Without it nothing polls.
 
 ## Git
 
@@ -87,7 +87,7 @@ mandatory — **never delete them**, each encodes a bug that shipped:
 `dedup-survives-restart`, `no-double-execute`, `reply-requires-approval`,
 `R1-manual-survives-llm-update`, `round-commit-without-task_id-unchanged`.
 
-## Validation gate (graduate to the Phase 2 cockpit)
+## Validation gate (historical — the Phase 2 cockpit shipped and was later retired)
 
 Of the last 20 surfaced drafts: >=16 approved clean (no/trivial edit), across
 >=3 contacts, zero wrong-recipient. Computed from loop state. EN<->ZH coverage

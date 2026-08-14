@@ -221,10 +221,12 @@ function lineFor(a: ActionItem, zone: string): { title: string; actionId?: strin
     case "relay":
     case "forward": {
       // Inert on purpose: a checklist item cannot show the draft, so ticking it
-      // would be a blind approval. These keep their cockpit review.
+      // would be a blind approval — and with the cockpit retired (owner,
+      // 2026-08-14) there is no other review surface. The line just names the
+      // reply Leo owes; he writes it himself where the conversation lives.
       const who = a.context?.sender_name ?? a.context?.sender_handle ?? "";
       const what = a.headline || str(p.title) || "回复";
-      return { title: `✉️ ${what}${who ? ` · ${who}` : ""}（在 cockpit 审批）` };
+      return { title: `✉️ ${what}${who ? ` · ${who}` : ""}` };
     }
     case "task":
       return { title: str(p.title) || a.headline || "(untitled)" };

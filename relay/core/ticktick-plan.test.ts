@@ -227,7 +227,9 @@ describe("buildTaskPayload — executable lines", () => {
     const built = buildTaskPayload(
       unit({ members: [member({ id: "r1", action_type: "reply", headline: "回复报价" })] }), ZONE);
     expect(built.payload.items![0]!.title).toContain("回复报价");
-    expect(built.payload.items![0]!.title).toContain("cockpit");
+    // The cockpit is retired (owner, 2026-08-14) — the line must not point at a
+    // review surface that no longer exists.
+    expect(built.payload.items![0]!.title).not.toContain("cockpit");
     expect(built.executable).toEqual([]);
   });
 });

@@ -19,7 +19,7 @@
 import { spawn } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { page } from "../../relay/cockpit/consent-page.js";
+import { page } from "../../relay/io/consent-page.js";
 import { loadIdentity } from "../../relay/io/identity.js";
 import { getSecret } from "../../relay/io/keychain.js";
 import { SlackClient } from "../../relay/io/slack-api.js";
@@ -38,7 +38,7 @@ import {
   slackRedirectUri,
 } from "../../relay/io/slack-oauth.js";
 import { appendSlackAccount } from "../../relay/io/identity-store.js";
-import { restartDaemon } from "../../relay/cockpit/daemon-control.js";
+import { restartDaemon } from "../../relay/io/daemon-control.js";
 
 // The browser dance should take well under two minutes. Fail loudly rather
 // than hanging forever if the user closes the tab.
