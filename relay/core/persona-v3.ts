@@ -9,11 +9,17 @@
 export type ProvenanceTag = "manual" | "inferred";
 export type Power = "serves-them" | "peer" | "leads-them";
 export type CommitmentWho = "me" | "them";
-export type CommitmentStatus = "open" | "done" | "overdue";
+// "dropped": overtaken by events, superseded, or abandoned — closed WITHOUT the
+// work having been done. The vocabulary had no exit for these, so the ledger
+// only ever grew: an audit of 89 open who=me commitments found reviews of
+// documents that had since shipped and prep for meetings that had happened.
+// done ≠ dropped matters downstream — a derived to-do list may resurface a
+// dropped item if its thread wakes up, but never a done one.
+export type CommitmentStatus = "open" | "done" | "overdue" | "dropped";
 
 export const POWERS: Power[] = ["serves-them", "peer", "leads-them"];
 export const COMMITMENT_WHOS: CommitmentWho[] = ["me", "them"];
-export const COMMITMENT_STATUSES: CommitmentStatus[] = ["open", "done", "overdue"];
+export const COMMITMENT_STATUSES: CommitmentStatus[] = ["open", "done", "overdue", "dropped"];
 
 export interface Commitment {
   who: CommitmentWho;
