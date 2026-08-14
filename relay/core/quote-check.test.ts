@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { hasVerbatim } from "./quote-check.js";
+import { evidenceGrounded, hasVerbatim } from "./quote-check.js";
 
 const CORPUS = `[2026-07-30] From Yang:
 Please find attached the production and processing agreement — signed and
@@ -33,5 +33,32 @@ describe("hasVerbatim", () => {
   it("rejects empty and blank quotes", () => {
     expect(hasVerbatim(CORPUS, "")).toBe(false);
     expect(hasVerbatim(CORPUS, "   ")).toBe(false);
+  });
+});
+
+describe("evidenceGrounded", () => {
+  const C = `[2026-08-13] U08020UEM4J: Tomorrow I will have it ready
+[2026-08-13] U08020UEM4J: Or maybe next Monday since I just want to study a little bit
+[2026-08-13] U08020UEM4J: So please don't share it with Chu until I confirm that everything is correct
+[2026-08-13] me: For sure`;
+
+  // The real case: 4 of 4 genuine commitments were rejected because the model
+  // spliced multiple verbatim quotes into one evidence string.
+  it("accepts spliced quotes when every fragment is verbatim", () => {
+    expect(evidenceGrounded(C, "Tomorrow I will have it ready / Or maybe next Monday since I just want to study")).toBe(true);
+    expect(evidenceGrounded(C, '"…until I confirm that everything is correct" — "For sure"')).toBe(true);
+  });
+
+  it("rejects a splice with one invented fragment", () => {
+    expect(evidenceGrounded(C, "Tomorrow I will have it ready / the factory has countersigned")).toBe(false);
+  });
+
+  it("rejects evidence with no substantial fragment", () => {
+    expect(evidenceGrounded(C, '" / "')).toBe(false);
+    expect(evidenceGrounded(C, "")).toBe(false);
+  });
+
+  it("still accepts a plain single quote", () => {
+    expect(evidenceGrounded(C, "So please don't share it with Chu")).toBe(true);
   });
 });

@@ -39,3 +39,26 @@ export function hasVerbatim(corpus: string, quote: string): boolean {
   if (q === "") return false;
   return fold(corpus).includes(q);
 }
+
+/**
+ * Multi-quote evidence: the model often splices SEVERAL verbatim quotes with
+ * "…", " / ", " — " or " | " — e.g. «Tomorrow I will have it ready / Or maybe
+ * next Monday», both halves real, the concatenation nowhere. That is more
+ * honest, not less, and a strict single-substring check rejected 4 of 4 real
+ * commitments for one contact.
+ *
+ * So: split on the splice tokens and require EVERY substantial fragment to be
+ * verbatim. One invented fragment still sinks the whole thing; fragments too
+ * short to mean anything (< 5 chars folded) are ignored, and evidence with NO
+ * substantial fragment fails.
+ */
+const SPLICE = /\s*(?:\.\.\.|…|\/|\||—|--)\s*/g;
+
+export function evidenceGrounded(corpus: string, evidence: string): boolean {
+  const fragments = evidence
+    .split(SPLICE)
+    .map((f) => f.replace(/^["'«»„"]+|["'«»„"]+$/g, "").trim())
+    .filter((f) => f.replace(/\s+/g, "").length >= 5);
+  if (fragments.length === 0) return false;
+  return fragments.every((f) => hasVerbatim(corpus, f));
+}

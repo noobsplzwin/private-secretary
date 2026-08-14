@@ -22,7 +22,7 @@ import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../relay/io/persona-store.js";
 import { createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
 import { buildLedgerAuditRequest, parseAuditVerdicts } from "../relay/proc/ledger-audit-prompt.js";
-import { hasVerbatim } from "../relay/core/quote-check.js";
+import { evidenceGrounded } from "../relay/core/quote-check.js";
 import type { Commitment } from "../relay/core/persona-v3.js";
 
 const argv = process.argv.slice(2);
@@ -127,7 +127,7 @@ async function main(): Promise<void> {
       const c = cs[v.index]!;
       if (v.verdict === "done") {
         // The gate: a done that cannot quote the corpus is not a done.
-        if (hasVerbatim(corpus, v.evidence)) {
+        if (evidenceGrounded(corpus, v.evidence)) {
           c.status = "done";
           dones++;
           console.log(`  ✓ done   #${v.index} ${c.what.slice(0, 64)}`);

@@ -10,7 +10,7 @@ import type { Persona } from "../core/types.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { clusterKey } from "../core/unit-key.js";
-import { hasVerbatim } from "../core/quote-check.js";
+import { evidenceGrounded } from "../core/quote-check.js";
 import {
   buildPersonaUpdateRequest,
   parseExtractedCommitments,
@@ -143,7 +143,7 @@ export async function extractCommitmentsOnce(opts: {
   // work (the reverse of the append-only bug). The discard count is reported
   // upward: a high rate is itself a finding about how much the model creates.
   const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
-    xs.filter((x) => hasVerbatim(opts.corpus, x.evidence ?? ""));
+    xs.filter((x) => evidenceGrounded(opts.corpus, x.evidence ?? ""));
   const okExtracted = grounded(extracted);
   const okTransitions = grounded(transitions);
   const discarded =
