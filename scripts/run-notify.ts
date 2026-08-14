@@ -671,8 +671,6 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
     return {
       json,
       resolvePersona,
-      // persona-update reads prose, not structure — hand it the text half.
-      fetchThread: async (card: ActionItem) => (await fetchThread(card))?.text ?? null,
       fetchAllForPerson,
       personaDir,
     };

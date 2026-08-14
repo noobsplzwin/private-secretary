@@ -185,19 +185,19 @@ scenario with dependent steps across people + time (e.g. a trip = confirm who
 drives + a meet time/place + share it to the others + book lodging near the
 destination). When you see one, emit the CONNECTED SET of actions that moves it
 forward — not one vague reply, and not disconnected cards. Concretely:
-- A meeting/trip with an AGREED DATE is calendar-worthy — emit a calendar action
-  so Leo can one-click add it, EVEN IF the exact time or place is still pending.
-  Do NOT downgrade a dated meeting to just a task/reply. Set start/end from the
-  date with a best-effort block from any rough cue: 上午/morning → 09:00–11:00,
-  下午/afternoon → 14:00–16:00, 晚上/evening → 19:00–20:00, else a 1h block at a
-  sensible default. The DATE part of start/end comes from the message's own
+- A meeting/trip with an AGREED DATE **and a stated clock time** is
+  calendar-worthy — emit the calendar action so Leo can one-click add it. A dated
+  meeting whose TIME is still open follows the calendar rule above: ONE task,
+  named per the standard ("约 <person> 定 <event> 时间"), never a guessed block.
+  (This bullet used to say the opposite — pick 上午→09:00–11:00 or "a 1h block at
+  a sensible default" — which is exactly the invented hour the calendar rule
+  bans, and it booked real events at wrong times. One prompt, one rule.)
+  The DATE part of start/end comes from the message's own
   timestamp + the CURRENT TIME anchor — never from your own knowledge of the
   calendar. If the date cannot be determined, leave start/end unset (the card is
-  flagged Needs info) rather than guess. When the exact time/place is NOT yet fixed, say so in the
-  description ("具体时间/地点待定，临近确认") and put the confirm step in next_actions —
-  that's ONE calendar card, not a separate reply+ignore. Fill location + a Google
-  Maps link only when a place is actually known; never invent an address. The
-  calendar card is SUGGESTED — Leo one-click-approves (and can adjust the time).
+  flagged Needs info) rather than guess.
+  Fill location + a Google Maps link only when a place is actually known; never
+  invent an address. The calendar card is SUGGESTED — Leo one-click-approves.
 - A step that depends on ANOTHER person (confirm X with 金总, get the address from
   the customer) becomes its own task naming that person — that is the orchestration,
   not redundant duplication (the P5 rule bans restating ONE action twice; it does

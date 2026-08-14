@@ -1,0 +1,41 @@
+// Is this quote actually IN the corpus? Pure core, no I/O.
+//
+// Several fields already ask the model for a verbatim quote as grounding —
+// params.time_quote since it shipped, commitment evidence, ledger status
+// transitions — and until now NOTHING checked one. An unchecked quote is
+// decoration: the model can (and does) invent supporting text, which is
+// precisely the failure the quote was meant to prevent. The owner's direction:
+// the model does logical analysis, it does not create ("他只做逻辑分析，不会创造")
+// — so grounding must be a mechanical check, not another instruction.
+//
+// Matching is deliberately forgiving about TRANSPORT, strict about CONTENT:
+// whitespace runs collapse (thread text is reflowed constantly), case folds,
+// and the typographic quote/dash variants normalize — but every content
+// character must match, in order. No fuzzy matching: "close enough" is how an
+// invented quote survives.
+
+const PUNCT_MAP: Record<string, string> = {
+  "‘": "'", "’": "'", "“": '"', "”": '"',
+  "–": "-", "—": "-", "…": "...",
+  "，": ",", "。": ".", "：": ":", "；": ";", "！": "!", "？": "?",
+  "（": "(", "）": ")", "、": ",",
+};
+
+function fold(s: string): string {
+  return s
+    .replace(/[‘’“”–—…，。：；！？（）、]/g, (c) => PUNCT_MAP[c] ?? c)
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * True iff `quote` appears verbatim in `corpus`, up to whitespace, case and
+ * typographic punctuation. Empty or blank quotes are NOT verbatim — an empty
+ * string is "in" everything, which would make the check a no-op.
+ */
+export function hasVerbatim(corpus: string, quote: string): boolean {
+  const q = fold(quote);
+  if (q === "") return false;
+  return fold(corpus).includes(q);
+}

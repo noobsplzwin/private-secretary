@@ -375,6 +375,50 @@ describe("draftActions orchestrator", () => {
   });
 });
 
+describe("time_quote verification (fail-closed)", () => {
+  const resolver = buildPersonaResolver([michael]);
+  const deps = (llm: LlmCaller) => ({
+    llm,
+    resolvePersona: resolver.resolve,
+    knownPersonaKeys: resolver.keys,
+    now: () => "2026-06-14T12:00:00Z",
+  });
+  const cal = (params: Record<string, unknown>): DraftedAction =>
+    ({
+      action_type: "calendar",
+      target: {},
+      reason: "meeting agreed",
+      confidence: 0.8,
+      params: { title: "评审", start: "2026-08-20T09:00:00", end: "2026-08-20T10:00:00", ...params },
+    }) as DraftedAction;
+
+  // time_quote has demanded a verbatim quote since it shipped and nothing ever
+  // checked one. A quote that is not in the thread is decoration over a guess.
+  it("strips time_confirmed when the quote is not in the thread", async () => {
+    const llm: LlmCaller = async () => [
+      cal({ time_confirmed: true, time_quote: "Thursday at 9am sharp" }),
+    ];
+    const r = await draftActions([msg({ text: "let's sync on rev5 sometime" })], deps(llm));
+    expect(r.actions[0]!.params.time_confirmed).toBeUndefined();
+    expect(r.actions[0]!.params.time_quote_unverified).toBe("Thursday at 9am sharp");
+  });
+
+  it("keeps time_confirmed when the thread really says it", async () => {
+    const llm: LlmCaller = async () => [
+      cal({ time_confirmed: true, time_quote: "Thursday at 9am sharp" }),
+    ];
+    const r = await draftActions([msg({ text: "ok — Thursday at 9am sharp, my desk" })], deps(llm));
+    expect(r.actions[0]!.params.time_confirmed).toBe(true);
+  });
+
+  it("a confirmed flag with NO quote at all fails closed too", async () => {
+    const llm: LlmCaller = async () => [cal({ time_confirmed: true })];
+    const r = await draftActions([msg()], deps(llm));
+    expect(r.actions[0]!.params.time_confirmed).toBeUndefined();
+    expect(r.actions[0]!.params.time_quote_unverified).toBe("(missing)");
+  });
+});
+
 describe("buildPersonaResolver", () => {
   it("indexes every handle → persona, case-insensitive", () => {
     const { resolve, keys } = buildPersonaResolver([michael]);

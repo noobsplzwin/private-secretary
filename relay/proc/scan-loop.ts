@@ -1061,7 +1061,22 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     );
     if (open.length > 0) {
       try {
-        await updatePersonaCommitments(open, opts.personaUpdate);
+        const pu = await updatePersonaCommitments(open, opts.personaUpdate);
+        // The discard rate is a FINDING, not noise: each one is a commitment or
+        // status change whose supporting quote was not in the corpus — i.e. the
+        // model creating. Silent-failure lessons apply (consolidate timed out
+        // invisibly for days), so it goes to the console, not just a counter.
+        if (pu.discarded > 0) {
+          console.log(`[persona] discarded ${pu.discarded} ungrounded extraction(s) (evidence quote not in corpus)`);
+        }
+        if (pu.updated.some((u) => u.statusChanged > 0)) {
+          console.log(
+            `[persona] status transitions: ${pu.updated
+              .filter((u) => u.statusChanged > 0)
+              .map((u) => `${u.key}×${u.statusChanged}`)
+              .join(", ")}`,
+          );
+        }
         await commitUnderLock((fresh) => {
           delete fresh.sourceErrors["llm:persona"];
         }).catch(() => undefined);

@@ -10,6 +10,7 @@ import type { Persona } from "../core/types.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { clusterKey } from "../core/unit-key.js";
+import { hasVerbatim } from "../core/quote-check.js";
 import {
   buildPersonaUpdateRequest,
   parseExtractedCommitments,
@@ -22,13 +23,13 @@ export type PersonaUpdateJsonCaller = (req: PersonaUpdateRequest) => Promise<unk
 export interface PersonaUpdateDeps {
   json: PersonaUpdateJsonCaller;
   resolvePersona: (handle: string) => Persona | null;
-  fetchThread: (card: ActionItem) => Promise<string | null>;
   // The person's traffic across EVERY source their handles reach, not just the
   // rep card's conversation. This is what lets a commitment raised on Slack be
   // closed by a Gmail message — the engine drew exactly that conclusion once
   // ("PCB agreements signed & returned by Yang") and could not reach it, because
-  // this pass only ever saw one thread. Falls back to fetchThread when absent.
-  fetchAllForPerson?: (persona: Persona, rep: ActionItem) => Promise<string | null>;
+  // this pass only ever saw one thread. The run-notify implementation already
+  // degrades per-slice (a failing source is skipped), so no second fallback here.
+  fetchAllForPerson: (persona: Persona, rep: ActionItem) => Promise<string | null>;
   personaDir: string;
   maxPerTick?: number;
   ttlMs?: number;
@@ -43,6 +44,8 @@ const lastUpdateMs = new Map<string, number>();
 
 export interface PersonaUpdateResult {
   updated: Array<{ key: string; added: number; statusChanged: number }>;
+  /** Extractions thrown away because their evidence quote is not in the corpus. */
+  discarded: number;
 }
 
 export async function updatePersonaCommitments(
@@ -70,11 +73,10 @@ export async function updatePersonaCommitments(
     .slice(0, maxPerTick);
 
   const updated: PersonaUpdateResult["updated"] = [];
+  let discarded = 0;
   for (const [key, { rep, persona }] of eligible) {
     lastUpdateMs.set(key, nowMs); // claim the slot even on a no-op
-    const thread = deps.fetchAllForPerson
-      ? await deps.fetchAllForPerson(persona, rep)
-      : await deps.fetchThread(rep);
+    const thread = await deps.fetchAllForPerson(persona, rep);
     if (!thread) continue;
 
     const file = personaPath(deps.personaDir, key);
@@ -96,8 +98,22 @@ export async function updatePersonaCommitments(
     } catch {
       continue; // a single contact's LLM failure must not sink the pass
     }
+
+    // GROUNDING IS MECHANICAL. Every extraction must quote the corpus verbatim;
+    // one that cannot is invented, and an invented "done" silently closes real
+    // work (the reverse of the append-only bug). Both prompts have always ASKED
+    // for the quote — this is the first time anything checks it. The discard
+    // count is reported upward: a high rate is itself a finding about how much
+    // the model creates.
+    const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
+      xs.filter((x) => hasVerbatim(thread, x.evidence ?? ""));
+    const okExtracted = grounded(extracted);
+    const okTransitions = grounded(transitions);
+    discarded += extracted.length - okExtracted.length + (transitions.length - okTransitions.length);
+    transitions = okTransitions;
+
     const seen = new Set(existing.map((c) => norm(c.what)));
-    const fresh = extracted.filter((e) => !seen.has(norm(e.what)));
+    const fresh = okExtracted.filter((e) => !seen.has(norm(e.what)));
 
     // Status transitions FIRST, on a copy. The ledger used to be append-only —
     // dedup-by-wording meant a conversation showing a tracked commitment
@@ -133,7 +149,7 @@ export async function updatePersonaCommitments(
     }
   }
 
-  return { updated };
+  return { updated, discarded };
 }
 
 // Same conversation grouping key the rest of the daemon uses.

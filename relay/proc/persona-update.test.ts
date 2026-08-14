@@ -55,7 +55,9 @@ function deps(over: Partial<PersonaUpdateDeps> & { reply?: unknown }): PersonaUp
   return {
     json: async () => over.reply ?? { commitments: [], updates: [] },
     resolvePersona: (h) => (h === "U_ZECH" ? zech : null),
-    fetchThread: async () => "slack only",
+    // The quote gate verifies evidence against THIS corpus — fixtures below
+    // quote it verbatim on purpose.
+    fetchAllForPerson: async () => "Yang: agreement signed and returned. me: please review the countersigned copy",
     personaDir: "",
     ttlMs: 0,
     nowMs: () => 1,
@@ -122,6 +124,42 @@ describe("updatePersonaCommitments — status transitions", () => {
   });
 });
 
+describe("updatePersonaCommitments — quote gate", () => {
+  // Grounding is mechanical: an extraction whose evidence is not IN the corpus
+  // is invented, and an invented "done" silently closes real work.
+  it("discards a transition whose evidence is not in the corpus", async () => {
+    const dir = personaDirWith(OPEN);
+    const r = await updatePersonaCommitments(
+      [card()],
+      deps({
+        personaDir: dir,
+        reply: {
+          commitments: [],
+          updates: [{ index: 0, status: "done", evidence: "the factory confirmed everything" }],
+        },
+      }),
+    );
+    expect(r.updated).toEqual([]);
+    expect(r.discarded).toBe(1);
+  });
+
+  it("discards an invented new commitment the same way", async () => {
+    const dir = personaDirWith(OPEN);
+    const r = await updatePersonaCommitments(
+      [card()],
+      deps({
+        personaDir: dir,
+        reply: {
+          commitments: [{ who: "them", what: "Ship the V2 boards", evidence: "V2 boards next week" }],
+          updates: [],
+        },
+      }),
+    );
+    expect(r.updated).toEqual([]);
+    expect(r.discarded).toBe(1);
+  });
+});
+
 describe("updatePersonaCommitments — cross-source retrieval", () => {
   it("prefers fetchAllForPerson and hands the prompt every source", async () => {
     const dir = personaDirWith(OPEN);
@@ -141,19 +179,4 @@ describe("updatePersonaCommitments — cross-source retrieval", () => {
     expect(seenThread).toContain("signed and returned");
   });
 
-  it("falls back to fetchThread when fetchAllForPerson is absent", async () => {
-    const dir = personaDirWith(OPEN);
-    let seenThread = "";
-    await updatePersonaCommitments(
-      [card()],
-      deps({
-        personaDir: dir,
-        json: async (req) => {
-          seenThread = req.userText;
-          return { commitments: [], updates: [] };
-        },
-      }),
-    );
-    expect(seenThread).toContain("slack only");
-  });
 });

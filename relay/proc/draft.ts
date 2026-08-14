@@ -32,6 +32,7 @@ import { detectMentions } from "../core/mentions.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
 import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
+import { hasVerbatim } from "../core/quote-check.js";
 
 // The injected LLM call: takes the assembled request, returns the parsed
 // suggested actions (the adapter extracts them from the tool call).
@@ -329,6 +330,20 @@ export async function draftActions(
           aliases: rosterAliases(deps.personas),
         });
         if (unverified.length > 0) baseParams.unverified_names = unverified;
+      }
+      // time_quote has demanded a verbatim quote since it shipped, and nothing
+      // ever checked one — an unchecked quote is decoration. Fail CLOSED: a
+      // calendar whose quote is not in the thread loses time_confirmed, which
+      // puts the card back in "needs info" where a human must supply the time.
+      // A guessed hour books a real meeting at the wrong time; a blocked card
+      // costs one click.
+      if (s.action_type === "calendar" && baseParams.time_confirmed === true) {
+        const quote = typeof baseParams.time_quote === "string" ? baseParams.time_quote : "";
+        const corpus = `${ctx.original_message ?? ""} ${latest.threadContext ?? ""}`;
+        if (!hasVerbatim(corpus, quote)) {
+          delete baseParams.time_confirmed;
+          baseParams.time_quote_unverified = quote || "(missing)";
+        }
       }
       if (s.action_type === "calendar" && Array.isArray(baseParams.attendees) && deps.personas) {
         const names = (baseParams.attendees as unknown[]).filter(
