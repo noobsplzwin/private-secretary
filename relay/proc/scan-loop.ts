@@ -39,11 +39,12 @@ import {
 import { draftActions, type DraftDeps } from "./draft.js";
 import { consolidateTasks, type ConsolidateDeps } from "./consolidate.js";
 import { refreshOpenTasks, type RefreshDeps } from "./refresh.js";
-import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
+import { clusterKey, unitKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { rankTasks, type PlanDeps } from "./plan.js";
 import { syncToTickTick, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { shouldSync } from "../core/ticktick-plan.js";
 import { deriveShadowList, diffShadow } from "../core/shadow-list.js";
+import { stabilizePlans } from "../core/plan-stability.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { machineTimeZone } from "../io/settings.js";
@@ -963,8 +964,18 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         console.log(`[progress] ranking ${open.length} open card(s)…`);
         const plans = await rankTasks(open, snapshot.tasks, opts.plan);
         if (Object.keys(plans).length > 0) {
+          // Wholesale replacement made the list flap: a borderline B one tick,
+          // C the next, entering and leaving TickTick every half hour (26 of 38
+          // overnight snapshot pairs differed). Hysteresis: demotion off the
+          // list needs two consecutive votes; a live unit the ranking omitted
+          // keeps its plan. Promotions apply immediately.
+          const liveKeys = new Set<string>();
+          for (const a of open) {
+            if (a.task_id) liveKeys.add(a.task_id);
+            liveKeys.add(unitKey(a));
+          }
           await commitUnderLock((fresh) => {
-            fresh.plans = plans;
+            fresh.plans = stabilizePlans(plans, fresh.plans ?? {}, liveKeys);
             delete fresh.sourceErrors["llm:plan"];
           });
         }

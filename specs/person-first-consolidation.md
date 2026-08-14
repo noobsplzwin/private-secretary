@@ -200,6 +200,26 @@ Each phase is verifiable on its own; none of them is a switchover.
 5. **Retire** conversation-keyed consolidation and the per-card refresh.
 6. **Ticked invites / tool items execute** (`ticktick-migration.md` §1).
 
+## 7b. Commitment chains (owner, 2026-08-14)
+
+Reviewing the antenna case, the owner named the next structure: commitments
+LINK. One real-world matter is a chain across several people's ledgers —
+
+    leo → Leo Yang   [me]   commission the antenna purchase        done
+    Leo Yang → leo   [them] buy & ship 10-20 modules to Detroit    open   ← active link
+    Jansell/Ronan    [them] test locally once received             open   (waits upstream)
+
+"每个 commitment 其实都可以通过线连接起来，然后看是否完成了." A matter is done
+when its chain closes; the derived list shows an item only when the chain's
+ACTIVE link is Leo's. This generalizes §3.4 (blocked_on: them → no item) from a
+per-commitment judgment to a structural one: the antenna matter produced a
+to-do under the old pipeline and would produce none here, while staying fully
+tracked — which is exactly how the owner adjudicated it by hand.
+
+Not built yet. Needs a link field between commitments (likely a shared
+matter_id), and the assess step to place each verdict inside its chain.
+Belongs after phase 4; recorded now so the shape is not lost.
+
 ## 8. Decisions
 
 - 2026-08-12 (owner): the output unit is the TASK, centred on the owner — never
