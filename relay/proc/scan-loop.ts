@@ -637,6 +637,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let draftEmpty: string[] = [];
   if (opts.draft && draftInput.length > 0) {
     try {
+      console.log(`[progress] drafting ${draftInput.length} candidate(s)…`);
       const r = await draftActions(draftInput, opts.draft);
       draftedActions = r.actions;
       draftEmpty = r.empty;
@@ -802,6 +803,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     if (shouldRun) {
       lastConsolidateMs = startedAtMs;
       try {
+        console.log(`[progress] consolidating ${open.length} open card(s)…`);
         const { updatedActions, registryAdditions } = await consolidateTasks(
           open,
           snapshot.tasks,
@@ -884,6 +886,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     const open = snapshot.actions.filter((a) => a.status === "suggested");
     if (open.length > 0) {
       try {
+        console.log(`[progress] refreshing open conversations…`);
         const { refreshedKeys, newActions } = await refreshOpenTasks(open, opts.refresh);
         if (refreshedKeys.length > 0 || newActions.length > 0) {
           const keys = new Set(refreshedKeys);
@@ -951,6 +954,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     if (shouldRun) {
       lastPlanMs = startedAtMs;
       try {
+        console.log(`[progress] ranking ${open.length} open card(s)…`);
         const plans = await rankTasks(open, snapshot.tasks, opts.plan);
         if (Object.keys(plans).length > 0) {
           await commitUnderLock((fresh) => {
@@ -1061,6 +1065,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     );
     if (open.length > 0) {
       try {
+        console.log(`[progress] updating persona commitments…`);
         const pu = await updatePersonaCommitments(open, opts.personaUpdate);
         // The discard rate is a FINDING, not noise: each one is a commitment or
         // status change whose supporting quote was not in the corpus — i.e. the
