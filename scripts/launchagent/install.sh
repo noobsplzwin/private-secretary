@@ -31,8 +31,8 @@ install_agent() {
     local src="${REPO_ROOT}/scripts/launchagent/${label}.plist.template"
     local dst="${HOME_DIR}/Library/LaunchAgents/${label}.plist"
     if launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
-        echo "↻ unloading existing ${label}"
-        launchctl unload "$dst" 2>/dev/null || true
+        echo "↻ booting out existing ${label}"
+        launchctl bootout "gui/$(id -u)/${label}" 2>/dev/null || true
     fi
     sed \
         -e "s|@REPO_ROOT@|${REPO_ROOT}|g" \
@@ -40,8 +40,17 @@ install_agent() {
         -e "s|@NPX_PATH@|${NPX_PATH}|g" \
         -e "s|@LOG_DIR@|${LOG_DIR}|g" \
         "$src" > "$dst"
-    launchctl load "$dst"
-    echo "✅ installed: $dst"
+    # enable first: a service left in the disabled state makes load/bootstrap
+    # fail with an unexplained "Input/output error". The legacy `launchctl load`
+    # also returns 0 on some failures — this script printed "✅ installed" while
+    # nothing was running. Modern interface + verify, loudly.
+    launchctl enable "gui/$(id -u)/${label}" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$dst"
+    if ! launchctl print "gui/$(id -u)/${label}" >/dev/null 2>&1; then
+        echo "❌ ${label} did NOT load — check: launchctl print gui/$(id -u)/${label}" >&2
+        exit 1
+    fi
+    echo "✅ installed & running: $dst"
 }
 
 install_agent "tv.taiv.secretary"
