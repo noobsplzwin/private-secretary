@@ -18,11 +18,7 @@
 
 import { readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { GmailClient, getHeader } from "../relay/io/gmail-api.js";
-import { KNOWN_MAILBOXES } from "../relay/io/google-oauth.js";
-import { extractText } from "../relay/sources/gmail-direct.js";
-import { wechatHistory } from "../relay/io/wechat-cli.js";
-import { createSlackClientFromKeychain, SLACK_ACCOUNTS, type SlackClient } from "../relay/io/slack-api.js";
+import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../relay/io/persona-store.js";
 import { createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
 import { buildLedgerAuditRequest, parseAuditVerdicts } from "../relay/proc/ledger-audit-prompt.js";
@@ -74,94 +70,8 @@ if (dropArg) {
 }
 
 // ── audit mode ──────────────────────────────────────────────────────────────
-const gmailClients = new Map<string, GmailClient>();
-const gmailFor = (email: string): GmailClient => {
-  let c = gmailClients.get(email);
-  if (!c) {
-    c = new GmailClient({ email });
-    gmailClients.set(email, c);
-  }
-  return c;
-};
-
-// Slack DM registry per workspace, built once: user id → im channel id.
-async function slackDmIndexes(): Promise<Array<{ client: SlackClient; byUser: Map<string, string> }>> {
-  const out: Array<{ client: SlackClient; byUser: Map<string, string> }> = [];
-  for (const { account } of SLACK_ACCOUNTS) {
-    try {
-      const client = await createSlackClientFromKeychain({}, account);
-      const ims = await client.listAllConversations({ types: "im" });
-      const byUser = new Map<string, string>();
-      for (const c of ims) if (c.user && c.id) byUser.set(c.user, c.id);
-      out.push({ client, byUser });
-    } catch {
-      /* workspace unreachable — audit with what we have */
-    }
-  }
-  return out;
-}
-
-async function corpusFor(
-  handles: { slack?: string | null; gmail?: string | null; wechat?: string | null },
-  dms: Array<{ client: SlackClient; byUser: Map<string, string> }>,
-): Promise<string> {
-  const slices: string[] = [];
-
-  if (handles.slack) {
-    for (const { client, byUser } of dms) {
-      const channel = byUser.get(handles.slack);
-      if (!channel) continue;
-      try {
-        const h = await client.conversationsHistory({ channel, limit: 60 });
-        const lines = [...(h.messages ?? [])].reverse().map((m) => {
-          const ms = m.ts ? Math.round(Number(m.ts) * 1000) : 0;
-          const day = ms > 0 ? new Date(ms).toISOString().slice(0, 10) : "?";
-          return `[${day}] ${m.user ?? "?"}: ${m.text ?? ""}`;
-        });
-        if (lines.length) slices.push(`=== slack DM ===\n${lines.join("\n")}`);
-      } catch {
-        /* skip */
-      }
-    }
-  }
-
-  if (handles.gmail) {
-    for (const mailbox of KNOWN_MAILBOXES) {
-      try {
-        const list = await gmailFor(mailbox).messagesList({
-          q: `(from:${handles.gmail} OR to:${handles.gmail}) newer_than:30d`,
-          maxResults: 10,
-        });
-        const threadIds = [...new Set((list.messages ?? []).map((m) => m.threadId))].slice(0, 3);
-        for (const id of threadIds) {
-          if (!id) continue;
-          const t = await gmailFor(mailbox).getThread({ id, format: "full" });
-          const text = (t.messages ?? [])
-            .map((m) => {
-              const ms = Number(m.internalDate ?? 0);
-              const day = ms > 0 ? new Date(ms).toISOString().slice(0, 10) : "?";
-              return `[${day}] From ${getHeader(m.payload, "From") ?? "?"}:\n${extractText(m)}`;
-            })
-            .join("\n---\n");
-          if (text.trim()) slices.push(`=== gmail (${mailbox}) ===\n${text}`);
-        }
-      } catch {
-        /* skip mailbox */
-      }
-    }
-  }
-
-  if (handles.wechat) {
-    try {
-      const text = await wechatHistory(handles.wechat, { limit: 80 });
-      if (text.trim()) slices.push(`=== wechat ===\n${text}`);
-    } catch {
-      /* skip */
-    }
-  }
-
-  return slices.join("\n\n");
-}
+// Corpus assembly lives in relay/io/person-corpus.ts (shared with the
+// commitment seeding script).
 
 async function main(): Promise<void> {
   const json = createClaudeCliJsonCaller({ model: "opus" });
@@ -188,12 +98,8 @@ async function main(): Promise<void> {
 
   for (const t of targets.slice(0, maxPersons)) {
     const p = readPersonaV3File(t.file);
-    const corpus = await corpusFor(
-      {
-        slack: p.handles?.slack,
-        gmail: p.handles?.gmail,
-        wechat: p.handles?.wechat,
-      },
+    const corpus = await personCorpus(
+      { slack: p.handles?.slack, gmail: p.handles?.gmail, wechat: p.handles?.wechat },
       dms,
     );
     if (!corpus.trim()) {

@@ -80,73 +80,16 @@ export async function updatePersonaCommitments(
     if (!thread) continue;
 
     const file = personaPath(deps.personaDir, key);
-    let existing: Commitment[];
-    try {
-      existing = readPersonaV3File(file).commitments ?? [];
-    } catch {
-      continue; // no persona file / unreadable → skip
-    }
-
-    let extracted;
-    let transitions;
-    try {
-      const raw = await deps.json(
-        buildPersonaUpdateRequest({ name: persona.displayName, existing, thread }),
-      );
-      extracted = parseExtractedCommitments(raw);
-      transitions = parseExtractedUpdates(raw, existing.length);
-    } catch {
-      continue; // a single contact's LLM failure must not sink the pass
-    }
-
-    // GROUNDING IS MECHANICAL. Every extraction must quote the corpus verbatim;
-    // one that cannot is invented, and an invented "done" silently closes real
-    // work (the reverse of the append-only bug). Both prompts have always ASKED
-    // for the quote — this is the first time anything checks it. The discard
-    // count is reported upward: a high rate is itself a finding about how much
-    // the model creates.
-    const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
-      xs.filter((x) => hasVerbatim(thread, x.evidence ?? ""));
-    const okExtracted = grounded(extracted);
-    const okTransitions = grounded(transitions);
-    discarded += extracted.length - okExtracted.length + (transitions.length - okTransitions.length);
-    transitions = okTransitions;
-
-    const seen = new Set(existing.map((c) => norm(c.what)));
-    const fresh = okExtracted.filter((e) => !seen.has(norm(e.what)));
-
-    // Status transitions FIRST, on a copy. The ledger used to be append-only —
-    // dedup-by-wording meant a conversation showing a tracked commitment
-    // FINISHED had no way to say so, and two weeks later the engine re-derived
-    // the finished work as fresh. Only apply a real change.
-    const withStatus = existing.map((c) => ({ ...c }));
-    let statusChanged = 0;
-    for (const u of transitions) {
-      if (withStatus[u.index]!.status === u.status) continue;
-      withStatus[u.index]!.status = u.status;
-      statusChanged++;
-    }
-    if (fresh.length === 0 && statusChanged === 0) continue;
-
-    const merged: Commitment[] = [
-      ...withStatus,
-      ...fresh.map((e) => ({
-        who: e.who,
-        what: e.what,
-        status: e.status ?? "open",
-        ...(e.due ? { due: e.due } : {}),
-      })),
-    ];
-    const evidence =
-      [...fresh.map((e) => e.evidence), ...transitions.map((u) => u.evidence)]
-        .filter(Boolean)
-        .join(" | ") || "extracted from recent conversation";
-    try {
-      const res = writePersonaFile(file, { set: { commitments: merged }, evidence: { commitments: evidence } }, "llm");
-      if (res.applied.includes("commitments")) updated.push({ key, added: fresh.length, statusChanged });
-    } catch {
-      /* R1 / validation rejection — skip, non-fatal */
-    }
+    const r = await extractCommitmentsOnce({
+      file,
+      displayName: persona.displayName,
+      corpus: thread,
+      json: deps.json,
+    });
+    if (!r) continue;
+    discarded += r.discarded;
+    if (r.added > 0 || r.statusChanged > 0)
+      updated.push({ key, added: r.added, statusChanged: r.statusChanged });
   }
 
   return { updated, discarded };
@@ -158,4 +101,91 @@ export { clusterKey };
 // Test seam.
 export function _resetPersonaUpdateTtl(): void {
   lastUpdateMs.clear();
+}
+
+
+/**
+ * Extract-and-merge for ONE persona: new commitments + status transitions from
+ * a corpus, quote-gated, written through the R1 chokepoint. Shared by the tick
+ * pass above and the one-off seeding/audit scripts, so the merge rules cannot
+ * drift between them.
+ *
+ * Returns null when the persona file is unreadable or the LLM call failed —
+ * a single contact's failure must not sink a batch.
+ */
+export async function extractCommitmentsOnce(opts: {
+  file: string;
+  displayName: string;
+  corpus: string;
+  json: PersonaUpdateJsonCaller;
+}): Promise<{ added: number; statusChanged: number; discarded: number } | null> {
+  let existing: Commitment[];
+  try {
+    existing = readPersonaV3File(opts.file).commitments ?? [];
+  } catch {
+    return null;
+  }
+
+  let extracted;
+  let transitions;
+  try {
+    const raw = await opts.json(
+      buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: opts.corpus }),
+    );
+    extracted = parseExtractedCommitments(raw);
+    transitions = parseExtractedUpdates(raw, existing.length);
+  } catch {
+    return null;
+  }
+
+  // GROUNDING IS MECHANICAL. Every extraction must quote the corpus verbatim;
+  // one that cannot is invented, and an invented "done" silently closes real
+  // work (the reverse of the append-only bug). The discard count is reported
+  // upward: a high rate is itself a finding about how much the model creates.
+  const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
+    xs.filter((x) => hasVerbatim(opts.corpus, x.evidence ?? ""));
+  const okExtracted = grounded(extracted);
+  const okTransitions = grounded(transitions);
+  const discarded =
+    extracted.length - okExtracted.length + (transitions.length - okTransitions.length);
+
+  const seen = new Set(existing.map((c) => norm(c.what)));
+  const fresh = okExtracted.filter((e) => !seen.has(norm(e.what)));
+
+  // Status transitions FIRST, on a copy. The ledger used to be append-only —
+  // dedup-by-wording meant a conversation showing a tracked commitment FINISHED
+  // had no way to say so. Only apply a real change.
+  const withStatus = existing.map((c) => ({ ...c }));
+  let statusChanged = 0;
+  for (const u of okTransitions) {
+    if (withStatus[u.index]!.status === u.status) continue;
+    withStatus[u.index]!.status = u.status;
+    statusChanged++;
+  }
+  if (fresh.length === 0 && statusChanged === 0) return { added: 0, statusChanged: 0, discarded };
+
+  const merged: Commitment[] = [
+    ...withStatus,
+    ...fresh.map((e) => ({
+      who: e.who,
+      what: e.what,
+      status: e.status ?? "open",
+      ...(e.due ? { due: e.due } : {}),
+    })),
+  ];
+  const evidence =
+    [...fresh.map((e) => e.evidence), ...okTransitions.map((u) => u.evidence)]
+      .filter(Boolean)
+      .join(" | ") || "extracted from recent conversation";
+  try {
+    const res = writePersonaFile(
+      opts.file,
+      { set: { commitments: merged }, evidence: { commitments: evidence } },
+      "llm",
+    );
+    if (!res.applied.includes("commitments")) return { added: 0, statusChanged: 0, discarded };
+  } catch {
+    return { added: 0, statusChanged: 0, discarded };
+  }
+  return { added: fresh.length, statusChanged, discarded };
 }
