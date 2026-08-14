@@ -297,6 +297,74 @@ export interface FetchedThread {
   messages?: TranscriptMessage[];
 }
 
+// One person, EVERY source their handles reach — the input the persona-update
+// pass needs to judge a commitment's state. Its single-thread view is how the
+// engine concluded "PCB agreements signed & returned by Yang" from a Gmail
+// message on 07-30 and still re-derived the signing as fresh work from the
+// (unchanged) Slack thread two weeks later: the two conversations were never in
+// front of the model at once.
+//
+// Slices, each under a labelled header, every line dated:
+//   slack  — the rep card's own conversation (fetchThread). By-handle lookup
+//            when the rep is from another platform needs conversations.list
+//            per workspace; deferred until a real case needs it.
+//   gmail  — recent threads exchanged with the persona's address, found by
+//            query across our mailboxes. Capped: 2 threads per mailbox, the
+//            newest first — the ledger needs recent movement, not an archive.
+//   wechat — the persona's chat history, which arrives pre-dated.
+// A failing slice is skipped (partial context beats none); all-empty → null so
+// the caller can fall back.
+async function fetchAllForPerson(persona: Persona, rep: ActionItem): Promise<string | null> {
+  const slices: string[] = [];
+
+  const repSlice = await fetchThread(rep).catch(() => null);
+  if (repSlice?.text) {
+    const platform = rep.source_message_id.split(":")[0] ?? "rep";
+    slices.push(`=== ${platform} (rep conversation) ===\n${repSlice.text}`);
+  }
+
+  const email = persona.handles?.gmail;
+  if (email) {
+    for (const mailbox of KNOWN_MAILBOXES) {
+      try {
+        const list = await gmailClientFor(mailbox).messagesList({
+          q: `(from:${email} OR to:${email}) newer_than:21d`,
+          maxResults: 10,
+        });
+        const threadIds = [...new Set((list.messages ?? []).map((m) => m.threadId))].slice(0, 2);
+        for (const id of threadIds) {
+          if (!id) continue;
+          // The rep conversation is already the first slice — do not repeat it.
+          if (rep.context?.thread_ref === id) continue;
+          const t = await gmailClientFor(mailbox).getThread({ id, format: "full" });
+          const text = (t.messages ?? [])
+            .map((m) => {
+              const ms = Number(m.internalDate ?? 0);
+              const day = ms > 0 ? new Date(ms).toISOString().slice(0, 10) : "?";
+              return `[${day}] From ${getHeader(m.payload, "From") ?? "?"}:\n${extractText(m)}`;
+            })
+            .join("\n---\n");
+          if (text.trim()) slices.push(`=== gmail (${mailbox}) ===\n${text}`);
+        }
+      } catch {
+        /* one mailbox failing must not sink the person */
+      }
+    }
+  }
+
+  const wechat = persona.handles?.wechat;
+  if (wechat && !rep.source_message_id.startsWith("wechat")) {
+    try {
+      const text = await wechatHistory(wechat, { limit: 60 });
+      if (text.trim()) slices.push(`=== wechat ===\n${text}`);
+    } catch {
+      /* wechat reader down — proceed with what we have */
+    }
+  }
+
+  return slices.length > 0 ? slices.join("\n\n") : null;
+}
+
 async function fetchThread(card: ActionItem): Promise<FetchedThread | null> {
   const prefix = card.source_message_id.split(":")[0];
   try {
@@ -605,6 +673,7 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
       resolvePersona,
       // persona-update reads prose, not structure — hand it the text half.
       fetchThread: async (card: ActionItem) => (await fetchThread(card))?.text ?? null,
+      fetchAllForPerson,
       personaDir,
     };
   } catch (e) {

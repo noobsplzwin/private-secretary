@@ -13,6 +13,7 @@ import { clusterKey } from "../core/unit-key.js";
 import {
   buildPersonaUpdateRequest,
   parseExtractedCommitments,
+  parseExtractedUpdates,
   type PersonaUpdateRequest,
 } from "./persona-update-prompt.js";
 
@@ -22,6 +23,12 @@ export interface PersonaUpdateDeps {
   json: PersonaUpdateJsonCaller;
   resolvePersona: (handle: string) => Persona | null;
   fetchThread: (card: ActionItem) => Promise<string | null>;
+  // The person's traffic across EVERY source their handles reach, not just the
+  // rep card's conversation. This is what lets a commitment raised on Slack be
+  // closed by a Gmail message — the engine drew exactly that conclusion once
+  // ("PCB agreements signed & returned by Yang") and could not reach it, because
+  // this pass only ever saw one thread. Falls back to fetchThread when absent.
+  fetchAllForPerson?: (persona: Persona, rep: ActionItem) => Promise<string | null>;
   personaDir: string;
   maxPerTick?: number;
   ttlMs?: number;
@@ -35,7 +42,7 @@ const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
 const lastUpdateMs = new Map<string, number>();
 
 export interface PersonaUpdateResult {
-  updated: Array<{ key: string; added: number }>;
+  updated: Array<{ key: string; added: number; statusChanged: number }>;
 }
 
 export async function updatePersonaCommitments(
@@ -65,7 +72,9 @@ export async function updatePersonaCommitments(
   const updated: PersonaUpdateResult["updated"] = [];
   for (const [key, { rep, persona }] of eligible) {
     lastUpdateMs.set(key, nowMs); // claim the slot even on a no-op
-    const thread = await deps.fetchThread(rep);
+    const thread = deps.fetchAllForPerson
+      ? await deps.fetchAllForPerson(persona, rep)
+      : await deps.fetchThread(rep);
     if (!thread) continue;
 
     const file = personaPath(deps.personaDir, key);
@@ -77,19 +86,34 @@ export async function updatePersonaCommitments(
     }
 
     let extracted;
+    let transitions;
     try {
-      extracted = parseExtractedCommitments(
-        await deps.json(buildPersonaUpdateRequest({ name: persona.displayName, existing, thread })),
+      const raw = await deps.json(
+        buildPersonaUpdateRequest({ name: persona.displayName, existing, thread }),
       );
+      extracted = parseExtractedCommitments(raw);
+      transitions = parseExtractedUpdates(raw, existing.length);
     } catch {
       continue; // a single contact's LLM failure must not sink the pass
     }
     const seen = new Set(existing.map((c) => norm(c.what)));
     const fresh = extracted.filter((e) => !seen.has(norm(e.what)));
-    if (fresh.length === 0) continue;
+
+    // Status transitions FIRST, on a copy. The ledger used to be append-only —
+    // dedup-by-wording meant a conversation showing a tracked commitment
+    // FINISHED had no way to say so, and two weeks later the engine re-derived
+    // the finished work as fresh. Only apply a real change.
+    const withStatus = existing.map((c) => ({ ...c }));
+    let statusChanged = 0;
+    for (const u of transitions) {
+      if (withStatus[u.index]!.status === u.status) continue;
+      withStatus[u.index]!.status = u.status;
+      statusChanged++;
+    }
+    if (fresh.length === 0 && statusChanged === 0) continue;
 
     const merged: Commitment[] = [
-      ...existing,
+      ...withStatus,
       ...fresh.map((e) => ({
         who: e.who,
         what: e.what,
@@ -98,10 +122,12 @@ export async function updatePersonaCommitments(
       })),
     ];
     const evidence =
-      fresh.map((e) => e.evidence).filter(Boolean).join(" | ") || "extracted from recent conversation";
+      [...fresh.map((e) => e.evidence), ...transitions.map((u) => u.evidence)]
+        .filter(Boolean)
+        .join(" | ") || "extracted from recent conversation";
     try {
       const res = writePersonaFile(file, { set: { commitments: merged }, evidence: { commitments: evidence } }, "llm");
-      if (res.applied.includes("commitments")) updated.push({ key, added: fresh.length });
+      if (res.applied.includes("commitments")) updated.push({ key, added: fresh.length, statusChanged });
     } catch {
       /* R1 / validation rejection — skip, non-fatal */
     }
