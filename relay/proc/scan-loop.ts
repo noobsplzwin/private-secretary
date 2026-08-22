@@ -1118,6 +1118,14 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         if (pu.discarded > 0) {
           console.log(`[persona] discarded ${pu.discarded} ungrounded extraction(s) (evidence quote not in corpus)`);
         }
+        // The ASSESS verdicts are what the derived list is built from, so the
+        // count and the discard rate beside it are the signal for whether the
+        // model is judging or inventing. Printed even at zero when work was
+        // read: silently assessing NOTHING would look identical to a healthy
+        // quiet tick, and the derived list would just be empty.
+        if (pu.assessed > 0 || pu.discarded > 0) {
+          console.log(`[persona] assessed ${pu.assessed} open commitment(s), ${pu.discarded} discarded`);
+        }
         if (pu.updated.some((u) => u.statusChanged > 0)) {
           console.log(
             `[persona] status transitions: ${pu.updated

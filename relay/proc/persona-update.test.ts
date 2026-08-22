@@ -86,7 +86,7 @@ describe("updatePersonaCommitments — status transitions", () => {
         reply: { commitments: [], updates: [{ index: 0, status: "done", evidence: "signed and returned" }] },
       }),
     );
-    expect(r.updated).toEqual([{ key: "zech-noiseux", added: 0, statusChanged: 1 }]);
+    expect(r.updated).toEqual([{ key: "zech-noiseux", added: 0, statusChanged: 1, assessed: 0 }]);
     expect(ledger()[0]!.status).toBe("done");
   });
 
@@ -119,7 +119,7 @@ describe("updatePersonaCommitments — status transitions", () => {
         },
       }),
     );
-    expect(r.updated).toEqual([{ key: "zech-noiseux", added: 1, statusChanged: 1 }]);
+    expect(r.updated).toEqual([{ key: "zech-noiseux", added: 1, statusChanged: 1, assessed: 0 }]);
     expect(ledger()).toHaveLength(2);
     expect(ledger()[0]!.status).toBe("done");
   });
@@ -226,5 +226,116 @@ describe("persona-update call gate", () => {
     await updatePersonaCommitments([card()], d(true));
     await updatePersonaCommitments([card()], d(false));
     expect(calls).toBe(2);
+  });
+});
+
+// ASSESS (specs/person-first-consolidation.md §3.2). needs_leo is the one hard
+// judgment the derived list rests on, so every guard around it is enforced in
+// CODE — the prompt is asked, never trusted.
+describe("assess verdicts", () => {
+  const MINE = [{ who: "me", what: "Review the countersigned copy", status: "open" }];
+  let dir: string;
+  beforeEach(() => {
+    dir = personaDirWith(MINE);
+    _resetExtractGate();
+  });
+  const ledger = () =>
+    (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as {
+      commitments: Array<{ who: string; assessment?: Record<string, unknown> }>;
+    }).commitments;
+
+  const reply = (a: Record<string, unknown>) => ({ commitments: [], updates: [], assessments: [a] });
+
+  it("lands a grounded verdict on the commitment, dated", async () => {
+    const r = await updatePersonaCommitments(
+      [card()],
+      deps({
+        personaDir: dir,
+        now: () => "2026-08-22T12:00:00Z",
+        reply: reply({
+          index: 0,
+          needs_leo: true,
+          blocked_on: "leo",
+          next_step: "Read the countersigned copy and confirm the terms",
+          evidence: "please review the countersigned copy",
+        }),
+      }),
+    );
+    expect(r.assessed).toBe(1);
+    expect(ledger()[0]!.assessment).toEqual({
+      needs_leo: true,
+      blocked_on: "leo",
+      next_step: "Read the countersigned copy and confirm the terms",
+      evidence: "please review the countersigned copy",
+      at: "2026-08-22T12:00:00Z",
+    });
+  });
+
+  // The failure mode the whole grounding design exists for: a verdict whose
+  // quote is not in the corpus is invented, and an invented needs_leo puts work
+  // on the owner's list that nobody ever asked of him.
+  it("discards a verdict whose evidence is not in the corpus", async () => {
+    const r = await updatePersonaCommitments(
+      [card()],
+      deps({
+        personaDir: dir,
+        reply: reply({ index: 0, needs_leo: true, evidence: "Leo please send the revised contract today" }),
+      }),
+    );
+    expect(r.assessed).toBe(0);
+    expect(r.discarded).toBe(1);
+    expect(ledger()[0]!.assessment).toBeUndefined();
+  });
+
+  it("ignores a verdict aimed at work the CONTACT owes", async () => {
+    dir = personaDirWith([{ who: "them", what: "Send the manufacturing agreement", status: "open" }]);
+    const r = await updatePersonaCommitments(
+      [card()],
+      deps({
+        personaDir: dir,
+        reply: reply({ index: 0, needs_leo: true, evidence: "agreement signed and returned" }),
+      }),
+    );
+    expect(r.assessed).toBe(0);
+    expect(ledger()[0]!.assessment).toBeUndefined();
+  });
+
+  it("drops next_step when the verdict says Leo is not needed", async () => {
+    await updatePersonaCommitments(
+      [card()],
+      deps({
+        personaDir: dir,
+        reply: reply({
+          index: 0,
+          needs_leo: false,
+          blocked_on: "them",
+          next_step: "chase them about it",
+          evidence: "agreement signed and returned",
+        }),
+      }),
+    );
+    const a = ledger()[0]!.assessment!;
+    expect(a.needs_leo).toBe(false);
+    expect(a.next_step).toBeUndefined();
+  });
+
+  // A verdict is a statement about NOW. Keeping the old one would be the
+  // "finished work that will not leave the list" complaint, one layer down.
+  it("replaces a stale verdict rather than keeping it", async () => {
+    const run = (needs_leo: boolean, at: string, corpus: string) =>
+      updatePersonaCommitments(
+        [card()],
+        deps({
+          personaDir: dir,
+          now: () => at,
+          fetchAllForPerson: async () => corpus,
+          reply: reply({ index: 0, needs_leo, evidence: "review the countersigned copy" }),
+        }),
+      );
+    await run(true, "2026-08-01T00:00:00Z", "me: please review the countersigned copy");
+    await run(false, "2026-08-22T00:00:00Z", "me: please review the countersigned copy\nZech: handled it");
+    const a = ledger()[0]!.assessment!;
+    expect(a.needs_leo).toBe(false);
+    expect(a.at).toBe("2026-08-22T00:00:00Z");
   });
 });

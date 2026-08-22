@@ -351,3 +351,49 @@ describe("v3.1 corrections (§7B — human-only, R1-protected)", () => {
     expect(validatePersonaV3(bad)).toContain("corrections[0].wrong missing");
   });
 });
+
+// The derive rule reads assessment.needs_leo, so malformed verdicts silently
+// shape the owner's list. Validated only when present — commitments predating
+// the ASSESS pass carry none, and that is legal.
+describe("commitment assessment validation", () => {
+  const withAssessment = (a: unknown) =>
+    ({
+      schema: "persona-v3",
+      key: "k",
+      display_name: "K",
+      commitments: [{ who: "me", what: "w", status: "open", assessment: a }],
+    }) as unknown as PersonaV3;
+
+  it("accepts a well-formed verdict", () => {
+    const errs = validatePersonaV3(
+      withAssessment({ needs_leo: true, blocked_on: "leo", next_step: "do it", evidence: "q", at: "2026-08-22T00:00:00Z" }),
+    );
+    expect(errs.filter((e) => e.includes("assessment"))).toEqual([]);
+  });
+
+  it("accepts a commitment with no verdict at all", () => {
+    const errs = validatePersonaV3({
+      schema: "persona-v3",
+      key: "k",
+      display_name: "K",
+      commitments: [{ who: "me", what: "w", status: "open" }],
+    } as unknown as PersonaV3);
+    expect(errs.filter((e) => e.includes("assessment"))).toEqual([]);
+  });
+
+  it("rejects a non-boolean needs_leo", () => {
+    const errs = validatePersonaV3(withAssessment({ needs_leo: "yes", evidence: "q", at: "t" }));
+    expect(errs.some((e) => e.includes("needs_leo must be boolean"))).toBe(true);
+  });
+
+  it("rejects a verdict with no evidence and no date", () => {
+    const errs = validatePersonaV3(withAssessment({ needs_leo: true, evidence: "  ", at: "" }));
+    expect(errs.some((e) => e.includes("evidence missing"))).toBe(true);
+    expect(errs.some((e) => e.includes("at missing"))).toBe(true);
+  });
+
+  it("rejects an unknown blocked_on", () => {
+    const errs = validatePersonaV3(withAssessment({ needs_leo: false, blocked_on: "someone", evidence: "q", at: "t" }));
+    expect(errs.some((e) => e.includes("blocked_on must be"))).toBe(true);
+  });
+});

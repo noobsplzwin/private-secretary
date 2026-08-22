@@ -18,8 +18,36 @@ export type CommitmentWho = "me" | "them";
 export type CommitmentStatus = "open" | "done" | "overdue" | "dropped";
 
 export const POWERS: Power[] = ["serves-them", "peer", "leads-them"];
-export const COMMITMENT_WHOS: CommitmentWho[] = ["me", "them"];
+export const BLOCKED_ONS = ["leo", "them", "third-party"] as const;
+const COMMITMENT_WHOS: CommitmentWho[] = ["me", "them"];
 export const COMMITMENT_STATUSES: CommitmentStatus[] = ["open", "done", "overdue", "dropped"];
+
+// The ASSESS verdict (specs/person-first-consolidation.md §3.2), written by the
+// person pass each time that contact's corpus moves. It rides ON the commitment
+// so the derived list can read it without a second lookup.
+//
+// `needs_leo` is the one hard judgment in the whole design — the owner named it
+// himself. Everything else here exists to make it auditable: `evidence` must
+// quote the corpus verbatim or the verdict is discarded by code, and `at` dates
+// the judgment so a stale one cannot keep an item alive forever. A commitment
+// assessed a fortnight ago says nothing about today, and "finished work that
+// will not leave the list" is the complaint this whole axis change came from.
+//
+// No `state: advanced|blocked|done|unchanged` field: nothing consumes it. `done`
+// is the existing status transition, `blocked` is `blocked_on !== undefined`,
+// and advanced-vs-unchanged drives no behaviour.
+export interface CommitmentAssessment {
+  /** Does this need LEO's own time now? The derive rule turns only these into items. */
+  needs_leo: boolean;
+  /** Who the work sits with. `them`/`third-party` means no item, however much the thread looks like it wants chasing. */
+  blocked_on?: "leo" | "them" | "third-party";
+  /** One imperative line. Only meaningful when needs_leo. */
+  next_step?: string;
+  /** Verbatim quote from the corpus. Ungrounded verdicts never reach the ledger. */
+  evidence: string;
+  /** ISO instant this verdict was made, so staleness is visible. */
+  at: string;
+}
 
 export interface Commitment {
   who: CommitmentWho;
@@ -27,6 +55,7 @@ export interface Commitment {
   due?: string;
   status: CommitmentStatus;
   source_message_id?: string;
+  assessment?: CommitmentAssessment;
 }
 
 // v3.1 (specs/persona-v3.md §7): a human-stated behavioral correction. Always
@@ -376,6 +405,19 @@ export function validatePersonaV3(
       errors.push(`commitments[${i}].what missing`);
     if (!COMMITMENT_STATUSES.includes(c.status))
       errors.push(`commitments[${i}].status invalid`);
+    // Validated only when present. A malformed verdict is worse than none: the
+    // derive rule reads needs_leo, so garbage there silently shapes the list.
+    const a = c.assessment;
+    if (a !== undefined) {
+      if (typeof a.needs_leo !== "boolean")
+        errors.push(`commitments[${i}].assessment.needs_leo must be boolean`);
+      if (typeof a.evidence !== "string" || a.evidence.trim() === "")
+        errors.push(`commitments[${i}].assessment.evidence missing`);
+      if (typeof a.at !== "string" || a.at.trim() === "")
+        errors.push(`commitments[${i}].assessment.at missing`);
+      if (a.blocked_on !== undefined && !BLOCKED_ONS.includes(a.blocked_on))
+        errors.push(`commitments[${i}].assessment.blocked_on must be ${BLOCKED_ONS.join("|")}`);
+    }
   });
 
   (p.corrections ?? []).forEach((c, i) => {

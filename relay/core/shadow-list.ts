@@ -26,6 +26,8 @@ export interface ShadowItem {
   /** The commitment's own wording — never rewritten. */
   what: string;
   due?: string;
+  /** The grounded imperative line from the verdict — the sub-item phase 4 will render. */
+  next_step?: string;
 }
 
 export interface ShadowDiff {
@@ -49,7 +51,19 @@ export function deriveShadowList(
   for (const p of personas) {
     for (const c of p.commitments ?? []) {
       if (c.who !== "me" || c.status !== "open") continue;
-      out.push({ personaKey: p.key, what: c.what, ...(c.due ? { due: c.due } : {}) });
+      // needs_leo is the third of the three conditions in §3.4, and without it
+      // this derived every open commitment Leo owned: the first diff read
+      // "89 derived | 10 real | 0 matched". Over-production was not a matcher
+      // bug, it was two thirds of the rule missing. Unassessed counts as NO —
+      // a commitment nothing has judged is not a to-do, and silence must not
+      // promote itself into the list.
+      if (!c.assessment?.needs_leo) continue;
+      out.push({
+        personaKey: p.key,
+        what: c.what,
+        ...(c.due ? { due: c.due } : {}),
+        ...(c.assessment.next_step ? { next_step: c.assessment.next_step } : {}),
+      });
     }
   }
   return out;

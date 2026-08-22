@@ -16,6 +16,7 @@ import {
   buildPersonaUpdateRequest,
   parseExtractedCommitments,
   parseExtractedUpdates,
+  parseExtractedAssessments,
   type PersonaUpdateRequest,
 } from "./persona-update-prompt.js";
 
@@ -35,6 +36,8 @@ export interface PersonaUpdateDeps {
   maxPerTick?: number;
   ttlMs?: number;
   nowMs?: () => number;
+  /** Dates the ASSESS verdicts. */
+  now?: () => string;
 }
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
@@ -44,9 +47,11 @@ const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
 const lastUpdateMs = new Map<string, number>();
 
 export interface PersonaUpdateResult {
-  updated: Array<{ key: string; added: number; statusChanged: number }>;
-  /** Extractions thrown away because their evidence quote is not in the corpus. */
+  updated: Array<{ key: string; added: number; statusChanged: number; assessed: number }>;
+  /** Extractions and verdicts thrown away because their quote is not in the corpus. */
   discarded: number;
+  /** ASSESS verdicts written. The discard/assess ratio is how model invention is watched. */
+  assessed: number;
 }
 
 export async function updatePersonaCommitments(
@@ -75,6 +80,7 @@ export async function updatePersonaCommitments(
 
   const updated: PersonaUpdateResult["updated"] = [];
   let discarded = 0;
+  let assessed = 0;
   for (const [key, { rep, persona }] of eligible) {
     lastUpdateMs.set(key, nowMs); // claim the slot even on a no-op
     const thread = await deps.fetchAllForPerson(persona, rep);
@@ -86,14 +92,16 @@ export async function updatePersonaCommitments(
       displayName: persona.displayName,
       corpus: thread,
       json: deps.json,
+      ...(deps.now ? { now: deps.now } : {}),
     });
     if (!r) continue;
     discarded += r.discarded;
-    if (r.added > 0 || r.statusChanged > 0)
-      updated.push({ key, added: r.added, statusChanged: r.statusChanged });
+    assessed += r.assessed;
+    if (r.added > 0 || r.statusChanged > 0 || r.assessed > 0)
+      updated.push({ key, added: r.added, statusChanged: r.statusChanged, assessed: r.assessed });
   }
 
-  return { updated, discarded };
+  return { updated, discarded, assessed };
 }
 
 // Same conversation grouping key the rest of the daemon uses.
@@ -124,7 +132,9 @@ export async function extractCommitmentsOnce(opts: {
   displayName: string;
   corpus: string;
   json: PersonaUpdateJsonCaller;
-}): Promise<{ added: number; statusChanged: number; discarded: number } | null> {
+  /** Dates each verdict, so a stale needs_leo cannot keep an item alive. */
+  now?: () => string;
+}): Promise<{ added: number; statusChanged: number; discarded: number; assessed: number } | null> {
   let existing: Commitment[];
   try {
     existing = readPersonaV3File(opts.file).commitments ?? [];
@@ -134,10 +144,11 @@ export async function extractCommitmentsOnce(opts: {
 
   // Both of these ride the prompt, so both belong in the signature.
   const sig = CallGate.signature(opts.corpus, JSON.stringify(existing));
-  if (extractGate.answered(opts.file, sig)) return { added: 0, statusChanged: 0, discarded: 0 };
+  if (extractGate.answered(opts.file, sig)) return { added: 0, statusChanged: 0, discarded: 0, assessed: 0 };
 
   let extracted;
   let transitions;
+  let assessments;
   try {
     const raw = await opts.json(
       buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: opts.corpus }),
@@ -145,6 +156,7 @@ export async function extractCommitmentsOnce(opts: {
     extractGate.record(opts.file, sig); // only once the call RETURNED
     extracted = parseExtractedCommitments(raw);
     transitions = parseExtractedUpdates(raw, existing.length);
+    assessments = parseExtractedAssessments(raw, existing.length);
   } catch {
     return null;
   }
@@ -157,8 +169,12 @@ export async function extractCommitmentsOnce(opts: {
     xs.filter((x) => evidenceGrounded(opts.corpus, x.evidence ?? ""));
   const okExtracted = grounded(extracted);
   const okTransitions = grounded(transitions);
+  const okAssessments = grounded(assessments);
   const discarded =
-    extracted.length - okExtracted.length + (transitions.length - okTransitions.length);
+    extracted.length -
+    okExtracted.length +
+    (transitions.length - okTransitions.length) +
+    (assessments.length - okAssessments.length);
 
   const seen = new Set(existing.map((c) => norm(c.what)));
   const fresh = okExtracted.filter((e) => !seen.has(norm(e.what)));
@@ -173,7 +189,27 @@ export async function extractCommitmentsOnce(opts: {
     withStatus[u.index]!.status = u.status;
     statusChanged++;
   }
-  if (fresh.length === 0 && statusChanged === 0) return { added: 0, statusChanged: 0, discarded };
+  // ASSESS verdicts land on the commitments they judge. Structural rules are
+  // enforced HERE, not trusted to the prompt: only an OPEN commitment Leo owns
+  // can carry a verdict, and next_step is meaningless without needs_leo. A fresh
+  // verdict REPLACES a stale one — that is what dating them is for.
+  const at = (opts.now ?? (() => new Date().toISOString()))();
+  let assessed = 0;
+  for (const a of okAssessments) {
+    const target = withStatus[a.index]!;
+    if (target.who !== "me" || target.status !== "open") continue;
+    target.assessment = {
+      needs_leo: a.needs_leo,
+      ...(a.blocked_on ? { blocked_on: a.blocked_on } : {}),
+      ...(a.needs_leo && a.next_step?.trim() ? { next_step: a.next_step.trim() } : {}),
+      evidence: a.evidence,
+      at,
+    };
+    assessed++;
+  }
+
+  if (fresh.length === 0 && statusChanged === 0 && assessed === 0)
+    return { added: 0, statusChanged: 0, discarded, assessed: 0 };
 
   const merged: Commitment[] = [
     ...withStatus,
@@ -185,7 +221,11 @@ export async function extractCommitmentsOnce(opts: {
     })),
   ];
   const evidence =
-    [...fresh.map((e) => e.evidence), ...okTransitions.map((u) => u.evidence)]
+    [
+    ...fresh.map((e) => e.evidence),
+    ...okTransitions.map((u) => u.evidence),
+    ...okAssessments.map((a) => a.evidence),
+  ]
       .filter(Boolean)
       .join(" | ") || "extracted from recent conversation";
   try {
@@ -194,11 +234,11 @@ export async function extractCommitmentsOnce(opts: {
       { set: { commitments: merged }, evidence: { commitments: evidence } },
       "llm",
     );
-    if (!res.applied.includes("commitments")) return { added: 0, statusChanged: 0, discarded };
+    if (!res.applied.includes("commitments")) return { added: 0, statusChanged: 0, discarded, assessed: 0 };
   } catch {
-    return { added: 0, statusChanged: 0, discarded };
+    return { added: 0, statusChanged: 0, discarded, assessed: 0 };
   }
-  return { added: fresh.length, statusChanged, discarded };
+  return { added: fresh.length, statusChanged, discarded, assessed };
 }
 
 /** Test seam: forget which extractions have already been answered. */
