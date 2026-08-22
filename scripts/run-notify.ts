@@ -40,9 +40,6 @@ import { createClaudeCliLlmCaller, createClaudeCliJsonCaller } from "../relay/pr
 import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
 import { loadState } from "../relay/io/state.js";
 import { createDeepseekLlmCaller, createDeepseekJsonCaller } from "../relay/proc/llm-deepseek.js";
-import type { ConsolidateDeps } from "../relay/proc/consolidate.js";
-import type { RefreshDeps } from "../relay/proc/refresh.js";
-import type { PlanDeps } from "../relay/proc/plan.js";
 import type { PersonaUpdateDeps } from "../relay/proc/persona-update.js";
 import { wechatDecodeImage, wechatHistory } from "../relay/io/wechat-cli.js";
 import { createSlackClientFromKeychain, SLACK_ACCOUNTS, type SlackClient } from "../relay/io/slack-api.js";
@@ -152,25 +149,19 @@ const llmMode = (llmFlag ?? fileSettings.llm.mode) === "anthropic" ? "api" : (ll
 const draftModel = strOpt("--draft-model") ?? fileSettings.llm.draftModel;
 const visionEnabled = process.argv.includes("--vision");
 // Task consolidation (specs/task-consolidation.md, Stage 1): group open cards
-// that are the same real-world task. ON by default; --no-consolidate opts out.
-const consolidateEnabled = !process.argv.includes("--no-consolidate");
 // Task refresh (specs/task-consolidation.md, Stage 2): re-read the full thread
 // for conversations with an open card + emit calendar actions on agreed meetings.
 // ON by default; --no-refresh opts out. --refresh-ttl-min overrides the cooldown.
-const refreshEnabled = !process.argv.includes("--no-refresh");
 const onceMode = process.argv.includes("--once");
-const consolidateTimeoutMs = num("--consolidate-timeout-ms", 600_000);
 // --no-draft must ALSO stop polling, because a scan without a drafter still
 // ADVANCES CURSORS ("Absent = scan-only (shadow-log + cursors, no queue rows)"),
 // which would permanently skip every message that arrived during the run. It
 // also means a passes-only run cannot hang on a source: the first attempt sat
 // 9 minutes on an unresponsive WeChat MCP server before reaching consolidation.
 const noDraft = process.argv.includes("--no-draft");
-const refreshTtlMin = num("--refresh-ttl-min", 10);
 // How many open conversations to re-read per scan. The default cap of 3 meant a
 // full inbox of ~7 open cards took ~3 scans (~90 min) to all catch up. Cover the
 // whole open set each scan so every card tracks its latest reply within one cycle.
-const refreshMaxPerTick = num("--refresh-max", 12);
 const heartbeatPath = `${dirname(statePath)}/notify-heartbeat.json`;
 const daemonLockPath = `${dirname(statePath)}/run-notify.pid`;
 // Same disk cache the scan loop uses, so a name looked up there is free here.
@@ -576,36 +567,6 @@ async function fetchRelatedThread(p: Persona): Promise<string | null> {
   return null;
 }
 
-async function buildRefresh(): Promise<RefreshDeps | undefined> {
-  if (!refreshEnabled) return undefined;
-  try {
-    const llm =
-      llmMode === "api"
-        ? await createAnthropicLlmCaller()
-        : llmMode === "deepseek"
-          ? await createDeepseekLlmCaller({ model: draftModel })
-          : createClaudeCliLlmCaller({ model: draftModel });
-    const { resolve: resolvePersona } = buildPersonaResolver(loadPersonas(personaDir));
-    const projectCatalog = renderProjectCatalog(loadProjects(projectsDir));
-    console.log(`[notify] task refresh enabled via ${llmMode} (TTL ${refreshTtlMin}min)`);
-    // Same tool keys drafting gets: refresh can now emit a ticket, and without
-    // the keys it would guess a params.tool the registry rejects.
-    return {
-      llm,
-      resolvePersona,
-      fetchThread,
-      projectCatalog,
-      toolKeys: Object.keys(effectiveToolSpecs(statePath)),
-      ownerTimeZone,
-      personas: loadPersonas(personaDir),
-      ttlMs: refreshTtlMin * 60_000,
-      maxPerTick: refreshMaxPerTick,
-    };
-  } catch (e) {
-    console.log(`[notify] refresh DISABLED — ${(e as Error).message.split("\n")[0]}`);
-    return undefined;
-  }
-}
 
 // The TickTick sync writer, or undefined when TickTick is not connected — in
 // which case the sync phase is skipped and the cockpit stays the only surface.
@@ -637,45 +598,7 @@ function buildTickTickReader(): TickTickReader | undefined {
   });
 }
 
-async function buildConsolidate(): Promise<ConsolidateDeps | undefined> {
-  if (!consolidateEnabled) return undefined;
-  try {
-    const json =
-      llmMode === "api"
-        ? await createAnthropicJsonCaller()
-        : llmMode === "deepseek"
-          ? await createDeepseekJsonCaller({ model: draftModel })
-          // Consolidation is ONE call that must re-list every open card, so it
-          // scales with the queue, not with the tick. At 73 open cards it blew
-          // through the 180s default and left every grouping untouched — twice,
-          // silently, while a prompt fix was being "tested" against it.
-          : createClaudeCliJsonCaller({ model: draftModel, timeoutMs: consolidateTimeoutMs });
-    console.log(
-      `[notify] task consolidation enabled via ${llmMode} (timeout ${consolidateTimeoutMs / 1000}s)`,
-    );
-    return { json };
-  } catch (e) {
-    console.log(`[notify] consolidation DISABLED — ${(e as Error).message.split("\n")[0]}`);
-    return undefined;
-  }
-}
 
-async function buildPlan(): Promise<PlanDeps | undefined> {
-  if (process.argv.includes("--no-plan")) return undefined;
-  try {
-    const json =
-      llmMode === "api"
-        ? await createAnthropicJsonCaller()
-        : llmMode === "deepseek"
-          ? await createDeepseekJsonCaller({ model: draftModel })
-          : createClaudeCliJsonCaller({ model: draftModel });
-    console.log(`[notify] daily plan (ranking) enabled via ${llmMode}`);
-    return { json };
-  } catch (e) {
-    console.log(`[notify] plan DISABLED — ${(e as Error).message.split("\n")[0]}`);
-    return undefined;
-  }
-}
 
 async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
   if (process.argv.includes("--no-persona-update")) return undefined;
@@ -725,9 +648,6 @@ console.log(
     `slack=${intervals.slack / 1000}s (${intervals.slack === SLACK_MS_UNTHROTTLED ? "own-app token, unthrottled" : "rate-limited credential or override"})`,
 );
   const draft = await buildDraft();
-  const consolidate = await buildConsolidate();
-  const refresh = await buildRefresh();
-  const plan = await buildPlan();
   const personaUpdate = await buildPersonaUpdate();
   const ticktickWriter = buildTickTickWriter();
   const ticktickReader = buildTickTickReader();
@@ -738,18 +658,22 @@ console.log(
   const resolvePersonaKey = (handle: string): string | null =>
     resolveForTraffic(handle)?.key ?? null;
 
-  // Shadow list (PHASE 6c): re-read the ledgers from disk each call, because
-  // the persona-update phase earlier in the same tick may have just changed
-  // them — a cached copy would diff against stale commitments.
-  const shadowPersonas = (): Array<{ key: string; commitments?: Commitment[] }> => {
-    const out: Array<{ key: string; commitments?: Commitment[] }> = [];
+  // The LIST's source (PHASE 6b): re-read the ledgers from disk each call,
+  // because the person pass earlier in the same tick may have just changed
+  // them — a cached copy would render stale commitments.
+  const ledgerPersonas = (): Array<{ key: string; display_name?: string; commitments?: Commitment[] }> => {
+    const out: Array<{ key: string; display_name?: string; commitments?: Commitment[] }> = [];
     for (const f of readdirSync(personaDir)) {
       if (!f.endsWith(".yaml")) continue;
       try {
         const p = readPersonaV3File(join(personaDir, f));
-        out.push({ key: p.key, ...(p.commitments ? { commitments: p.commitments } : {}) });
+        out.push({
+          key: p.key,
+          ...(p.display_name ? { display_name: p.display_name } : {}),
+          ...(p.commitments ? { commitments: p.commitments } : {}),
+        });
       } catch {
-        /* unreadable persona — the shadow list just won't see it */
+        /* unreadable persona — its rows just won't render this tick */
       }
     }
     return out;
@@ -766,14 +690,11 @@ console.log(
           // advance cursors past them. See noDraft above.
           sources: noDraft ? [] : [source],
           draft,
-          consolidate,
-          refresh,
-          plan,
           personaUpdate,
           ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
           ...(ticktickReader ? { ticktickReader } : {}),
-          shadowPersonas,
+          ledgerPersonas,
           resolvePersonaKey,
           maxDraftCandidates: maxDraft,
         });

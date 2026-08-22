@@ -67,16 +67,38 @@ export interface BuiltTask {
  * task — surfacing every one as a top-level to-do is the same failure, so a lone
  * card still needs top tier.
  */
-export function shouldSync(unit: TaskUnit, nowMs?: number): boolean {
-  const tier = unit.plan?.tier;
-  if (tier !== "A" && tier !== "B") return false;
-  if (!unit.grouped && tier !== "A") return false;
+// The LEDGER is the list's source now (specs/person-first-consolidation.md §7
+// phase 4), so card units render only for the two jobs the ledger cannot do:
+//
+//   EXECUTABLE — a tickable invite or tool line (calendar with every attendee
+//   resolved, or a tool card). The line IS the action; ticking it executes.
+//
+//   PERSONA-LESS — work from a sender no persona claims (a bank alert, a
+//   vendor notice; spec §6 risk 3). No persona means no ledger entry, so the
+//   card is this work's only path onto the list.
+//
+// The A/B tier gate died with the ranking pass: needs_leo gates ledger rows,
+// and these two card classes are self-selecting.
+export function shouldRenderCardUnit(
+  unit: TaskUnit,
+  isPersonaLess: (unit: TaskUnit) => boolean,
+  nowMs: number,
+): boolean {
   const live = unit.members.filter((m) => m.status !== "executed" && m.status !== "rejected");
   if (live.length === 0) return false;
   // An EVENT that already happened is over. Only when every live member is such
   // an event — a unit that also carries a task or a reply still has work in it.
-  if (nowMs !== undefined && live.every((m) => isPastEvent(m, nowMs))) return false;
-  return true;
+  if (live.every((m) => isPastEvent(m, nowMs))) return false;
+  return live.some(isExecutableAction) || isPersonaLess(unit);
+}
+
+// Mirrors lineFor's actionId branches: those are the lines whose tick executes.
+export function isExecutableAction(a: ActionItem): boolean {
+  if (a.action_type === "tool") return true;
+  if (a.action_type !== "calendar") return false;
+  const p = a.params;
+  const unresolved = [...nonEmails(p.attendees), ...nonEmails(p.attendees_unresolved)];
+  return unresolved.length === 0 && emails(p.attendees).length > 0;
 }
 
 // A DEADLINE in the past is the opposite of finished: unpaid, unsigned, unsent

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dueFields, buildTaskPayload, deadlineFor, shouldSync, wallClockLabel, type TaskUnit } from "./ticktick-plan.js";
+import { dueFields, buildTaskPayload, deadlineFor, shouldRenderCardUnit, isExecutableAction, wallClockLabel, type TaskUnit } from "./ticktick-plan.js";
 import type { ActionItem } from "./action-item.js";
 import type { TaskPlan } from "./tasks.js";
 
@@ -37,70 +37,69 @@ const unit = (over: Partial<TaskUnit> = {}): TaskUnit => ({
   ...over,
 });
 
-describe("shouldSync — keeps the list short", () => {
-  it("syncs a grouped task", () => {
-    expect(shouldSync(unit())).toBe(true);
+// The LEDGER is the list now; a card unit renders only when it is EXECUTABLE
+// (tickable invite/tool line) or PERSONA-LESS (work no ledger can carry). The
+// old A/B tier gate died with the ranking pass.
+describe("shouldRenderCardUnit", () => {
+  const NOW = Date.parse("2026-08-13T12:00:00-05:00");
+  const noPersona = () => true;
+  const hasPersona = () => false;
+
+  const invite = () =>
+    member({
+      action_type: "calendar",
+      params: { start: "2026-08-20T14:00:00-05:00", attendees: ["zech@taiv.tv"] },
+    });
+
+  it("renders an executable unit from a persona sender", () => {
+    expect(shouldRenderCardUnit(unit({ members: [invite()] }), hasPersona, NOW)).toBe(true);
   });
 
-  // Only A and B. At "drop D, keep the rest" the list reached 23 rows — the
-  // 20-40 row list the owner asked not to have.
-  it("keeps only A and B", () => {
-    expect(shouldSync(unit({ plan: plan({ tier: "A" }) }))).toBe(true);
-    expect(shouldSync(unit({ plan: plan({ tier: "B" }) }))).toBe(true);
-    expect(shouldSync(unit({ plan: plan({ tier: "C" }) }))).toBe(false);
-    expect(shouldSync(unit({ plan: plan({ tier: "D" }) }))).toBe(false);
+  it("renders a persona-less task unit", () => {
+    expect(shouldRenderCardUnit(unit({ members: [member({ action_type: "task" })] }), noPersona, NOW)).toBe(true);
   });
 
-  // The ranking pass runs every tick, so an unranked task waits a round rather
-  // than arriving in the list unsorted.
-  it("drops a unit the plan has not ranked", () => {
-    const u = unit();
-    delete (u as { plan?: unknown }).plan;
-    expect(shouldSync(u)).toBe(false);
-  });
-
-  // The 20-40 row list the owner does not want comes from surfacing every
-  // unconsolidated message as its own to-do. Only a top-tier loner gets in.
-  it("drops an ungrouped card unless it is A-tier", () => {
-    expect(shouldSync(unit({ grouped: false, plan: plan({ tier: "B" }) }))).toBe(false);
-    expect(shouldSync(unit({ grouped: false, plan: plan({ tier: "A" }) }))).toBe(true);
+  // Persona senders' plain work belongs to the LEDGER: rendering the card too
+  // would put the same to-do on the list twice, from two sources.
+  it("drops a persona sender's plain task card — the ledger owns it", () => {
+    expect(shouldRenderCardUnit(unit({ members: [member({ action_type: "task" })] }), hasPersona, NOW)).toBe(false);
   });
 
   // An EVENT that already happened is over. This is what made a site visit
   // agreed two weeks earlier reappear at the top of the list every week.
-  const DAY = 24 * 60 * 60 * 1000;
   const at = (iso: string) => member({ action_type: "calendar", params: { start: iso } });
 
   it("drops a unit whose only live members are events that already happened", () => {
-    const u = unit({ members: [at("2026-08-06T14:00:00-05:00")] });
-    expect(shouldSync(u, Date.parse("2026-08-13T12:00:00-05:00"))).toBe(false);
+    expect(shouldRenderCardUnit(unit({ members: [at("2026-08-06T14:00:00-05:00")] }), noPersona, NOW)).toBe(false);
   });
 
   it("keeps an event still to come, and one from earlier today", () => {
-    const now = Date.parse("2026-08-13T12:00:00-05:00");
-    expect(shouldSync(unit({ members: [at("2026-08-20T14:00:00-05:00")] }), now)).toBe(true);
+    expect(shouldRenderCardUnit(unit({ members: [at("2026-08-20T14:00:00-05:00")] }), noPersona, NOW)).toBe(true);
     // Within the day of grace: params.start is a wall clock whose zone lives in
     // params.tz, so same-day parsing is only accurate to within a day.
-    expect(shouldSync(unit({ members: [at("2026-08-13T09:00:00-05:00")] }), now)).toBe(true);
+    expect(shouldRenderCardUnit(unit({ members: [at("2026-08-13T09:00:00-05:00")] }), noPersona, NOW)).toBe(true);
   });
 
-  // A DEADLINE that slipped is the opposite of finished — unpaid work is more
-  // urgent once its date passes, not less.
-  it("keeps a task whose deadline passed", () => {
-    const u = unit({
-      plan: plan({ entities: [{ kind: "deadline", label: "付款", value: "2026-08-01" }] }),
-      members: [member({ action_type: "task" })],
-    });
-    expect(shouldSync(u, Date.parse("2026-08-13T12:00:00-05:00"))).toBe(true);
+  it("drops a unit whose members are all finished", () => {
+    expect(shouldRenderCardUnit(unit({ members: [member({ status: "executed" })] }), noPersona, NOW)).toBe(false);
   });
+});
 
-  it("keeps a unit that also holds non-event work", () => {
-    const u = unit({ members: [at("2026-08-06T14:00:00-05:00"), member({ action_type: "task" })] });
-    expect(shouldSync(u, Date.parse("2026-08-13T12:00:00-05:00"))).toBe(true);
+// Mirrors lineFor's actionId branches: the lines whose tick executes.
+describe("isExecutableAction", () => {
+  it("calendar with every attendee resolved is executable", () => {
+    expect(isExecutableAction(member({ action_type: "calendar", params: { attendees: ["a@x.com"] } }))).toBe(true);
   });
-
-  it("drops a task whose members are all finished", () => {
-    expect(shouldSync(unit({ members: [member({ status: "executed" })] }))).toBe(false);
+  it("ASK-not-GUESS: an unresolved attendee kills executability", () => {
+    expect(
+      isExecutableAction(member({ action_type: "calendar", params: { attendees: ["a@x.com"], attendees_unresolved: ["王工"] } })),
+    ).toBe(false);
+  });
+  it("attendee-less calendar is auto-created, not a step", () => {
+    expect(isExecutableAction(member({ action_type: "calendar", params: {} }))).toBe(false);
+  });
+  it("tool cards are executable", () => {
+    expect(isExecutableAction(member({ action_type: "tool", params: {} }))).toBe(true);
   });
 });
 

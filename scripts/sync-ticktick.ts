@@ -15,8 +15,13 @@ import { effectiveToolSpecs } from "../relay/io/tools.js";
 import { mcpAuthServiceFor } from "../relay/io/mcp-tool.js";
 import { createTickTickWriter } from "../relay/io/ticktick-mcp.js";
 import { loadSyncMap, saveSyncMap, syncPathFor } from "../relay/io/ticktick-sync-store.js";
-import { syncToTickTick, taskUnitsFrom } from "../relay/proc/ticktick-sync.js";
-import { buildTaskPayload, shouldSync } from "../relay/core/ticktick-plan.js";
+import { syncToTickTick, cardRows } from "../relay/proc/ticktick-sync.js";
+import { deriveLedgerTasks } from "../relay/core/ledger-list.js";
+import { loadPersonas } from "../relay/io/personas.js";
+import { buildPersonaResolver } from "../relay/proc/draft.js";
+import { readPersonaV3File } from "../relay/io/persona-store.js";
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import { diffTickTickSync, summarize } from "../relay/core/ticktick-sync.js";
 import { loadSettings, machineTimeZone } from "../relay/io/settings.js";
 
@@ -30,12 +35,38 @@ const zone = loadSettings(statePath).timezone || machineTimeZone();
 const state = loadState(statePath);
 const map = loadSyncMap(statePath);
 
-const units = taskUnitsFrom(state);
-const eligible = units.filter((u) => shouldSync(u, Date.now()));
-console.log(`open task units: ${units.length}  →  eligible to sync: ${eligible.length}`);
+// Same assembly as the daemon's PHASE 6b: the ledger is the list, cards add
+// only executable and persona-less rows.
+const personaDir = "personas";
+const nowMs = Date.now();
+const ledgerPersonas = readdirSync(personaDir)
+  .filter((f) => f.endsWith(".yaml"))
+  .flatMap((f) => {
+    try {
+      const p = readPersonaV3File(join(personaDir, f));
+      return [{
+        key: p.key,
+        ...(p.display_name ? { display_name: p.display_name } : {}),
+        ...(p.commitments ? { commitments: p.commitments } : {}),
+      }];
+    } catch {
+      return [];
+    }
+  });
+const { resolve } = buildPersonaResolver(loadPersonas(personaDir));
+const rows = [
+  ...deriveLedgerTasks(ledgerPersonas, zone, nowMs).map((d) => ({ ...d, executable: [] })),
+  ...cardRows(state, zone, nowMs, (unit) =>
+    unit.members.every((m) => {
+      const h = m.context?.sender_handle;
+      return !h || resolve(h) === null;
+    }),
+  ),
+];
+console.log(`desired rows: ${rows.length} (ledger + executable/persona-less cards)`);
 console.log(`sync map: ${Object.keys(map).length} already tracked (${syncPathFor(statePath)})`);
 
-const desired = eligible.map((u) => ({ unitKey: u.unitKey, payload: buildTaskPayload(u, zone).payload }));
+const desired = rows.map((r) => ({ unitKey: r.unitKey, payload: r.payload }));
 const counts = summarize(diffTickTickSync(desired, map));
 console.log(
   `\nwould: create ${counts.create}  update ${counts.update}  complete ${counts.complete}  skip ${counts.skip}`,
@@ -43,8 +74,8 @@ console.log(
 
 if (dryRun) {
   console.log("\n--- the first few tasks as TickTick would get them ---");
-  for (const u of eligible.slice(0, 5)) {
-    const p = buildTaskPayload(u, zone).payload;
+  for (const r of rows.slice(0, 5)) {
+    const p = r.payload;
     console.log(`\n[priority ${p.priority}] ${p.title}`);
     if (p.dueDate) console.log(`  due: ${p.dueDate}`);
     for (const i of p.items ?? []) console.log(`  ☐ ${i.title}`);
@@ -66,7 +97,7 @@ const writer = createTickTickWriter({
   ...(cfg.project ? { project: cfg.project } : {}),
 });
 
-const { map: next, report } = await syncToTickTick(state, map, writer, zone);
+const { map: next, report } = await syncToTickTick(rows, map, writer);
 saveSyncMap(statePath, next);
 console.log(
   `\ncreated ${report.created}, updated ${report.updated}, completed ${report.completed}, ` +

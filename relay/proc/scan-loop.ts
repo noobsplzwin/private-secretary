@@ -37,14 +37,10 @@ import {
   redundantPendingCalendarIds,
 } from "../core/action-item.js";
 import { draftActions, type DraftDeps } from "./draft.js";
-import { consolidateTasks, type ConsolidateDeps } from "./consolidate.js";
-import { refreshOpenTasks, type RefreshDeps } from "./refresh.js";
 import { clusterKey, unitKey, inheritSupersededTaskIds } from "../core/unit-key.js";
-import { rankTasks, type PlanDeps } from "./plan.js";
-import { syncToTickTick, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
-import { shouldSync } from "../core/ticktick-plan.js";
-import { deriveShadowList, diffShadow } from "../core/shadow-list.js";
-import { stabilizePlans } from "../core/plan-stability.js";
+import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
+import type { TaskUnit } from "../core/ticktick-plan.js";
+import { deriveLedgerTasks } from "../core/ledger-list.js";
 import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
@@ -95,24 +91,22 @@ export interface ScanLoopOptions {
   // cards that are the same real-world task under a shared task_id (cross-sender).
   // Absent = no consolidation (each card stays its own cluster). See
   // specs/task-consolidation.md (Stage 1).
-  consolidate?: ConsolidateDeps;
+
   // When provided, a task-refresh pass runs after consolidation: re-reads the
   // full thread for conversations that already have an open card and re-decides
   // the card (updates it, or emits a calendar action when a meeting was agreed).
   // See specs/task-consolidation.md (Stage 2).
-  refresh?: RefreshDeps;
   // When provided, a daily-plan pass runs after refresh: ranks all open task
   // units A→D with a "why now" + entities, stored in loop-state.plans. See
   // specs/daily-todo.md.
-  plan?: PlanDeps;
   // When provided, the ranked to-do list is pushed into TickTick after the plan
   // pass (specs/ticktick-migration.md). Absent = no sync, and the cockpit stays
   // the only surface.
   ticktickWriter?: TickTickWriter;
   /** Read side: completions the owner ticked off in TickTick (PHASE 6a). */
   ticktickReader?: TickTickReader;
-  /** Personas WITH their commitment ledgers, for the shadow list (PHASE 6c). */
-  shadowPersonas?: () => ReadonlyArray<{ key: string; commitments?: Commitment[] }>;
+  /** Personas WITH their commitment ledgers — the LIST's source (PHASE 6b). */
+  ledgerPersonas?: () => ReadonlyArray<{ key: string; display_name?: string; commitments?: Commitment[] }>;
   /** Owner's IANA zone for TickTick due dates / time labels. */
   ownerTimeZone?: string;
   // When provided, a persona-update pass runs after planning: extracts NEW
@@ -819,204 +813,12 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     );
   }
 
-  // ── PHASE 4 (UNLOCKED LLM, then brief commit): task consolidation. Group open
-  // cards that are the same real-world task under a shared task_id (cross-sender)
-  // so the cockpit shows one cluster instead of N standalone cards. Runs when
-  // new cards were drafted this tick, or — for cards left ungrouped from earlier
-  // ticks — at most once per idle window. Non-fatal: a failure records
-  // llm:consolidate and leaves cards as-is.
-  if (!opts.dryRun && opts.consolidate) {
-    const snapshot = loadState(opts.statePath);
-    const open = snapshot.actions.filter(
-      (a) => a.status === "suggested" || a.status === "approved",
-    );
-    const ungrouped = open.filter((a) => !a.task_id).length;
-    const shouldRun =
-      open.length >= 2 &&
-      (draftedCount > 0 ||
-        (ungrouped >= 2 && startedAtMs - lastConsolidateMs > CONSOLIDATE_IDLE_MS));
-    if (shouldRun) {
-      lastConsolidateMs = startedAtMs;
-      try {
-        console.log(`[progress] consolidating ${open.length} open card(s)…`);
-        const { updatedActions, registryAdditions } = await consolidateTasks(
-          open,
-          snapshot.tasks,
-          opts.consolidate,
-        );
-        const hasWork =
-          updatedActions.length > 0 || Object.keys(registryAdditions).length > 0;
-        if (hasWork) {
-          const taskById = new Map(updatedActions.map((a) => [a.id, a.task_id]));
-          await commitUnderLock((fresh) => {
-            fresh.tasks = { ...fresh.tasks, ...registryAdditions };
-            // Patch ONLY task_id on still-present actions, so a concurrent
-            // cockpit approve/edit isn't clobbered.
-            fresh.actions = fresh.actions.map((a) =>
-              taskById.has(a.id) ? { ...a, task_id: taskById.get(a.id) } : a,
-            );
-            delete fresh.sourceErrors["llm:consolidate"];
-          });
-        }
-      } catch (e) {
-        // LOUD. This used to go only into sourceErrors, so a consolidation that
-        // stopped working left no trace an operator would ever see: two full
-        // re-runs were spent concluding a grouping rule "did not work" when the
-        // pass had timed out before reading it.
-        console.error(`[consolidate] FAILED, groupings left as-is: ${errString(e)}`);
-        await commitUnderLock((fresh) => {
-          fresh.sourceErrors["llm:consolidate"] = {
-            message: errString(e),
-            at: new Date(startedAtMs).toISOString(),
-          };
-        }).catch(() => undefined);
-      }
-    }
-  }
-
-  // ── PHASE 5 (UNLOCKED LLM, then brief commit): task refresh. Re-read the full
-  // thread for conversations that already have an open card and re-decide the
-  // card — keeps it current as the conversation evolves and emits a calendar
-  // action when a meeting was agreed. TTL- and per-tick-capped inside the pass.
-  // Self-healing sweep: clear duplicate pending calendar cards left on disk by
-  // the version that had no pending-redundancy check. Runs every round and is a
-  // no-op once clean, so an upgraded machine tidies itself instead of asking
-  // the user to delete six cards by hand.
-  if (!opts.dryRun) {
-    let swept = 0;
-    const sweptOk = await commitUnderLock((fresh) => {
-      const doomed = new Set(redundantPendingCalendarIds(fresh.actions));
-      if (doomed.size === 0) return;
-      fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
-      swept = doomed.size;
-    });
-    if (sweptOk && swept > 0) {
-      logActivity("supersede", `cleared ${swept} duplicate pending calendar card(s)`, {
-        phase: "dedupe",
-        dropped: swept,
-      });
-    }
-  }
-
-  // Supersedes the stale suggested card(s) for each refreshed conversation.
-  if (!opts.dryRun && opts.refresh) {
-    const snapshot = loadState(opts.statePath);
-    // SUGGESTED ONLY. `approved` used to be included, and that is where the
-    // duplicate cards came from: refresh re-drafts a conversation and emits a
-    // fresh suggested card, but its supersede below only drops cards that are
-    // still `suggested` — a user-touched card must never vanish. So an APPROVED
-    // card stayed put, the refresh landed beside it, and both eventually
-    // executed. That is the Rockchip 补丁简报 / First Friday Retro pair: one
-    // gmail message, two cards hours apart, both executed.
-    //
-    // Refresh exists to update a card the owner has NOT decided yet. Once he
-    // approves one its content is committed — it may be mid-execution or
-    // waiting for a manual WeChat paste — so re-drafting produces a RIVAL card
-    // rather than an update.
-    //
-    // Given up deliberately: a thread that moves AFTER approval no longer
-    // re-surfaces here. That loss is small, because a real new development
-    // arrives as a new INBOUND message and drafting handles those; refresh is
-    // only for re-reading a thread that nothing new arrived on.
-    const open = snapshot.actions.filter((a) => a.status === "suggested");
-    if (open.length > 0) {
-      try {
-        console.log(`[progress] refreshing open conversations…`);
-        const { refreshedKeys, newActions } = await refreshOpenTasks(open, opts.refresh);
-        if (refreshedKeys.length > 0 || newActions.length > 0) {
-          const keys = new Set(refreshedKeys);
-          let refreshDropped = 0;
-          let refreshBookedFiltered = 0;
-          const refreshCommitted = await commitUnderLock((fresh) => {
-            // Drop the stale still-suggested card(s) in each refreshed
-            // conversation; user-touched cards (not "suggested") are kept.
-            // Same exemption as phase 3: a suggested calendar with a concrete
-            // params.start is a commitment and survives the refresh supersede
-            // (the refreshed cards land alongside it; the user skips one).
-            const dropped = fresh.actions.filter((a) => {
-              if (a.status !== "suggested") return false;
-              if (isSupersedeExempt(a)) return false;
-              const k = clusterKey(a);
-              return !!(k && keys.has(k));
-            });
-            const doomed = new Set(dropped.map((a) => a.id));
-            fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
-            // Same already-booked check as phase 3: refresh kept re-emitting
-            // calendar cards for a meeting that was ALREADY executed, and each
-            // approval created another real event (2026-08-02: six duplicate
-            // Q3 预算评审会 bookings). Filter BEFORE the cards land.
-            const toAdd = newActions.filter((a) => !isCalendarRedundant(a, fresh.actions));
-            refreshBookedFiltered = newActions.length - toAdd.length;
-            // P1: the refresh already carries the rep's task_id, but inherit
-            // from ANY dropped card too — the rep may have been ungrouped
-            // while a sibling in the same conversation held the task_id.
-            fresh.actions.push(...inheritSupersededTaskIds(toAdd, dropped));
-            delete fresh.sourceErrors["llm:refresh"];
-            refreshDropped = dropped.length;
-          });
-          if (refreshCommitted && (refreshDropped > 0 || refreshBookedFiltered > 0)) {
-            logActivity(
-              "supersede",
-              `refresh superseded ${refreshDropped} stale suggested card(s), added ${newActions.length - refreshBookedFiltered}${refreshBookedFiltered > 0 ? `, ${refreshBookedFiltered} already-booked filtered` : ""}`,
-              { phase: "refresh", dropped: refreshDropped, added: newActions.length - refreshBookedFiltered, bookedFiltered: refreshBookedFiltered },
-            );
-          }
-        }
-      } catch (e) {
-        await commitUnderLock((fresh) => {
-          fresh.sourceErrors["llm:refresh"] = {
-            message: errString(e),
-            at: new Date(startedAtMs).toISOString(),
-          };
-        }).catch(() => undefined);
-      }
-    }
-  }
-
-  // ── PHASE 6 (UNLOCKED LLM, then brief commit): daily plan. Rank ALL open task
-  // units A→D with a "why now" + entities → loop-state.plans (replaced wholesale
-  // since ranking is global). Runs when new cards were drafted, else once per the
-  // idle window. Non-fatal (records llm:plan).
-  if (!opts.dryRun && opts.plan) {
-    const snapshot = loadState(opts.statePath);
-    const open = snapshot.actions.filter(
-      (a) => a.status === "suggested" || a.status === "approved",
-    );
-    // Ranking a 1-2 card queue is pointless (the "Today plan" only helps with a
-    // few competing items) and it's a global claude -p each idle window — so gate
-    // on >=3 open cards to stop the periodic heavy idle tick.
-    const shouldRun = open.length >= 3 && (draftedCount > 0 || startedAtMs - lastPlanMs > PLAN_IDLE_MS);
-    if (shouldRun) {
-      lastPlanMs = startedAtMs;
-      try {
-        console.log(`[progress] ranking ${open.length} open card(s)…`);
-        const plans = await rankTasks(open, snapshot.tasks, opts.plan);
-        if (Object.keys(plans).length > 0) {
-          // Wholesale replacement made the list flap: a borderline B one tick,
-          // C the next, entering and leaving TickTick every half hour (26 of 38
-          // overnight snapshot pairs differed). Hysteresis: demotion off the
-          // list needs two consecutive votes; a live unit the ranking omitted
-          // keeps its plan. Promotions apply immediately.
-          const liveKeys = new Set<string>();
-          for (const a of open) {
-            if (a.task_id) liveKeys.add(a.task_id);
-            liveKeys.add(unitKey(a));
-          }
-          await commitUnderLock((fresh) => {
-            fresh.plans = stabilizePlans(plans, fresh.plans ?? {}, liveKeys);
-            delete fresh.sourceErrors["llm:plan"];
-          });
-        }
-      } catch (e) {
-        await commitUnderLock((fresh) => {
-          fresh.sourceErrors["llm:plan"] = {
-            message: errString(e),
-            at: new Date(startedAtMs).toISOString(),
-          };
-        }).catch(() => undefined);
-      }
-    }
-  }
+  // PHASES 4–6 (consolidate / refresh / plan) are RETIRED — spec §7 phase 5.
+  // The list derives from the commitment ledger now, so nothing groups cards
+  // into tasks, re-reads threads per card, or ranks units into tiers. Between
+  // them the three passes were ~90% of the LLM bill, and every list-quality
+  // failure the owner struck (umbrella merges, resurrected cards, flapping
+  // tiers) lived in this stretch of the file.
 
   // ── PHASE 6a (UNLOCKED, no LLM): pull completions BACK from TickTick.
   //
@@ -1062,33 +864,6 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   }
 
-  // ── PHASE 6c (UNLOCKED, no LLM, no writes to state): the SHADOW list.
-  // Phase 3 of specs/person-first-consolidation.md: derive a list from the
-  // commitment ledger (who=me ∧ open), diff it against what the real pipeline
-  // is about to sync, and append one JSONL row. Nothing reads this file yet —
-  // the diff IS the deliverable, measuring ledger coverage before anything
-  // switches over. Runs whenever personas are available; never fatal.
-  if (!opts.dryRun && opts.shadowPersonas) {
-    try {
-      const snapshot = loadState(opts.statePath);
-      const shadow = deriveShadowList(opts.shadowPersonas());
-      const nowMs = Date.now();
-      const real = taskUnitsFrom(snapshot)
-        .filter((u) => shouldSync(u, nowMs))
-        .map((u) => u.title);
-      const diff = diffShadow(new Date().toISOString(), shadow, real);
-      appendFileSync(
-        join(dirname(opts.statePath), "shadow-list.jsonl"),
-        JSON.stringify(diff) + "\n",
-      );
-      console.log(
-        `[shadow] ${shadow.length} derived | ${real.length} real | matched ${diff.matched.length}, real-only ${diff.realOnly.length}, shadow-only ${diff.shadowOnly.length}`,
-      );
-    } catch (e) {
-      console.error(`[shadow] FAILED (non-fatal): ${errString(e)}`);
-    }
-  }
-
   // ── PHASE 6b (UNLOCKED, no LLM): push the ranked to-do list into TickTick.
   // Runs AFTER planning because the tier it writes as the TickTick priority is
   // what planning just computed. No LLM call, so it is cheap enough to run every
@@ -1098,12 +873,25 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   if (!opts.dryRun && opts.ticktickWriter) {
     try {
       const snapshot = loadState(opts.statePath);
-      const { map, report } = await syncToTickTick(
-        snapshot,
-        loadSyncMap(opts.statePath),
-        opts.ticktickWriter,
-        opts.ownerTimeZone ?? machineTimeZone(),
-      );
+      const zone = opts.ownerTimeZone ?? machineTimeZone();
+      const nowMs = Date.now();
+      // THE LIST IS THE LEDGER (spec §7 phase 4): rows derive from open who=me
+      // commitments the assess pass judged needs_leo. Cards contribute only what
+      // the ledger cannot: executable invite/tool lines, and persona-less work.
+      const ledger = opts.ledgerPersonas ? deriveLedgerTasks(opts.ledgerPersonas(), zone, nowMs) : [];
+      const personaLess = (unit: TaskUnit): boolean =>
+        opts.resolvePersonaKey
+          ? unit.members.every((m) => {
+              const h = m.context?.sender_handle;
+              return !h || opts.resolvePersonaKey!(h) === null;
+            })
+          : false;
+      const rows = [
+        ...ledger.map((d) => ({ ...d, executable: [] })),
+        ...cardRows(snapshot, zone, nowMs, personaLess),
+      ];
+      console.log(`[ticktick] desired: ${ledger.length} ledger row(s) + ${rows.length - ledger.length} card row(s)`);
+      const { map, report } = await syncToTickTick(rows, loadSyncMap(opts.statePath), opts.ticktickWriter);
       saveSyncMap(opts.statePath, map);
       if (report.created || report.updated || report.completed || report.failed) {
         appendActivity(activityPathFor(opts.statePath), {

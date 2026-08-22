@@ -59,6 +59,11 @@ export function diffTickTickReadback(
   const doneUnitKeys: string[] = [];
 
   for (const [unitKey, rec] of Object.entries(map)) {
+    // A tombstone is a task WE completed and chose to remember (the duplicate-
+    // mint fix). It is never in the active list, so without this skip every
+    // tombstone would read as "the owner finished it" on every tick — and worse,
+    // the caller would drop it from the map, silently defeating the reopen match.
+    if (rec.done) continue;
     const task = active.get(rec.ticktickId);
     if (!task) {
       doneUnitKeys.push(unitKey);

@@ -56,6 +56,11 @@ export interface Commitment {
   status: CommitmentStatus;
   source_message_id?: string;
   assessment?: CommitmentAssessment;
+  // §7b commitment chains: entries sharing a matter_id are links of ONE
+  // real-world matter ("每个commitment其实都可以通过线连接起来"). The derived
+  // list shows a matter at most once — its active who=me link — and a matter
+  // whose open links all sit with others shows nothing while staying tracked.
+  matter_id?: string;
 }
 
 // v3.1 (specs/persona-v3.md §7): a human-stated behavioral correction. Always
@@ -418,6 +423,8 @@ export function validatePersonaV3(
       if (a.blocked_on !== undefined && !BLOCKED_ONS.includes(a.blocked_on))
         errors.push(`commitments[${i}].assessment.blocked_on must be ${BLOCKED_ONS.join("|")}`);
     }
+    if (c.matter_id !== undefined && (typeof c.matter_id !== "string" || c.matter_id.trim() === ""))
+      errors.push(`commitments[${i}].matter_id must be a non-empty string`);
   });
 
   (p.corrections ?? []).forEach((c, i) => {

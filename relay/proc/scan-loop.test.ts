@@ -527,138 +527,9 @@ describe("runScanTick", () => {
     expect(saved.actions[0]!.context?.sender_name).toBeUndefined();
   });
 
-  it("consolidate dep: groups two ungrouped open cards under one shared task_id", async () => {
-    const mk = (id: string) => ({
-      id, source_message_id: `wechat:${id}`, action_type: "task" as const,
-      target: {}, reason: "r", confidence: 0.5, params: {}, status: "suggested" as const,
-      created_at: "2026-06-23T00:00:00Z",
-    });
-    writeFileSync(statePath, JSON.stringify({
-      version: 2, marks: {}, actions: [mk("a"), mk("b")], outcomes: [], sourceErrors: {}, tasks: {},
-    }));
-    const consolidate = {
-      json: async () => ({
-        assignments: [
-          { card_id: "a", task_title: "ZF suspension visit" },
-          { card_id: "b", task_title: "ZF suspension visit" },
-        ],
-      }),
-      now: () => "2026-06-23T12:00:00Z",
-    };
-    await runScanTick({ statePath, sources: [], consolidate });
-    const saved = loadState(statePath);
-    const ids = saved.actions.map((a) => a.task_id);
-    expect(ids[0]).toBeTruthy();
-    expect(ids[0]).toBe(ids[1]); // both cards now share one task
-    expect(Object.keys(saved.tasks)).toHaveLength(1);
-    expect(saved.tasks[ids[0]!]!.title).toBe("ZF suspension visit");
-  });
 
-  it("refresh dep: re-reads a resolved thread → supersedes the stale card with a calendar action", async () => {
-    writeFileSync(statePath, JSON.stringify({
-      version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
-      actions: [{
-        id: "m1", source_message_id: "wechat:m1", action_type: "reply",
-        target: { platform: "wechat", personaKey: null }, reason: "ask to schedule",
-        confidence: 0.5, params: {}, status: "suggested", created_at: "2026-06-23T00:00:00Z",
-        draft: "麻烦张工帮忙约一下", context: { sender_handle: "张工" },
-      }],
-    }));
-    const refresh = {
-      llm: async () => [{
-        action_type: "calendar" as const, reason: "thread agreed Wed 9:30", confidence: 0.8,
-        params: { title: "实车测试 @安亭", start: "2026-06-24T09:30:00+08:00", end: "2026-06-24T11:00:00+08:00" },
-        headline: "实车测试 周三 9:30", summary: "时间已定", next_actions: [],
-      }],
-      resolvePersona: () => null,
-      fetchThread: async () => ({ text: "me: 时间定了告诉我\n张工: 周三九点半" }),
-      now: () => "2026-06-23T12:00:00Z",
-    };
-    await runScanTick({ statePath, sources: [], refresh });
-    const saved = loadState(statePath);
-    expect(saved.actions.find((a) => a.id === "m1")).toBeUndefined(); // stale card superseded
-    const cal = saved.actions.find((a) => a.action_type === "calendar");
-    expect(cal).toBeDefined();
-    expect(cal!.params.title).toBe("实车测试 @安亭");
-    expect(cal!.context?.sender_handle).toBe("张工"); // same conversation
-  });
 
-  it("refresh: a calendar action for an ALREADY-EXECUTED meeting is filtered (no double-book)", async () => {
-    // The 2026-08-02 incident: refresh kept re-emitting a booked meeting and
-    // each approval created another real event. Phase 5 now applies the same
-    // booked check phase 3 always had.
-    writeFileSync(statePath, JSON.stringify({
-      version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
-      actions: [
-        {
-          id: "done-cal", source_message_id: "wechat:m1", action_type: "calendar",
-          target: {}, reason: "booked", confidence: 0.9,
-          params: { title: "Q3 评审", start: "2026-06-24T09:30:00+08:00",
-            execution_receipt: { kind: "calendar_event", ref: "evt1", at: "t" } },
-          status: "executed", created_at: "2026-06-23T00:00:00Z",
-          context: { sender_handle: "张工" },
-        },
-        {
-          id: "m1", source_message_id: "wechat:m1", action_type: "reply",
-          target: { platform: "wechat", personaKey: null }, reason: "ask to schedule",
-          confidence: 0.5, params: {}, status: "suggested", created_at: "2026-06-23T00:00:00Z",
-          draft: "麻烦张工帮忙约一下", context: { sender_handle: "张工" },
-        },
-      ],
-    }));
-    const refresh = {
-      llm: async () => [{
-        action_type: "calendar" as const, reason: "thread re-mentions the meeting", confidence: 0.8,
-        params: { title: "Q3 评审", start: "2026-06-24T09:30:00+08:00", end: "2026-06-24T11:00:00+08:00" },
-        headline: "Q3 评审", summary: "已定", next_actions: [],
-      }],
-      resolvePersona: () => null,
-      fetchThread: async () => ({ text: "me: 周三九点半见\n张工: 好" }),
-      now: () => "2026-06-23T12:00:00Z",
-    };
-    await runScanTick({ statePath, sources: [], refresh });
-    const saved = loadState(statePath);
-    expect(
-      saved.actions.filter((a) => a.action_type === "calendar" && a.status === "suggested"),
-    ).toHaveLength(0); // no duplicate card for the booked meeting
-    expect(saved.actions.find((a) => a.id === "done-cal")!.status).toBe("executed");
-  });
 
-  // REGRESSION: refresh used to take `approved` cards as input too. Its own
-  // supersede only drops cards that are still `suggested` (a user-touched card
-  // must never vanish), so an APPROVED card stayed put and the refreshed card
-  // landed beside it — one gmail message, two cards, both eventually executed
-  // (the Rockchip 补丁简报 / First Friday Retro pair).
-  it("refresh: an APPROVED card is not re-drafted into a rival card", async () => {
-    writeFileSync(statePath, JSON.stringify({
-      version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
-      actions: [
-        {
-          id: "approved-1", source_message_id: "wechat:m1", action_type: "reply",
-          target: { platform: "wechat", personaKey: null }, reason: "owner already said yes",
-          confidence: 0.9, params: {}, status: "approved",
-          created_at: "2026-06-23T00:00:00Z", draft: "好的，我明天发你",
-          context: { sender_handle: "张工" },
-        },
-      ],
-    }));
-    let refreshedCards = 0;
-    const refresh = {
-      llm: async () => [{
-        action_type: "task" as const, reason: "thread moved", confidence: 0.8,
-        params: { title: "回张工" }, headline: "回张工", summary: "s", next_actions: [],
-      }],
-      resolvePersona: () => null,
-      fetchThread: async () => { refreshedCards++; return { text: "张工: 还在等" }; },
-      now: () => "2026-06-23T12:00:00Z",
-    };
-    await runScanTick({ statePath, sources: [], refresh });
-    const saved = loadState(statePath);
-    // the approved card is untouched and NOTHING was drafted beside it
-    expect(refreshedCards).toBe(0);
-    expect(saved.actions).toHaveLength(1);
-    expect(saved.actions[0]!.status).toBe("approved");
-  });
 
   it("Gmail: a real email NOT addressed to Leo still reaches drafting (LLM judges); noreply stays filtered", async () => {
     const slack = slackStub([], {});
@@ -967,38 +838,6 @@ describe("runScanTick", () => {
     expect(after[0]!.action_type).toBe("task");
   });
 
-  it("supersede-keep-calendar: phase-5 refresh also keeps a suggested calendar WITH start (time change → both cards coexist)", async () => {
-    writeFileSync(statePath, JSON.stringify({
-      version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
-      actions: [{
-        id: "cal1", source_message_id: "wechat:cal1", action_type: "calendar",
-        target: {}, reason: "周三九点半实车测试", confidence: 0.8,
-        params: { title: "实车测试 @安亭", start: "2026-06-24T09:30:00+08:00", end: "2026-06-24T11:00:00+08:00" },
-        status: "suggested", created_at: "2026-06-23T00:00:00Z",
-        context: { sender_handle: "张工" },
-      }],
-    }));
-    const refresh = {
-      // The thread moved the meeting to 14:00 — the refresh emits the NEW time.
-      llm: async () => [{
-        action_type: "calendar" as const, reason: "时间改到下午两点", confidence: 0.8,
-        params: { title: "实车测试 @安亭", start: "2026-06-24T14:00:00+08:00", end: "2026-06-24T15:30:00+08:00" },
-        headline: "实车测试 周三 14:00", summary: "时间已改", next_actions: [],
-      }],
-      resolvePersona: () => null,
-      fetchThread: async () => ({ text: "me: 时间定了告诉我\n张工: 改到下午两点" }),
-      now: () => "2026-06-23T12:00:00Z",
-      ttlMs: 0, // the module-level TTL map persists across tests in this file
-    };
-    await runScanTick({ statePath, sources: [], refresh });
-    const saved = loadState(statePath);
-    // The documented trade-off: the old-time card survives alongside the new
-    // one — the user picks the right one and skips the other.
-    expect(saved.actions.find((a) => a.id === "cal1")).toBeDefined();
-    const cals = saved.actions.filter((a) => a.action_type === "calendar");
-    expect(cals).toHaveLength(2);
-    expect(cals.map((c) => c.params.start)).toContain("2026-06-24T14:00:00+08:00");
-  });
 
   it("no draft dep: scan-only, zero drafted, no queue rows", async () => {
     const slack = slackStub([{ id: "C1", is_im: true }], {
@@ -1240,5 +1079,61 @@ describe("person-first assessment trigger", () => {
     // Second tick: the same message, already seen -- no new traffic, no call.
     await runScanTick({ ...opts, slackClient: slack() });
     expect(seen).toEqual(["someone"]);
+  });
+});
+
+// PHASE 6b after the switch (spec §7 phase 4): the LIST IS THE LEDGER. Rows
+// derive from open who=me commitments judged needs_leo; cards contribute only
+// executable and persona-less work.
+describe("the list is the ledger", () => {
+  const writerStub = () => {
+    const created: Array<{ title: string }> = [];
+    return {
+      created,
+      writer: {
+        createTask: async (p: { title: string }) => {
+          created.push({ title: p.title });
+          return { id: `tt${created.length}`, projectId: "p", itemIds: [] };
+        },
+        updateTask: async () => ({ itemIds: [] }),
+        completeTasks: async () => {},
+      },
+    };
+  };
+
+  it("renders ledger rows and skips a persona sender's plain cards", async () => {
+    const { created, writer } = writerStub();
+    await runScanTick({
+      statePath,
+      slackClient: slackStub([{ id: "C1", is_im: true }], {
+        C1: [{ ts: "100.0", user: "U2", text: `hi <@${SELF_SLACK}>` }],
+      }),
+      // The drafted card comes from U2, who resolves to a persona — so the
+      // card must NOT render; the ledger row must.
+      draft: {
+        llm: async () => [
+          { action_type: "task", reason: "r", confidence: 0.9, params: { title: "card row" }, headline: "card row" },
+        ],
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+      } as never,
+      resolvePersonaKey: (h) => (h === "U2" ? "zech" : null),
+      ledgerPersonas: () => [
+        {
+          key: "zech",
+          display_name: "Zech Noiseux",
+          commitments: [
+            {
+              who: "me" as const,
+              what: "签署高通 NDA 并回传给李冰",
+              status: "open" as const,
+              assessment: { needs_leo: true, evidence: "q", at: "2026-08-22T00:00:00Z" },
+            },
+          ],
+        },
+      ],
+      ticktickWriter: writer,
+    });
+    expect(created.map((c) => c.title)).toEqual(["签署高通 NDA 并回传给李冰"]);
   });
 });

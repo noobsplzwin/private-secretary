@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readbackFromTickTick, syncToTickTick, taskUnitsFrom, type TickTickWriter } from "./ticktick-sync.js";
+import { readbackFromTickTick, syncToTickTick, cardRows, taskUnitsFrom, type TickTickWriter } from "./ticktick-sync.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { LoopState } from "../io/state.js";
@@ -40,6 +40,12 @@ function writer(over: Partial<TickTickWriter> = {}): TickTickWriter {
     ...over,
   };
 }
+
+
+// Test adapter for the new signature: the old tests exercised the sync straight
+// from a state fixture. Rows are assembled the way PHASE 6b now does, with every
+// unit treated as persona-less so the card fixtures keep rendering.
+const rowsFrom = (st: Parameters<typeof cardRows>[0]) => cardRows(st, "America/Winnipeg", Date.now(), () => true);
 
 describe("taskUnitsFrom", () => {
   it("makes one unit per task cluster, marked grouped", () => {
@@ -102,7 +108,7 @@ describe("syncToTickTick", () => {
 
   it("creates a task it has never synced and records its id", async () => {
     const w = writer();
-    const { map, report } = await syncToTickTick(grouped(), {}, w, "America/Winnipeg");
+    const { map, report } = await syncToTickTick(rowsFrom(grouped()), {}, w);
     expect(w.createTask).toHaveBeenCalledOnce();
     expect(report.created).toBe(1);
     expect(map.T1!.ticktickId).toBe("tt1");
@@ -112,10 +118,10 @@ describe("syncToTickTick", () => {
   // gets rate limited rewriting 40 unchanged tasks every 30 minutes.
   it("makes ZERO calls when nothing changed", async () => {
     const w1 = writer();
-    const { map } = await syncToTickTick(grouped(), {}, w1, "America/Winnipeg");
+    const { map } = await syncToTickTick(rowsFrom(grouped()), {}, w1);
 
     const w2 = writer();
-    const { report } = await syncToTickTick(grouped(), map, w2, "America/Winnipeg");
+    const { report } = await syncToTickTick(rowsFrom(grouped()), map, w2);
     expect(w2.createTask).not.toHaveBeenCalled();
     expect(w2.updateTask).not.toHaveBeenCalled();
     expect(w2.completeTasks).not.toHaveBeenCalled();
@@ -123,12 +129,12 @@ describe("syncToTickTick", () => {
   });
 
   it("updates in place when the plan changed", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
+    const { map } = await syncToTickTick(rowsFrom(grouped()), {}, writer());
     const w = writer();
     // A→B, not A→C: C is no longer synced at all, so a C re-tier is a DE-LIST
     // (completed) rather than the in-place update this test is about.
     const retiered = grouped({ plans: { T1: { tier: "B", rank: 9, why: "缓了", at: "x" } } });
-    const { report } = await syncToTickTick(retiered, map, w, "America/Winnipeg");
+    const { report } = await syncToTickTick(rowsFrom(retiered), map, w);
     expect(w.updateTask).toHaveBeenCalledOnce();
     expect(report.updated).toBe(1);
     expect(w.createTask).not.toHaveBeenCalled(); // NOT a second copy
@@ -138,13 +144,26 @@ describe("syncToTickTick", () => {
   // READ-BACK. The whole point: work finished in TickTick must stop being
   // resurfaced. The owner's OSYX task was done and shipped and its cards stayed
   // open forever, because a card only left `suggested` via a cockpit click.
-  it("read-back marks a gone task's live members done and drops it from the map", () => {
+  it("read-back marks a gone task's live members done and TOMBSTONES it", () => {
     const st = grouped();
     const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h" } };
     const r = readbackFromTickTick(st, map, []); // tt1 no longer active
     expect(r.doneActionIds).toEqual(st.actions.map((a) => a.id));
-    expect(r.map).toEqual({});
+    // Remembered, not dropped: forgetting an owner-finished task is the same
+    // forget that minted calendar twins when the ENGINE finished one.
+    expect(r.map.T1!.done).toBeGreaterThan(0);
     expect(r.unitsClosed).toBe(1);
+  });
+
+  // The other half of the same fix: a tombstone must not read as "the owner
+  // finished it" again on every subsequent tick.
+  it("read-back ignores tombstones instead of re-closing them forever", () => {
+    const st = grouped();
+    const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h", done: 123 } };
+    const r = readbackFromTickTick(st, map, []);
+    expect(r.doneActionIds).toEqual([]);
+    expect(r.unitsClosed).toBe(0);
+    expect(r.map).toEqual(map);
   });
 
   it("read-back leaves an active task alone", () => {
@@ -178,9 +197,9 @@ describe("syncToTickTick", () => {
   });
 
   it("completes a task that is no longer open", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
+    const { map } = await syncToTickTick(rowsFrom(grouped()), {}, writer());
     const w = writer();
-    const { map: after, report } = await syncToTickTick(state(), map, w, "America/Winnipeg");
+    const { map: after, report } = await syncToTickTick(rowsFrom(state()), map, w);
     expect(w.completeTasks).toHaveBeenCalledWith([{ id: "tt1", projectId: "p" }]);
     expect(report.completed).toBe(1);
     // A tombstone, not a deletion: forgetting completed rows is what filled the
@@ -189,11 +208,11 @@ describe("syncToTickTick", () => {
   });
 
   it("reopens a completed task with status:0 instead of creating a twin", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
+    const { map } = await syncToTickTick(rowsFrom(grouped()), {}, writer());
     const w1 = writer();
-    const { map: tombed } = await syncToTickTick(state(), map, w1, "America/Winnipeg"); // completes tt1
+    const { map: tombed } = await syncToTickTick(rowsFrom(state()), map, w1); // completes tt1
     const w2 = writer();
-    await syncToTickTick(grouped(), tombed, w2, "America/Winnipeg"); // …and it comes back
+    await syncToTickTick(rowsFrom(grouped()), tombed, w2); // …and it comes back
     expect(w2.createTask).not.toHaveBeenCalled();
     expect(w2.updateTask).toHaveBeenCalledWith(
       "tt1",
@@ -217,7 +236,7 @@ describe("syncToTickTick", () => {
     const w = writer({
       createTask: vi.fn(async () => ({ id: "tt1", projectId: "p", itemIds: ["i0", "i1"] })),
     });
-    const { map } = await syncToTickTick(s, {}, w, "America/Winnipeg");
+    const { map } = await syncToTickTick(rowsFrom(s), {}, w);
     // slot 1 is the invite line; slot 0 is the plain 订机票 step
     expect(map.T1!.items).toEqual([{ itemId: "i1", actionId: "cal1" }]);
   });
@@ -231,7 +250,7 @@ describe("syncToTickTick", () => {
         throw new Error("429");
       }),
     });
-    const { map, report } = await syncToTickTick(grouped(), {}, w, "America/Winnipeg");
+    const { map, report } = await syncToTickTick(rowsFrom(grouped()), {}, w);
     expect(map.T1).toBeUndefined();
     expect(report.created).toBe(0);
     expect(report.failed).toBe(1);
@@ -253,7 +272,7 @@ describe("syncToTickTick", () => {
         return { id: "tt2", projectId: "p", itemIds: [] };
       }),
     });
-    const { report } = await syncToTickTick(s, {}, w, "America/Winnipeg");
+    const { report } = await syncToTickTick(rowsFrom(s), {}, w);
     expect(report.created).toBe(1);
     expect(report.failed).toBe(1);
   });
@@ -261,28 +280,30 @@ describe("syncToTickTick", () => {
   // A complete that threw must stay in the map, or the task is orphaned:
   // dropped from our records while still sitting open in TickTick.
   it("keeps a failed complete in the map so it retries", async () => {
-    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
+    const { map } = await syncToTickTick(rowsFrom(grouped()), {}, writer());
     const w = writer({
       completeTasks: vi.fn(async () => {
         throw new Error("nope");
       }),
     });
-    const { map: after, report } = await syncToTickTick(state(), map, w, "America/Winnipeg");
+    const { map: after, report } = await syncToTickTick(rowsFrom(state()), map, w);
     expect(after.T1).toBeDefined();
     expect(report.completed).toBe(0);
     expect(report.failed).toBe(1);
   });
 
-  it("does not sync D-tier or ungrouped non-A cards", async () => {
+  // The LEDGER owns a persona sender's plain work now. A card from a known
+  // contact renders only when it carries an executable line — anything else on
+  // the list would be the same to-do twice, from two sources.
+  it("does not sync a persona sender's plain cards — the ledger owns them", async () => {
     const s = state({
       actions: [action({ id: "d1", task_id: "T1" }), action({ id: "loose" })],
-      tasks: { T1: { title: "D task", created_at: "x" } },
-      plans: {
-        T1: { tier: "D", rank: 9, why: "", at: "x" },
-      },
+      tasks: { T1: { title: "some task", created_at: "x" } },
     });
     const w = writer();
-    const { report } = await syncToTickTick(s, {}, w, "America/Winnipeg");
+    const knownPersona = () => false; // every unit resolves to a persona
+    const rows = cardRows(s, "America/Winnipeg", Date.now(), knownPersona);
+    const { report } = await syncToTickTick(rows, {}, w);
     expect(w.createTask).not.toHaveBeenCalled();
     expect(report.created).toBe(0);
   });

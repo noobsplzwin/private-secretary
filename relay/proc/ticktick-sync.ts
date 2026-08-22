@@ -26,7 +26,7 @@ import {
   type SyncOp,
   type SyncResult,
 } from "../core/ticktick-sync.js";
-import { buildTaskPayload, shouldSync, type TaskUnit } from "../core/ticktick-plan.js";
+import { buildTaskPayload, shouldRenderCardUnit, type TaskUnit } from "../core/ticktick-plan.js";
 import { diffTickTickReadback, type RemoteTask } from "../core/ticktick-readback.js";
 import { groupByTask } from "../core/tasks.js";
 import { unitKey, stableHash } from "../core/unit-key.js";
@@ -148,26 +148,42 @@ export function taskUnitsFrom(state: LoopState): TaskUnit[] {
   return units;
 }
 
-export async function syncToTickTick(
+/** A row ready to sync: payload plus which checklist slots are executable. */
+export interface DesiredRow {
+  unitKey: string;
+  payload: TickTickTaskPayload;
+  executable: Array<{ sortOrder: number; actionId: string }>;
+}
+
+/**
+ * The card-derived rows the ledger cannot provide: executable invite/tool
+ * lines, and work from senders no persona claims (shouldRenderCardUnit).
+ */
+export function cardRows(
   state: LoopState,
+  zone: string,
+  nowMs: number,
+  isPersonaLess: (unit: TaskUnit) => boolean,
+): DesiredRow[] {
+  const rows: DesiredRow[] = [];
+  for (const unit of taskUnitsFrom(state)) {
+    if (!shouldRenderCardUnit(unit, isPersonaLess, nowMs)) continue;
+    const built = buildTaskPayload(unit, zone);
+    rows.push({ unitKey: unit.unitKey, payload: built.payload, executable: built.executable });
+  }
+  return rows;
+}
+
+export async function syncToTickTick(
+  // The full desired list this cycle: ledger rows (core/ledger-list.ts) plus
+  // cardRows. Assembled by the caller — this function only diffs and writes.
+  rows: readonly DesiredRow[],
   map: SyncMap,
   writer: TickTickWriter,
-  // The owner's zone, for due dates and the wall-clock labels on calendar
-  // lines. Explicit rather than read here: core cannot reach io/settings, and a
-  // defaulted offset is how a 15:00 call ends up labelled 22:00.
-  zone: string,
 ): Promise<{ map: SyncMap; report: SyncReport }> {
-  const desired: DesiredTask[] = [];
+  const desired: DesiredTask[] = rows.map((r) => ({ unitKey: r.unitKey, payload: r.payload }));
   // itemIds come back positionally, so remember which slots are executable.
-  const executableByUnit = new Map<string, Array<{ sortOrder: number; actionId: string }>>();
-
-  const nowMs = Date.now();
-  for (const unit of taskUnitsFrom(state)) {
-    if (!shouldSync(unit, nowMs)) continue;
-    const built = buildTaskPayload(unit, zone);
-    desired.push({ unitKey: unit.unitKey, payload: built.payload });
-    executableByUnit.set(unit.unitKey, built.executable);
-  }
+  const executableByUnit = new Map(rows.map((r) => [r.unitKey, r.executable]));
 
   const ops = diffTickTickSync(desired, map);
   const results: Record<string, SyncResult> = {};
@@ -272,7 +288,11 @@ export function readbackFromTickTick(
     }
   }
 
+  // Owner-finished units become TOMBSTONES, not deletions: forgetting is what
+  // minted calendar twins. The task may be completed (reopenable) or deleted
+  // (a reopen attempt will fail and fall through to create — acceptable).
+  const nowMs = Date.now();
   const next: SyncMap = {};
-  for (const [k, v] of Object.entries(map)) if (!gone.has(k)) next[k] = v;
+  for (const [k, v] of Object.entries(map)) next[k] = gone.has(k) ? { ...v, done: nowMs } : v;
   return { doneActionIds: [...done], map: next, unitsClosed: gone.size };
 }
