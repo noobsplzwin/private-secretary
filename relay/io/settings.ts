@@ -58,7 +58,7 @@ export function machineTimeZone(): string {
 }
 
 export const DEFAULT_SETTINGS: SecretarySettings = {
-  llm: { mode: "cli", draftModel: "opus" },
+  llm: { mode: "cli", draftModel: "claude-sonnet-5" },
   timezone: "",
   autoUpdate: true,
 };

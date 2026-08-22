@@ -20,7 +20,11 @@ import { extname, join } from "node:path";
 import type { DraftedAction } from "./draft-prompt.js";
 import type { LlmCaller } from "./draft.js";
 
-const DEFAULT_MODEL = "opus";
+// Pinned to the full id, not the "sonnet" alias: an alias silently follows the
+// next Sonnet release, and this engine has been bitten enough by silent
+// changes. Owner's call, 2026-08-22 — Sonnet 5 is ~0.6x Opus 5 on every token
+// class (0.4x while the intro price runs to 2026-08-31).
+const DEFAULT_MODEL = "claude-sonnet-5";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
