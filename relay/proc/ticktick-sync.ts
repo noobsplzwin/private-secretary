@@ -180,12 +180,14 @@ export async function syncToTickTick(
   rows: readonly DesiredRow[],
   map: SyncMap,
   writer: TickTickWriter,
+  // TickTick's live tasks, for orphan reconciliation (see diffTickTickSync).
+  remoteActive?: readonly RemoteTask[],
 ): Promise<{ map: SyncMap; report: SyncReport }> {
   const desired: DesiredTask[] = rows.map((r) => ({ unitKey: r.unitKey, payload: r.payload }));
   // itemIds come back positionally, so remember which slots are executable.
   const executableByUnit = new Map(rows.map((r) => [r.unitKey, r.executable]));
 
-  const ops = diffTickTickSync(desired, map);
+  const ops = diffTickTickSync(desired, map, remoteActive);
   const results: Record<string, SyncResult> = {};
   let failed = 0;
 

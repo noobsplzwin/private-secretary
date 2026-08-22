@@ -17,6 +17,8 @@
 import { stableHash } from "./unit-key.js";
 import type { TickTickTaskPayload } from "./ticktick.js";
 import type { TrackedApproval } from "./ticktick-approval.js";
+import { ENGINE_TAG } from "./ticktick.js";
+import type { RemoteTask } from "./ticktick-readback.js";
 
 export interface SyncRecord {
   ticktickId: string;
@@ -59,7 +61,7 @@ export type SyncOp =
       /** Map key this row was recognised under (adopt/reopen by title). applySyncOps migrates the entry. */
       adoptedFrom?: string;
     }
-  | { kind: "complete"; unitKey: string; ticktickId: string; projectId: string }
+  | { kind: "complete"; unitKey: string; ticktickId: string; projectId: string; title?: string }
   | { kind: "skip"; unitKey: string };
 
 // Content hash of a payload. Keys are sorted so a reordered-but-identical
@@ -87,10 +89,31 @@ function canonical(value: unknown): string {
  * Ops are returned for every unitKey, `skip` included, so a caller can report
  * "40 unchanged, 2 updated" instead of silently doing nothing.
  */
-export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap): SyncOp[] {
+export function diffTickTickSync(
+  desired: readonly DesiredTask[],
+  map: SyncMap,
+  /**
+   * TickTick's live tasks, for ORPHAN reconciliation. The map has lost its
+   * memory three separate ways (a regeneration wiping state, a readback bug
+   * deleting tombstones for an afternoon, a crash between create and save), and
+   * each time the strays either duplicated the list or squatted on it forever.
+   * A live ENGINE-MINTED task (ENGINE_TAG) no map record references is ours:
+   * adopt it when a desired row carries its exact title, complete it otherwise.
+   * The owner's own untagged tasks are never touched.
+   */
+  remoteActive?: readonly RemoteTask[],
+): SyncOp[] {
   const ops: SyncOp[] = [];
   const seen = new Set<string>();
   const desiredKeys = new Set(desired.map((d) => d.unitKey));
+
+  const knownIds = new Set(Object.values(map).map((r) => r.ticktickId));
+  const orphans = (remoteActive ?? []).filter(
+    (t) => t.status === 0 && !knownIds.has(t.id) && (t.tags ?? []).includes(ENGINE_TAG) && t.projectId,
+  );
+  const orphanByTitle = new Map<string, RemoteTask>();
+  for (const t of orphans) if (t.title) orphanByTitle.set(normTitle(t.title), t);
+  const adoptedOrphans = new Set<string>();
 
   // Content indexes, for rows whose KEY moved on. Exact normalized title only —
   // fuzzy matching would silently glue different work together, the same reason
@@ -152,6 +175,13 @@ export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap):
       ops.push({ kind: "update", unitKey, ticktickId: rec.ticktickId, projectId: rec.projectId, payload, reopen: true, adoptedFrom: tombKey });
       continue;
     }
+    const stray = orphanByTitle.get(t);
+    if (stray) {
+      orphanByTitle.delete(t);
+      adoptedOrphans.add(stray.id);
+      ops.push({ kind: "update", unitKey, ticktickId: stray.id, projectId: stray.projectId!, payload });
+      continue;
+    }
     ops.push({ kind: "create", unitKey, payload });
   }
 
@@ -165,6 +195,19 @@ export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap):
       unitKey,
       ticktickId: record.ticktickId,
       projectId: record.projectId,
+    });
+  }
+
+  // Engine-minted strays nothing desired: complete them, and record a tombstone
+  // (title included) so a later re-listing REOPENS this task instead of minting.
+  for (const stray of orphans) {
+    if (adoptedOrphans.has(stray.id)) continue;
+    ops.push({
+      kind: "complete",
+      unitKey: `orphan_${stray.id}`,
+      ticktickId: stray.id,
+      projectId: stray.projectId!,
+      ...(stray.title ? { title: stray.title } : {}),
     });
   }
 
@@ -216,9 +259,12 @@ export function applySyncOps(
     } else if (op.kind === "complete") {
       // Remember, don't forget: deleting here is what minted a fresh TickTick
       // task (and a fresh Google Calendar event) every time a completed row
-      // came back. The tombstone is what reopen matches against.
+      // came back. The tombstone is what reopen matches against. An orphan
+      // complete has no record yet — it gets one, so IT can reopen too.
       const rec = next[op.unitKey];
       if (rec) next[op.unitKey] = { ...rec, done: nowMs };
+      else if (op.title)
+        next[op.unitKey] = { ticktickId: op.ticktickId, projectId: op.projectId, hash: "", title: op.title, done: nowMs };
     }
   }
 

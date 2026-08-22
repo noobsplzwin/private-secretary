@@ -24,6 +24,14 @@ export interface RemoteTask {
   /** 0 active, 2 completed. */
   status: number;
   items?: ReadonlyArray<{ id: string; status: number }>;
+  // For ORPHAN reconciliation (core/ticktick-sync.ts): a live remote task no map
+  // record references. The map has lost its memory three separate ways now — a
+  // regeneration wiping state, the readback deleting tombstones (a same-day bug
+  // that ran for an afternoon), a crash between create and save — so the sync
+  // must be able to recognise its own strays by looking at TickTick itself.
+  projectId?: string;
+  title?: string;
+  tags?: readonly string[];
 }
 
 export interface ReadbackResult {

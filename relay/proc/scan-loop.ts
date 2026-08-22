@@ -943,7 +943,12 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         ...cardRows(snapshot, zone, nowMs, personaLess),
       ];
       console.log(`[ticktick] desired: ${ledger.length} ledger row(s) + ${rows.length - ledger.length} card row(s)`);
-      const { map, report } = await syncToTickTick(rows, loadSyncMap(opts.statePath), opts.ticktickWriter);
+      // Live remote list for orphan reconciliation — non-fatal: without it the
+      // sync still works, it just cannot see its own strays this tick.
+      const remoteActive = opts.ticktickReader
+        ? await opts.ticktickReader.listActive().catch(() => undefined)
+        : undefined;
+      const { map, report } = await syncToTickTick(rows, loadSyncMap(opts.statePath), opts.ticktickWriter, remoteActive);
       saveSyncMap(opts.statePath, map);
       if (report.created || report.updated || report.completed || report.failed) {
         appendActivity(activityPathFor(opts.statePath), {

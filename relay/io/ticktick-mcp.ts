@@ -126,7 +126,7 @@ export function createTickTickReader(opts: TickTickToolOptions): TickTickReader 
       const raw = callResultObject(res).tasks;
       if (!Array.isArray(raw)) return [];
       return raw.flatMap((t) => {
-        const o = t as { id?: unknown; status?: unknown; items?: unknown };
+        const o = t as { id?: unknown; status?: unknown; items?: unknown; projectId?: unknown; title?: unknown; tags?: unknown };
         if (typeof o.id !== "string") return [];
         const items = Array.isArray(o.items)
           ? o.items.flatMap((i) => {
@@ -136,7 +136,14 @@ export function createTickTickReader(opts: TickTickToolOptions): TickTickReader 
                 : [];
             })
           : [];
-        return [{ id: o.id, status: typeof o.status === "number" ? o.status : 0, items }];
+        return [{
+          id: o.id,
+          status: typeof o.status === "number" ? o.status : 0,
+          items,
+          ...(typeof o.projectId === "string" ? { projectId: o.projectId } : {}),
+          ...(typeof o.title === "string" ? { title: o.title } : {}),
+          ...(Array.isArray(o.tags) ? { tags: o.tags.filter((x): x is string => typeof x === "string") } : {}),
+        }];
       });
     },
   };

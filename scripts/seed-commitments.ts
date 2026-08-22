@@ -26,7 +26,10 @@ if (!who && !allOpen) {
 }
 const personaDir = resolve(process.cwd(), "personas");
 // Default model (pinned in llm-claude-cli) — the "opus" hardcode predated the switch.
-const json = createClaudeCliJsonCaller({});
+// 480s, not the 180s default: six ledgers timed out repeatedly at 180s even
+// with nothing else running — the same silent-timeout failure the consolidate
+// pass hit, and a seed that dies quietly leaves a contact invisible.
+const json = createClaudeCliJsonCaller({ timeoutMs: 480_000 });
 
 // --all-open: every persona holding an open who=me commitment. This is the
 // backfill the list switchover needs — unassessed counts as NO, so until each

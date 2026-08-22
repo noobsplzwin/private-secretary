@@ -269,3 +269,56 @@ describe("the same to-do coming back", () => {
     expect(next.k204).toBeDefined(); // newest kept
   });
 });
+
+// ORPHAN reconciliation: the sync recognises its own strays by looking at
+// TickTick itself, because the map has lost its memory three separate ways and
+// each time the strays either duplicated the list or squatted on it forever.
+describe("orphan reconciliation", () => {
+  const P = payload({ title: "制造协议签署版补齐" });
+  const stray = (over: Record<string, unknown> = {}) => ({
+    id: "tt9",
+    status: 0,
+    projectId: "proj",
+    title: "制造协议签署版补齐",
+    tags: ["secretary"],
+    ...over,
+  });
+
+  it("adopts a live engine-minted stray whose title a desired row carries", () => {
+    const ops = diffTickTickSync([{ unitKey: "k1", payload: P }], {}, [stray()]);
+    expect(ops).toEqual([
+      { kind: "update", unitKey: "k1", ticktickId: "tt9", projectId: "proj", payload: P },
+    ]);
+  });
+
+  it("completes an engine-minted stray nothing desires, leaving a reopenable tombstone", () => {
+    const ops = diffTickTickSync([], {}, [stray()]);
+    expect(ops).toEqual([
+      { kind: "complete", unitKey: "orphan_tt9", ticktickId: "tt9", projectId: "proj", title: "制造协议签署版补齐" },
+    ]);
+    const next = applySyncOps({}, ops, {}, 777);
+    expect(next.orphan_tt9).toEqual({
+      ticktickId: "tt9",
+      projectId: "proj",
+      hash: "",
+      title: "制造协议签署版补齐",
+      done: 777,
+    });
+    // …and the tombstone reopens if the same work is re-listed later
+    const later = diffTickTickSync([{ unitKey: "k2", payload: P }], next);
+    expect(later[0]).toMatchObject({ kind: "update", ticktickId: "tt9", reopen: true });
+  });
+
+  // THE line that keeps this safe: the owner's own tasks carry no engine tag
+  // and must never be touched, adopted, or completed.
+  it("never touches the owner's own untagged tasks", () => {
+    const ops = diffTickTickSync([], {}, [stray({ tags: [] }), stray({ id: "tt10", tags: undefined })]);
+    expect(ops).toEqual([]);
+  });
+
+  it("ignores tasks the map already tracks", () => {
+    const map: SyncMap = { k1: rec("tt9", P) };
+    const ops = diffTickTickSync([{ unitKey: "k1", payload: P }], map, [stray()]);
+    expect(ops).toEqual([{ kind: "skip", unitKey: "k1" }]);
+  });
+});
