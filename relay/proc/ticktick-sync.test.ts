@@ -183,7 +183,23 @@ describe("syncToTickTick", () => {
     const { map: after, report } = await syncToTickTick(state(), map, w, "America/Winnipeg");
     expect(w.completeTasks).toHaveBeenCalledWith([{ id: "tt1", projectId: "p" }]);
     expect(report.completed).toBe(1);
-    expect(after.T1).toBeUndefined();
+    // A tombstone, not a deletion: forgetting completed rows is what filled the
+    // owner's calendar with copies of the same task.
+    expect(after.T1!.done).toBeGreaterThan(0);
+  });
+
+  it("reopens a completed task with status:0 instead of creating a twin", async () => {
+    const { map } = await syncToTickTick(grouped(), {}, writer(), "America/Winnipeg");
+    const w1 = writer();
+    const { map: tombed } = await syncToTickTick(state(), map, w1, "America/Winnipeg"); // completes tt1
+    const w2 = writer();
+    await syncToTickTick(grouped(), tombed, w2, "America/Winnipeg"); // …and it comes back
+    expect(w2.createTask).not.toHaveBeenCalled();
+    expect(w2.updateTask).toHaveBeenCalledWith(
+      "tt1",
+      "p",
+      expect.objectContaining({ status: 0 }),
+    );
   });
 
   it("pairs returned checklist item ids to the actions they approve", async () => {

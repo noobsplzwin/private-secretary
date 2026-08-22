@@ -52,6 +52,10 @@ export interface TickTickTaskPayload {
   // "America/New_York" while the owner's engine zone is America/Winnipeg, so
   // every timed item displayed an hour late until this was passed explicitly.
   timeZone?: string;
+  // 0 ONLY, and only on an update that REOPENS a completed task (sync's
+  // tombstone match). create_task ignores status entirely (io/ticktick-mcp.ts
+  // header), so this is never set on a create.
+  status?: 0;
 }
 
 export const TIER_PRIORITY: Record<TaskPlan["tier"], TickTickPriority> = {

@@ -26,6 +26,17 @@ export interface SyncRecord {
   // specs/ticktick-migration.md §1 knows an item was ticked but not what it
   // was supposed to execute, so a tick would silently do nothing.
   items?: TrackedApproval[];
+  // The task's title, so a later cycle can recognise "this to-do again" by
+  // CONTENT when the key has moved on. Absent on records written before this
+  // field existed — those simply cannot be matched, same behaviour as before.
+  title?: string;
+  // Tombstone: set (epoch ms) when the row was completed in TickTick. The map
+  // used to DELETE completed entries, which is the bug that filled the owner's
+  // Google Calendar with copies: complete → forget → the same to-do re-listed
+  // (a tier flap, a regeneration) → create → a brand-new TickTick task, every
+  // time. Measured on the real account: one task existed SEVEN times. The
+  // tombstone lets the diff REOPEN the original instead.
+  done?: number;
 }
 
 export type SyncMap = Record<string, SyncRecord>;
@@ -43,6 +54,10 @@ export type SyncOp =
       ticktickId: string;
       projectId: string;
       payload: TickTickTaskPayload;
+      /** The task is completed in TickTick — send status:0 with the update to bring it back. */
+      reopen?: boolean;
+      /** Map key this row was recognised under (adopt/reopen by title). applySyncOps migrates the entry. */
+      adoptedFrom?: string;
     }
   | { kind: "complete"; unitKey: string; ticktickId: string; projectId: string }
   | { kind: "skip"; unitKey: string };
@@ -75,6 +90,30 @@ function canonical(value: unknown): string {
 export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap): SyncOp[] {
   const ops: SyncOp[] = [];
   const seen = new Set<string>();
+  const desiredKeys = new Set(desired.map((d) => d.unitKey));
+
+  // Content indexes, for rows whose KEY moved on. Exact normalized title only —
+  // fuzzy matching would silently glue different work together, the same reason
+  // shadow-list keeps its matcher deliberately dumb.
+  //   live: a task that is open in TickTick under a key nothing desires any
+  //         more (crash between create and map-save, or a key rewording) —
+  //         adopt it instead of minting a twin.
+  //   tomb: a task completed earlier that the list wants back (tier flap,
+  //         regeneration) — REOPEN it instead of minting a twin.
+  const liveByTitle = new Map<string, string>();
+  const tombByTitle = new Map<string, string>();
+  for (const [key, rec] of Object.entries(map)) {
+    if (!rec.title) continue;
+    const t = normTitle(rec.title);
+    if (rec.done) {
+      // Newest tombstone wins: reopening a years-old copy would resurrect its
+      // stale checklist alongside the fresh payload's.
+      const prev = tombByTitle.get(t);
+      if (!prev || (map[prev]!.done ?? 0) < rec.done) tombByTitle.set(t, key);
+    } else if (!desiredKeys.has(key)) {
+      liveByTitle.set(t, key);
+    }
+  }
 
   for (const { unitKey, payload } of desired) {
     // A duplicate unitKey in one cycle is an upstream bug; syncing it twice
@@ -84,23 +123,43 @@ export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap):
 
     const record = map[unitKey];
     const hash = hashPayload(payload);
-    if (!record) {
-      ops.push({ kind: "create", unitKey, payload });
-    } else if (record.hash !== hash) {
-      ops.push({
-        kind: "update",
-        unitKey,
-        ticktickId: record.ticktickId,
-        projectId: record.projectId,
-        payload,
-      });
-    } else {
-      ops.push({ kind: "skip", unitKey });
+    if (record && !record.done) {
+      if (record.hash !== hash) {
+        ops.push({ kind: "update", unitKey, ticktickId: record.ticktickId, projectId: record.projectId, payload });
+      } else {
+        ops.push({ kind: "skip", unitKey });
+      }
+      continue;
     }
+    if (record?.done) {
+      // The same key came back after its own completion — reopen in place.
+      ops.push({ kind: "update", unitKey, ticktickId: record.ticktickId, projectId: record.projectId, payload, reopen: true });
+      continue;
+    }
+
+    const t = normTitle(payload.title);
+    const liveKey = liveByTitle.get(t);
+    if (liveKey) {
+      const rec = map[liveKey]!;
+      liveByTitle.delete(t); // one orphan adopts at most once per cycle
+      ops.push({ kind: "update", unitKey, ticktickId: rec.ticktickId, projectId: rec.projectId, payload, adoptedFrom: liveKey });
+      continue;
+    }
+    const tombKey = tombByTitle.get(t);
+    if (tombKey) {
+      const rec = map[tombKey]!;
+      tombByTitle.delete(t);
+      ops.push({ kind: "update", unitKey, ticktickId: rec.ticktickId, projectId: rec.projectId, payload, reopen: true, adoptedFrom: tombKey });
+      continue;
+    }
+    ops.push({ kind: "create", unitKey, payload });
   }
 
   for (const [unitKey, record] of Object.entries(map)) {
     if (seen.has(unitKey)) continue;
+    if (record.done) continue; // already completed — never complete a tombstone twice
+    // Adopted this cycle under a new key → the entry migrates, nothing to complete.
+    if (ops.some((o) => o.kind === "update" && o.adoptedFrom === unitKey)) continue;
     ops.push({
       kind: "complete",
       unitKey,
@@ -112,6 +171,10 @@ export function diffTickTickSync(desired: readonly DesiredTask[], map: SyncMap):
   return ops;
 }
 
+function normTitle(t: string): string {
+  return t.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 /** What TickTick returned for a task this cycle wrote. */
 export interface SyncResult {
   ticktickId: string;
@@ -120,10 +183,15 @@ export interface SyncResult {
 }
 
 /** The map after `ops` have been applied. Completed units leave the map. */
+// How many completed rows the map remembers. Enough to cover weeks of flapping
+// and regeneration; bounded so the map file cannot grow forever.
+const MAX_TOMBSTONES = 200;
+
 export function applySyncOps(
   map: SyncMap,
   ops: readonly SyncOp[],
   results: Readonly<Record<string, SyncResult>>,
+  nowMs: number = Date.now(),
 ): SyncMap {
   const next: SyncMap = { ...map };
   for (const op of ops) {
@@ -132,7 +200,7 @@ export function applySyncOps(
       // No id back means the create failed. Leaving the unitKey OUT of the map
       // makes the next cycle retry it; recording it would lose the to-do.
       if (!created) continue;
-      next[op.unitKey] = { ...created, hash: hashPayload(op.payload) };
+      next[op.unitKey] = { ...created, hash: hashPayload(op.payload), title: op.payload.title };
     } else if (op.kind === "update") {
       const written = results[op.unitKey];
       // An update rewrites the checklist, so TickTick may hand back NEW item
@@ -140,10 +208,27 @@ export function applySyncOps(
       // nothing. No result → the update failed; keep the old hash so the next
       // cycle retries rather than believing it succeeded.
       if (!written) continue;
-      next[op.unitKey] = { ...written, hash: hashPayload(op.payload) };
+      // Adopt/reopen migrates the entry: the old key's record must go, or the
+      // same TickTick task ends up tracked twice and the stale twin's absence
+      // from `desired` completes the task the fresh key just claimed.
+      if (op.adoptedFrom) delete next[op.adoptedFrom];
+      next[op.unitKey] = { ...written, hash: hashPayload(op.payload), title: op.payload.title };
     } else if (op.kind === "complete") {
-      delete next[op.unitKey];
+      // Remember, don't forget: deleting here is what minted a fresh TickTick
+      // task (and a fresh Google Calendar event) every time a completed row
+      // came back. The tombstone is what reopen matches against.
+      const rec = next[op.unitKey];
+      if (rec) next[op.unitKey] = { ...rec, done: nowMs };
     }
+  }
+
+  // Cap the graveyard: drop the OLDEST tombstones over the limit.
+  const tombs = Object.entries(next).filter(([, r]) => r.done);
+  if (tombs.length > MAX_TOMBSTONES) {
+    tombs
+      .sort(([, a], [, b]) => (a.done ?? 0) - (b.done ?? 0))
+      .slice(0, tombs.length - MAX_TOMBSTONES)
+      .forEach(([k]) => delete next[k]);
   }
   return next;
 }

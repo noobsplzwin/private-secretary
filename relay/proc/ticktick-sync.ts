@@ -192,7 +192,11 @@ export async function syncToTickTick(
           items: trackedFrom(op.unitKey, created.itemIds),
         };
       } else if (op.kind === "update") {
-        const written = await writer.updateTask(op.ticktickId, op.projectId, op.payload);
+        // reopen: the task is completed in TickTick and the list wants it back —
+        // status:0 on the partial patch brings the SAME task (and its single
+        // calendar event) back instead of minting a twin.
+        const sent = op.reopen ? { ...op.payload, status: 0 as const } : op.payload;
+        const written = await writer.updateTask(op.ticktickId, op.projectId, sent);
         results[op.unitKey] = {
           ticktickId: op.ticktickId,
           projectId: op.projectId,
