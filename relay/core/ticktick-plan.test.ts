@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { dueFields, buildTaskPayload, deadlineFor, shouldRenderCardUnit, isExecutableAction, wallClockLabel, type TaskUnit } from "./ticktick-plan.js";
 import type { ActionItem } from "./action-item.js";
-import type { TaskPlan } from "./tasks.js";
 
 // The owner's real zone; the fixtures' -05:00 is its summer offset, so the
 // wall-clock labels below read the same either way.
@@ -20,19 +19,11 @@ const member = (over: Partial<ActionItem> = {}): ActionItem => ({
   ...over,
 });
 
-const plan = (over: Partial<TaskPlan> = {}): TaskPlan => ({
-  tier: "A",
-  rank: 0,
-  why: "下周就要走",
-  at: "2026-08-12T00:00:00Z",
-  ...over,
-});
 
 const unit = (over: Partial<TaskUnit> = {}): TaskUnit => ({
   unitKey: "t1",
   title: "香港出差",
   grouped: true,
-  plan: plan(),
   members: [member()],
   ...over,
 });
@@ -115,23 +106,12 @@ describe("buildTaskPayload — the task IS the unit", () => {
     expect(built.payload.title).toBe("香港出差");
     expect(built.payload.kind).toBe("CHECKLIST");
     expect(built.payload.items?.map((i) => i.title)).toEqual(["订机票", "订宾馆"]);
-    expect(built.payload.priority).toBe(5); // tier A
+    // Fixed medium since the ranking pass retired: card rows are executable/
+    // persona-less only, and dates (never flags) drive the Today view.
+    expect(built.payload.priority).toBe(3);
+
   });
 
-  it("puts why + entities in the description, without the deadline entity", () => {
-    const built = buildTaskPayload(
-      unit({
-        plan: plan({
-          entities: [
-            { kind: "price", label: "机票", value: "¥3,200" },
-            { kind: "deadline", label: "截止", value: "2026-08-20" },
-          ],
-        }),
-      }), ZONE);
-    expect(built.payload.desc).toContain("下周就要走");
-    expect(built.payload.desc).toContain("机票: ¥3,200");
-    expect(built.payload.desc).not.toContain("截止"); // it becomes the due date
-  });
 
   // The member's own line is a SUMMARY and its next_actions are the same thing
   // spelled out. Emitting both listed one job twice ("跟进…发货与运单号" then
@@ -239,36 +219,7 @@ describe("due dates are never invented", () => {
     expect(built.payload).not.toHaveProperty("dueDate");
   });
 
-  it("uses a real deadline entity", () => {
-    const built = buildTaskPayload(
-      unit({ plan: plan({ entities: [{ kind: "deadline", label: "交付", value: "2026-08-20" }] }) }), ZONE);
-    expect(built.payload.dueDate).toBe("2026-08-20T00:00:00-05:00");
-    expect(built.payload.isAllDay).toBe(true);
-    // Sent explicitly: the TickTick ACCOUNT default was America/New_York, an
-    // hour off the owner's zone, and it silently applied to every dated item.
-    expect(built.payload.timeZone).toBe(ZONE);
-  });
 
-  // REGRESSION: a `deadline` entity is free text the ranking model writes, and
-  // "2026-08-13 15:00 Portugal time" is one it really produced. The old prefix
-  // test matched it and sent the whole string as dueDate — TickTick rejected the
-  // create and an A-tier task silently never reached the list.
-  it("ignores a free-text deadline entity and uses the dated member", () => {
-    const u = unit({
-      plan: plan({
-        entities: [{ kind: "deadline", label: "通话", value: "2026-08-13 15:00 Portugal time" }],
-      }),
-      members: [
-        member({
-          id: "c1",
-          action_type: "calendar",
-          params: { start: "2026-08-13T22:00:00+08:00", attendees: [] },
-        }),
-      ],
-    });
-    expect(deadlineFor(u)).toBe("2026-08-13T22:00:00+08:00");
-    expect(buildTaskPayload(u, ZONE).payload.dueDate).toBe("2026-08-13T22:00:00+08:00");
-  });
 
   it("falls back to the earliest dated calendar member", () => {
     const u = unit({
@@ -335,27 +286,6 @@ describe("stale fields and dropped steps", () => {
     expect(text.kind).toBe("TEXT");
     expect(text.desc).toBe("");
     expect(text.items).toEqual([]);
-  });
-});
-
-describe("entities in the notes", () => {
-  // REGRESSION: the ranking pass wrote "设备/固件标识: U031UFWA11S" — a Slack
-  // user id, mislabelled as a device id, in a note Leo reads.
-  it("drops an entity whose value is an opaque platform id", () => {
-    const built = buildTaskPayload(
-      unit({
-        plan: plan({
-          entities: [
-            { kind: "device", label: "设备/固件标识", value: "U031UFWA11S" },
-            { kind: "person", label: "对接人", value: "ezra@taiv.tv" },
-          ],
-        }),
-      }),
-      ZONE,
-    );
-    const note = built.payload.desc ?? built.payload.content ?? "";
-    expect(note).not.toContain("U031UFWA11S");
-    expect(note).toContain("ezra@taiv.tv"); // an address says who to write to
   });
 });
 

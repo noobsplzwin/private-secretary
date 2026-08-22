@@ -99,7 +99,6 @@ export interface ScanLoopOptions {
   // the card (updates it, or emits a calendar action when a meeting was agreed).
   // See specs/task-consolidation.md (Stage 2).
   // When provided, a daily-plan pass runs after refresh: ranks all open task
-  // units A→D with a "why now" + entities, stored in loop-state.plans. See
   // specs/daily-todo.md.
   // When provided, the ranked to-do list is pushed into TickTick after the plan
   // pass (specs/ticktick-migration.md). Absent = no sync, and the cockpit stays

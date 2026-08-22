@@ -10,7 +10,6 @@ import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { evidenceGrounded } from "../core/quote-check.js";
-import { CallGate } from "../core/call-gate.js";
 import {
   buildPersonaUpdateRequest,
   parseExtractedCommitments,
@@ -119,11 +118,6 @@ export async function updatePersonaCommitments(
  * Returns null when the persona file is unreadable or the LLM call failed —
  * a single contact's failure must not sink a batch.
  */
-// Identical corpus + identical tracked list = identical answer. Measured: 909
-// real calls carried only 202 distinct inputs, so 78% of this pass re-asked a
-// question it had already answered. See relay/core/call-gate.ts.
-const extractGate = new CallGate();
-
 export async function extractCommitmentsOnce(opts: {
   file: string;
   displayName: string;
@@ -139,10 +133,6 @@ export async function extractCommitmentsOnce(opts: {
     return null;
   }
 
-  // Both of these ride the prompt, so both belong in the signature.
-  const sig = CallGate.signature(opts.corpus, JSON.stringify(existing));
-  if (extractGate.answered(opts.file, sig)) return { added: 0, statusChanged: 0, discarded: 0, assessed: 0 };
-
   let extracted;
   let transitions;
   let assessments;
@@ -151,7 +141,6 @@ export async function extractCommitmentsOnce(opts: {
     const raw = await opts.json(
       buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: opts.corpus }),
     );
-    extractGate.record(opts.file, sig); // only once the call RETURNED
     extracted = parseExtractedCommitments(raw);
     transitions = parseExtractedUpdates(raw, existing.length);
     assessments = parseExtractedAssessments(raw, existing.length);
@@ -245,9 +234,4 @@ export async function extractCommitmentsOnce(opts: {
     return { added: 0, statusChanged: 0, discarded, assessed: 0 };
   }
   return { added: fresh.length, statusChanged, discarded, assessed };
-}
-
-/** Test seam: forget which extractions have already been answered. */
-export function _resetExtractGate(): void {
-  extractGate.clear();
 }

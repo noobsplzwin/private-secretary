@@ -20,9 +20,8 @@
 // "due today" for every A-tier item would make Today meaningless within a week.
 
 import type { ActionItem } from "./action-item.js";
-import type { TaskPlan } from "./tasks.js";
 import { zoneOffsetAt } from "./when.js";
-import { tierToPriority, ENGINE_TAG, type TickTickTaskPayload } from "./ticktick.js";
+import { ENGINE_TAG, type TickTickTaskPayload } from "./ticktick.js";
 import {
   buildInviteLabel,
   buildToolLabel,
@@ -35,7 +34,6 @@ export interface TaskUnit {
   title: string;
   /** True when the LLM actually grouped this into a task (vs a lone card). */
   grouped: boolean;
-  plan?: TaskPlan;
   members: readonly ActionItem[];
 }
 
@@ -122,7 +120,6 @@ function isPastEvent(m: ActionItem, nowMs: number): boolean {
 // Action types this mapping renders. An `ignore` card is not work.
 const RENDERED_TYPES = new Set(["calendar", "tool", "task"]);
 // An opaque platform id: a Slack user/channel id or a WeChat wxid.
-const BARE_HANDLE = /^(?:U[A-Z0-9]{8,}|C[A-Z0-9]{8,}|wxid_\S+)$/;
 
 const ZONED = /(?:Z|[+-]\d{2}:?\d{2})$/;
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/;
@@ -263,8 +260,6 @@ export function deadlineFor(unit: TaskUnit): string | null {
   // reached the list. Salvaging the "15:00" would be worse than dropping it —
   // that clock is Lisbon's, and stamping the owner's offset on it moves the call
   // six hours. The dated calendar member below is the trustworthy source.
-  const raw = unit.plan?.entities?.find((e) => e.kind === "deadline" && e.value)?.value?.trim();
-  if (raw && (DATE_ONLY.test(raw) || DATE_TIME.test(raw))) return raw;
   const dated = unit.members
     .filter((m) => m.action_type === "calendar" && typeof m.params.start === "string")
     .map((m) => m.params.start as string)
@@ -273,19 +268,10 @@ export function deadlineFor(unit: TaskUnit): string | null {
 }
 
 function describe(unit: TaskUnit): string {
-  const blocks: string[] = [];
-  if (unit.plan?.why) blocks.push(unit.plan.why);
-  const entities = (unit.plan?.entities ?? []).filter(
-    // A platform handle is not context: the ranking pass wrote
-    // "设备/固件标识: U031UFWA11S" — a Slack user id, mislabelled as a device id,
-    // in a note Leo reads. An email address IS useful in a note (it says who to
-    // write to), so only opaque ids are dropped.
-    (e) => e.label && e.kind !== "deadline" && !BARE_HANDLE.test((e.value ?? "").trim()),
-  );
-  if (entities.length > 0) {
-    blocks.push(entities.map((e) => `• ${e.label}${e.value ? `: ${e.value}` : ""}`).join("\n"));
-  }
-  return blocks.join("\n\n");
+  // The ranking pass that wrote a "why now" + entities is retired; a card row's
+  // note is whatever its members carry (summaries ride the checklist lines).
+  void unit;
+  return "";
 }
 
 export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
@@ -345,7 +331,10 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
   const deadline = deadlineFor(unit);
   const payload: TickTickTaskPayload = {
     title: unit.title,
-    priority: tierToPriority(unit.plan?.tier),
+    // The tier that used to set this died with the ranking pass. Card rows are
+    // executable/persona-less only; medium keeps them visible without faking
+    // urgency (dates, not flags, drive TickTick's Today view).
+    priority: 3,
     tags: [ENGINE_TAG],
     // BOTH note fields and `items` are ALWAYS sent, even empty.
     //

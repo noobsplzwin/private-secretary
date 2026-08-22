@@ -31,8 +31,6 @@ describe("loop state v2", () => {
       outcomes: [],
       sourceErrors: {},
       tasks: {},
-      plans: {},
-      planOverrides: {},
       revision: 0,
       personTraffic: {},
       personAssessed: {},
@@ -73,8 +71,6 @@ describe("loop state v2", () => {
       tasks: {
         "task-chicago": { title: "Chicago trip", created_at: "2026-06-10T00:00:00Z" },
       },
-      plans: {},
-      planOverrides: {},
       // The person-first cursors must survive a restart — that is the whole
       // reason they live in state instead of the module-level TTL they replaced.
       personTraffic: { "wang-acme": 1_700_000_000_000 },

@@ -15,7 +15,7 @@ import {
 import { dirname, join } from "node:path";
 import type { HighWaterMarks } from "../core/dedup.js";
 import type { ActionItem } from "../core/action-item.js";
-import type { TaskRegistry, TaskPlanMap } from "../core/tasks.js";
+import type { TaskRegistry } from "../core/tasks.js";
 import type { DraftOutcome } from "../core/metrics.js";
 import { appendLabels, buildLabel, labelsPathFor } from "./labels.js";
 
@@ -31,13 +31,6 @@ export interface LoopState {
   outcomes: DraftOutcome[]; // validation-gate data
   sourceErrors: Record<string, SourceError>; // failed sources, cursor not advanced
   tasks: TaskRegistry; // Phase 2 (T1): {task_id: {title, created_at}}
-  // daily-todo (specs/daily-todo.md): {task_id: {tier, rank, why, entities}}. Optional
-  // on input (older state files lack it); loadState/empty always fill {}.
-  plans?: TaskPlanMap;
-  // Manual tier overrides (drag a task to another A/B/C/D section). Keyed by the
-  // same task unit key as plans. The ranking pass NEVER touches this, so a manual
-  // move survives re-ranking; getState applies it over the computed tier.
-  planOverrides?: Record<string, "A" | "B" | "C" | "D">;
   // Optimistic-concurrency counter. saveState bumps it and refuses to write
   // if the on-disk revision moved since this state was loaded — so a pass that
   // ran long enough for its lock to go stale (and get reclaimed) can't clobber
@@ -76,8 +69,6 @@ function empty(): LoopState {
     outcomes: [],
     sourceErrors: {},
     tasks: {},
-    plans: {},
-    planOverrides: {},
     revision: 0,
     personTraffic: {},
     personAssessed: {},
@@ -97,8 +88,6 @@ export function loadState(path: string): LoopState {
     outcomes: parsed.outcomes ?? [],
     sourceErrors: parsed.sourceErrors ?? {},
     tasks: parsed.tasks ?? {},
-    plans: parsed.plans ?? {},
-    planOverrides: parsed.planOverrides ?? {},
     revision: parsed.revision ?? 0,
     personTraffic: parsed.personTraffic ?? {},
     personAssessed: parsed.personAssessed ?? {},

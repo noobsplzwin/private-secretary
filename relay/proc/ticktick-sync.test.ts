@@ -28,7 +28,6 @@ const state = (over: Partial<LoopState> = {}): LoopState =>
     outcomes: [],
     sourceErrors: {},
     tasks: {},
-    plans: {},
     ...over,
   }) as LoopState;
 
@@ -84,17 +83,6 @@ describe("taskUnitsFrom", () => {
     expect(units[0]!.members).toHaveLength(2);
   });
 
-  // A human dragging a task to another tier must survive re-ranking.
-  it("lets a manual tier override win over the computed tier", () => {
-    const s = state({
-      actions: [action({ task_id: "T1" })],
-      tasks: { T1: { title: "T", created_at: "x" } },
-      plans: { T1: { tier: "C", rank: 3, why: "w", at: "x" } },
-      planOverrides: { T1: "A" },
-    });
-    expect(taskUnitsFrom(s)[0]!.plan?.tier).toBe("A");
-    expect(taskUnitsFrom(s)[0]!.plan?.why).toBe("w"); // rest of the plan intact
-  });
 });
 
 describe("syncToTickTick", () => {
@@ -102,7 +90,6 @@ describe("syncToTickTick", () => {
     state({
       actions: [action({ task_id: "T1" })],
       tasks: { T1: { title: "香港出差", created_at: "x" } },
-      plans: { T1: { tier: "A", rank: 0, why: "下周就要走", at: "x" } },
       ...over,
     });
 
@@ -128,13 +115,13 @@ describe("syncToTickTick", () => {
     expect(report.skipped).toBe(1);
   });
 
-  it("updates in place when the plan changed", async () => {
+  it("updates in place when the payload changed", async () => {
     const { map } = await syncToTickTick(rowsFrom(grouped()), {}, writer());
     const w = writer();
-    // A→B, not A→C: C is no longer synced at all, so a C re-tier is a DE-LIST
-    // (completed) rather than the in-place update this test is about.
-    const retiered = grouped({ plans: { T1: { tier: "B", rank: 9, why: "缓了", at: "x" } } });
-    const { report } = await syncToTickTick(rowsFrom(retiered), map, w);
+    const changed = grouped({
+      actions: [action({ task_id: "T1", next_actions: ["订 8/30 的机票"] })],
+    });
+    const { report } = await syncToTickTick(rowsFrom(changed), map, w);
     expect(w.updateTask).toHaveBeenCalledOnce();
     expect(report.updated).toBe(1);
     expect(w.createTask).not.toHaveBeenCalled(); // NOT a second copy
@@ -263,10 +250,6 @@ describe("syncToTickTick", () => {
     const s = state({
       actions: [action({ id: "a1", task_id: "T1" }), action({ id: "a2", task_id: "T2" })],
       tasks: { T1: { title: "A", created_at: "x" }, T2: { title: "B", created_at: "x" } },
-      plans: {
-        T1: { tier: "A", rank: 0, why: "", at: "x" },
-        T2: { tier: "A", rank: 1, why: "", at: "x" },
-      },
     });
     let n = 0;
     const w = writer({

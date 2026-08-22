@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify, parse } from "yaml";
-import { updatePersonaCommitments, _resetExtractGate, type PersonaUpdateDeps } from "./persona-update.js";
+import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { Persona } from "../core/types.js";
 
@@ -70,7 +70,6 @@ describe("updatePersonaCommitments — status transitions", () => {
   let dir: string;
   beforeEach(() => {
     dir = personaDirWith(OPEN);
-    _resetExtractGate(); // module-level memo; would otherwise leak between cases
   });
   const ledger = () =>
     (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as { commitments: Array<{ status: string }> })
@@ -183,53 +182,6 @@ describe("updatePersonaCommitments — cross-source retrieval", () => {
 
 });
 
-// Measured: 909 real calls of this pass carried only 202 distinct inputs, so 78%
-// of them paid to re-answer a question already answered. Identical corpus +
-// identical tracked list can only produce the identical result.
-describe("persona-update call gate", () => {
-  let dir: string;
-  beforeEach(() => {
-    dir = personaDirWith(OPEN);
-    _resetExtractGate();
-  });
-
-  it("does not call the LLM twice for the same corpus and ledger", async () => {
-    let calls = 0;
-    const d = () =>
-      deps({ personaDir: dir, json: async () => { calls++; return { commitments: [], updates: [] }; } });
-    await updatePersonaCommitments([QUEUED], d());
-    expect(calls).toBe(1);
-    await updatePersonaCommitments([QUEUED], d());
-    expect(calls).toBe(1);
-  });
-
-  it("calls again when the corpus moves on", async () => {
-    let calls = 0;
-    const d = (corpus: string) =>
-      deps({
-        personaDir: dir,
-        fetchCorpus: async () => corpus,
-        json: async () => { calls++; return { commitments: [], updates: [] }; },
-      });
-    await updatePersonaCommitments([QUEUED], d("Yang: agreement signed and returned."));
-    await updatePersonaCommitments([QUEUED], d("Yang: agreement signed and returned.\nYang: one more thing"));
-    expect(calls).toBe(2);
-  });
-
-  // A thrown call must stay retryable, not be memoized as handled.
-  it("stays retryable when the call throws", async () => {
-    let calls = 0;
-    const d = (fail: boolean) =>
-      deps({
-        personaDir: dir,
-        json: async () => { calls++; if (fail) throw new Error("timeout"); return { commitments: [], updates: [] }; },
-      });
-    await updatePersonaCommitments([QUEUED], d(true));
-    await updatePersonaCommitments([QUEUED], d(false));
-    expect(calls).toBe(2);
-  });
-});
-
 // ASSESS (specs/person-first-consolidation.md §3.2). needs_leo is the one hard
 // judgment the derived list rests on, so every guard around it is enforced in
 // CODE — the prompt is asked, never trusted.
@@ -238,7 +190,6 @@ describe("assess verdicts", () => {
   let dir: string;
   beforeEach(() => {
     dir = personaDirWith(MINE);
-    _resetExtractGate();
   });
   const ledger = () =>
     (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as {
@@ -347,7 +298,6 @@ describe("matter chains in extraction", () => {
   let dir: string;
   beforeEach(() => {
     dir = personaDirWith([]);
-    _resetExtractGate();
   });
 
   it("carries matter_id from extraction into the ledger", async () => {

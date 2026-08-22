@@ -75,21 +75,12 @@ export interface SyncReport {
  * carry the same headline in the same conversation.
  */
 export function taskUnitsFrom(state: LoopState): TaskUnit[] {
-  const plans = state.plans ?? {};
-  const overrides = state.planOverrides ?? {};
   const units: TaskUnit[] = [];
   // Hoisted OUT of the cluster loop: groupByTask returns one cluster PER
   // standalone action (its bucket-of-all comment was wrong), so a per-cluster
   // map could never merge two of them.
   const loose = new Map<string, TaskUnit>();
 
-  const withTier = (key: string): TaskUnit["plan"] => {
-    const plan = plans[key];
-    const override = overrides[key];
-    if (!plan) return override ? { tier: override, rank: 0, why: "", at: "" } : undefined;
-    // A manual re-tier wins: the ranking pass must not undo a human's move.
-    return override ? { ...plan, tier: override } : plan;
-  };
 
   for (const cluster of groupByTask(state.actions, state.tasks)) {
     if (cluster.task_id) {
@@ -97,7 +88,6 @@ export function taskUnitsFrom(state: LoopState): TaskUnit[] {
         unitKey: cluster.task_id,
         title: cluster.title ?? "(untitled task)",
         grouped: true,
-        plan: withTier(cluster.task_id),
         members: cluster.actions,
       });
       continue;
@@ -139,7 +129,6 @@ export function taskUnitsFrom(state: LoopState): TaskUnit[] {
         unitKey: rowKey,
         title,
         grouped: false,
-        plan: withTier(planKey),
         members: [action],
       });
     }
