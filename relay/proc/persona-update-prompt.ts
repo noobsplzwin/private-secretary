@@ -187,10 +187,21 @@ export function buildPersonaUpdateRequest(opts: {
         )
         .join("\n")
     : "(none tracked yet)";
+  // The numbers owed a verdict, spelled out. "Assess EVERY open who=me entry"
+  // in the system prompt produced 2 verdicts out of 6 on a real ledger — a
+  // concrete list is followed, a quantifier is sampled.
+  const owed = opts.existing
+    .map((c, i) => ({ c, i }))
+    .filter(({ c }) => c.who === "me" && c.status === "open")
+    .map(({ i }) => i);
+  const assessLine =
+    owed.length > 0
+      ? `\n\nASSESS — return one verdict in "assessments" for EACH of these tracked numbers, no omissions: ${owed.join(", ")}.`
+      : "";
   const userText =
     `CONTACT: ${opts.name}\n\nCURRENTLY TRACKED COMMITMENTS:\n${cur}\n\n` +
     `RECENT CONVERSATION (both sides, newest last):\n${opts.thread}\n\n` +
-    `Extract the NEW commitments, and any STATUS CHANGES to the tracked list.`;
+    `Extract the NEW commitments, and any STATUS CHANGES to the tracked list.${assessLine}`;
   return { system: SYSTEM, userText, toolInputSchema: SCHEMA };
 }
 

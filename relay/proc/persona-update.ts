@@ -146,6 +146,7 @@ export async function extractCommitmentsOnce(opts: {
   let extracted;
   let transitions;
   let assessments;
+  let parseDropped = 0;
   try {
     const raw = await opts.json(
       buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: opts.corpus }),
@@ -154,6 +155,12 @@ export async function extractCommitmentsOnce(opts: {
     extracted = parseExtractedCommitments(raw);
     transitions = parseExtractedUpdates(raw, existing.length);
     assessments = parseExtractedAssessments(raw, existing.length);
+    // A verdict the parser rejected (bad index, non-boolean needs_leo, missing
+    // quote) must COUNT, or it vanishes without trace — the seed run reported
+    // "assessed 0, discarded 0" for contacts whose reply carried verdicts, and
+    // nothing anywhere said why.
+    const rawAssess = (raw as { assessments?: unknown[] } | null)?.assessments;
+    parseDropped = (Array.isArray(rawAssess) ? rawAssess.length : 0) - assessments.length;
   } catch {
     return null;
   }
@@ -171,7 +178,8 @@ export async function extractCommitmentsOnce(opts: {
     extracted.length -
     okExtracted.length +
     (transitions.length - okTransitions.length) +
-    (assessments.length - okAssessments.length);
+    (assessments.length - okAssessments.length) +
+    parseDropped;
 
   const seen = new Set(existing.map((c) => norm(c.what)));
   const fresh = okExtracted.filter((e) => !seen.has(norm(e.what)));

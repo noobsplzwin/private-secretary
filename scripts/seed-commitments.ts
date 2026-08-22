@@ -10,7 +10,8 @@
 // quote gate, same R1 chokepoint — a seed is just a first tick for someone the
 // ticks always skipped.
 
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
+import { readdirSync } from "node:fs";
 import { personaPath, readPersonaV3File } from "../relay/io/persona-store.js";
 import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
 import { extractCommitmentsOnce } from "../relay/proc/persona-update.js";
@@ -18,15 +19,38 @@ import { createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
 
 const argv = process.argv.slice(2);
 const who = argv.includes("--person") ? argv[argv.indexOf("--person") + 1] : undefined;
-if (!who) {
-  console.error('usage: seed-commitments.ts --person key1,key2,…');
+const allOpen = argv.includes("--all-open");
+if (!who && !allOpen) {
+  console.error("usage: seed-commitments.ts --person key1,key2,…  |  --all-open");
   process.exit(1);
 }
 const personaDir = resolve(process.cwd(), "personas");
-const json = createClaudeCliJsonCaller({ model: "opus" });
+// Default model (pinned in llm-claude-cli) — the "opus" hardcode predated the switch.
+const json = createClaudeCliJsonCaller({});
+
+// --all-open: every persona holding an open who=me commitment. This is the
+// backfill the list switchover needs — unassessed counts as NO, so until each
+// of these gets a verdict the derived list renders nothing for them.
+let keys: string[];
+if (allOpen) {
+  keys = readdirSync(personaDir)
+    .filter((f) => f.endsWith(".yaml"))
+    .flatMap((f) => {
+      try {
+        const p = readPersonaV3File(join(personaDir, f));
+        const open = (p.commitments ?? []).some((c) => c.who === "me" && c.status === "open");
+        return open ? [p.key] : [];
+      } catch {
+        return [];
+      }
+    });
+  console.log(`--all-open: ${keys.length} persona(s) with open who=me commitments`);
+} else {
+  keys = who!.split(",").map((s) => s.trim()).filter(Boolean);
+}
 
 const dms = await slackDmIndexes();
-for (const key of who.split(",").map((s) => s.trim()).filter(Boolean)) {
+for (const key of keys) {
   const file = personaPath(personaDir, key);
   let p;
   try {
@@ -51,8 +75,9 @@ for (const key of who.split(",").map((s) => s.trim()).filter(Boolean)) {
     json,
   });
   if (!r) {
-    console.log(`  LLM/read failed`);
+    // extractCommitmentsOnce swallows its own error; at least say the call died.
+    console.log(`  LLM/read failed (see stderr above if any) — rerun this key`);
     continue;
   }
-  console.log(`  added ${r.added}, statusChanged ${r.statusChanged}, discarded ${r.discarded} ungrounded`);
+  console.log(`  added ${r.added}, statusChanged ${r.statusChanged}, assessed ${r.assessed}, discarded ${r.discarded} ungrounded`);
 }
