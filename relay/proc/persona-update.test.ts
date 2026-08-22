@@ -340,3 +340,34 @@ describe("assess verdicts", () => {
     expect(a.at).toBe("2026-08-22T00:00:00Z");
   });
 });
+
+// §7b chains: the extraction may link commitments into a matter; the ledger
+// carries the id through so the derived list can collapse the chain.
+describe("matter chains in extraction", () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = personaDirWith([]);
+    _resetExtractGate();
+  });
+
+  it("carries matter_id from extraction into the ledger", async () => {
+    await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: dir,
+        fetchCorpus: async () => "me: 我找供应商买天线 / Yang: 我会发货给客户",
+        reply: {
+          commitments: [
+            { who: "me", what: "找供应商采购天线", evidence: "我找供应商买天线", matter_id: "antenna" },
+            { who: "them", what: "供应商发货给客户", evidence: "我会发货给客户", matter_id: "antenna" },
+          ],
+          updates: [],
+        },
+      }),
+    );
+    const ledger = (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as {
+      commitments: Array<{ what: string; matter_id?: string }>;
+    }).commitments;
+    expect(ledger.map((c) => c.matter_id)).toEqual(["antenna", "antenna"]);
+  });
+});

@@ -276,15 +276,21 @@ export function readbackFromTickTick(
   state: LoopState,
   map: SyncMap,
   remote: readonly RemoteTask[],
-): { doneActionIds: string[]; map: SyncMap; unitsClosed: number } {
+): { ticked: string[]; closed: string[]; map: SyncMap; unitsClosed: number } {
   const { doneActionIds, doneUnitKeys } = diffTickTickReadback(map, remote);
-  const done = new Set(doneActionIds);
+  // TWO different owner gestures, kept apart because they mean different things:
+  //   ticked — the owner checked an EXECUTABLE line (invite/tool; only those are
+  //            tracked). Per specs/ticktick-migration.md §1 that tick is the
+  //            approval, and the caller EXECUTES it.
+  //   closed — the whole task finished or was deleted. Record done; never execute.
+  const ticked = new Set(doneActionIds);
+  const closed = new Set<string>();
 
   const gone = new Set(doneUnitKeys);
   for (const unit of taskUnitsFrom(state)) {
     if (!gone.has(unit.unitKey)) continue;
     for (const m of unit.members) {
-      if (m.status === "suggested" || m.status === "approved") done.add(m.id);
+      if (m.status === "suggested" || m.status === "approved") closed.add(m.id);
     }
   }
 
@@ -294,5 +300,5 @@ export function readbackFromTickTick(
   const nowMs = Date.now();
   const next: SyncMap = {};
   for (const [k, v] of Object.entries(map)) next[k] = gone.has(k) ? { ...v, done: nowMs } : v;
-  return { doneActionIds: [...done], map: next, unitsClosed: gone.size };
+  return { ticked: [...ticked], closed: [...closed], map: next, unitsClosed: gone.size };
 }

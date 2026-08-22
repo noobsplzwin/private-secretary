@@ -215,6 +215,7 @@ export async function extractCommitmentsOnce(opts: {
       what: e.what,
       status: e.status ?? "open",
       ...(e.due ? { due: e.due } : {}),
+      ...(e.matter_id ? { matter_id: e.matter_id.trim() } : {}),
     })),
   ];
   const evidence =

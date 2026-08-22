@@ -20,10 +20,13 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { describeIdentity } from "../relay/io/identity.js";
+import { describeIdentity, loadIdentity } from "../relay/io/identity.js";
 import { loadSettings } from "../relay/io/settings.js";
 import { effectiveToolSpecs } from "../relay/io/tools.js";
 import { createTickTickWriter, createTickTickReader } from "../relay/io/ticktick-mcp.js";
+import { createJiraToolRunner } from "../relay/io/jira-mcp.js";
+import { CalendarClient } from "../relay/io/calendar-api.js";
+import type { ExecuteDeps } from "../relay/proc/execute.js";
 import { mcpAuthServiceFor } from "../relay/io/mcp-tool.js";
 import type { TickTickWriter, TickTickReader } from "../relay/proc/ticktick-sync.js";
 import { dirname, join, resolve } from "node:path";
@@ -571,6 +574,36 @@ async function fetchRelatedThread(p: Persona): Promise<string | null> {
 // The TickTick sync writer, or undefined when TickTick is not connected — in
 // which case the sync phase is skipped and the cockpit stays the only surface.
 // Same config shape the executor reads (SETUP.md §5).
+// Tick-to-execute (specs/ticktick-migration.md §1): the deps executeAction
+// needs when the owner ticks an invite/tool line. Absent pieces degrade to
+// "tick records done" for that action type — never a crash, never a silent
+// half-send.
+function buildExecuteDeps(): Omit<ExecuteDeps, "persistClaim"> | undefined {
+  const deps: Omit<ExecuteDeps, "persistClaim"> = { now: () => new Date().toISOString() };
+  let any = false;
+  const calMailbox = loadIdentity().calendarMailbox;
+  if (calMailbox) {
+    deps.calendar = { [calMailbox]: new CalendarClient({ email: calMailbox }) };
+    any = true;
+  }
+  const jira = effectiveToolSpecs(statePath).jira?.config;
+  if (jira?.type === "mcp" && jira.url) {
+    deps.tools = {
+      jira: createJiraToolRunner({
+        url: jira.url,
+        authService: mcpAuthServiceFor("jira", jira.authService),
+        ...(jira.defaultTool ? { defaultTool: jira.defaultTool } : {}),
+      }),
+    };
+    any = true;
+  }
+  if (!any) return undefined;
+  console.log(
+    `[notify] tick-to-execute ON (calendar=${calMailbox || "off"}, jira=${deps.tools ? "on" : "off"})`,
+  );
+  return deps;
+}
+
 function buildTickTickWriter(): TickTickWriter | undefined {
   const cfg = effectiveToolSpecs(statePath).ticktick?.config ?? {};
   if (cfg.type !== "mcp" || !cfg.url) {
@@ -651,6 +684,7 @@ console.log(
   const personaUpdate = await buildPersonaUpdate();
   const ticktickWriter = buildTickTickWriter();
   const ticktickReader = buildTickTickReader();
+  const executeDeps = buildExecuteDeps();
   // Handle → persona key for the person-first traffic cursor. Built once: the
   // roster changes only when a persona file is added, which needs a restart
   // anyway, and this runs for every inbound message of every tick.
@@ -694,6 +728,7 @@ console.log(
           ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
           ...(ticktickReader ? { ticktickReader } : {}),
+          ...(executeDeps ? { execute: executeDeps } : {}),
           ledgerPersonas,
           resolvePersonaKey,
           maxDraftCandidates: maxDraft,

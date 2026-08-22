@@ -1137,3 +1137,89 @@ describe("the list is the ledger", () => {
     expect(created.map((c) => c.title)).toEqual(["签署高通 NDA 并回传给李冰"]);
   });
 });
+
+// TICK-TO-EXECUTE (specs/ticktick-migration.md §1): the owner ticking a
+// labelled invite/tool line IS the approval, and exactly two action types
+// execute. The no-double-execute property is the one that matters most: the
+// receipt written on success makes a second readback a no-op, not a resend.
+describe("tick-to-execute", () => {
+  const seedTrackedTool = () => {
+    const st = {
+      version: 2,
+      marks: {},
+      actions: [
+        {
+          id: "act1",
+          source_message_id: "slack:D1:1",
+          action_type: "tool",
+          target: {},
+          reason: "r",
+          confidence: 0.9,
+          params: { tool: "jira", title: "File the UART ticket", project: "OUS", summary: "s", description: "d" },
+          status: "suggested",
+          created_at: "2026-08-22T00:00:00Z",
+          context: { sender_handle: "U2" },
+        },
+      ],
+      outcomes: [],
+      sourceErrors: {},
+      tasks: {},
+    };
+    writeFileSync(statePath, JSON.stringify(st));
+    writeFileSync(
+      join(dir, "ticktick-sync.json"),
+      JSON.stringify({
+        row1: { ticktickId: "tt1", projectId: "p", hash: "h", items: [{ itemId: "i1", actionId: "act1" }] },
+      }),
+    );
+  };
+  const remoteWithTick = [{ id: "tt1", status: 0, items: [{ id: "i1", status: 1 }] }];
+
+  it("executes a ticked tool line once, and never again", async () => {
+    seedTrackedTool();
+    const run = vi.fn(async () => ({ ref: "JIRA-123" }));
+    const opts = {
+      statePath,
+      sources: [] as never[],
+      ticktickReader: { listActive: async () => remoteWithTick },
+      execute: { now: () => "2026-08-22T10:00:00Z", tools: { jira: { run } } },
+    };
+    await runScanTick(opts);
+    expect(run).toHaveBeenCalledTimes(1);
+    const after = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(after.actions[0].status).toBe("executed");
+    expect(after.actions[0].params.execution_receipt.ref).toBe("JIRA-123");
+
+    // The tick shows up again next poll — the receipt makes it a no-op.
+    await runScanTick(opts);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  // Without executor deps a tick means "I already did it" — the pre-§1 default.
+  it("records done instead of executing when no executor is configured", async () => {
+    seedTrackedTool();
+    await runScanTick({
+      statePath,
+      sources: [],
+      ticktickReader: { listActive: async () => remoteWithTick },
+    });
+    const after = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(after.actions[0].status).toBe("executed");
+    expect(after.actions[0].params.execution_receipt).toBeUndefined();
+  });
+
+  it("a failed execution is loud and does not mark the action done", async () => {
+    seedTrackedTool();
+    await runScanTick({
+      statePath,
+      sources: [],
+      ticktickReader: { listActive: async () => remoteWithTick },
+      execute: {
+        now: () => "t",
+        tools: { jira: { run: async () => { throw new Error("jira down"); } } },
+      },
+    });
+    const after = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(after.sourceErrors["llm:tick-execute"].message).toContain("jira down");
+  });
+});

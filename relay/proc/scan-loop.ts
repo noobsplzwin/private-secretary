@@ -38,6 +38,8 @@ import {
 } from "../core/action-item.js";
 import { draftActions, type DraftDeps } from "./draft.js";
 import { clusterKey, unitKey, inheritSupersededTaskIds } from "../core/unit-key.js";
+import { executeAction, type ExecuteDeps } from "./execute.js";
+import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks } from "../core/ledger-list.js";
@@ -106,6 +108,8 @@ export interface ScanLoopOptions {
   /** Read side: completions the owner ticked off in TickTick (PHASE 6a). */
   ticktickReader?: TickTickReader;
   /** Personas WITH their commitment ledgers — the LIST's source (PHASE 6b). */
+  /** Tick-to-execute (invites/tool items). Absent → a ticked line records done only. */
+  execute?: Omit<ExecuteDeps, "persistClaim">;
   ledgerPersonas?: () => ReadonlyArray<{ key: string; display_name?: string; commitments?: Commitment[] }>;
   /** Owner's IANA zone for TickTick due dates / time labels. */
   ownerTimeZone?: string;
@@ -831,23 +835,71 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     try {
       const remote = await opts.ticktickReader.listActive();
       const snapshot = loadState(opts.statePath);
-      const { doneActionIds, map, unitsClosed } = readbackFromTickTick(
+      const { ticked, closed, map, unitsClosed } = readbackFromTickTick(
         snapshot,
         loadSyncMap(opts.statePath),
         remote,
       );
-      if (doneActionIds.length > 0) {
-        const done = new Set(doneActionIds);
+
+      // TICK-TO-EXECUTE (specs/ticktick-migration.md §1): a ticked EXECUTABLE
+      // line — the labelled invite/tool lines are the only tracked ones — is the
+      // owner's approval, and it executes here. executeAction is idempotent by
+      // receipt, and persistClaim writes the durable "executing" mark BEFORE the
+      // side effect, so a crash between claim and receipt surfaces as
+      // NeedsVerification instead of a silent double-send.
+      const executedNow: ActionItem[] = [];
+      if (ticked.length > 0 && opts.execute) {
+        for (const id of ticked) {
+          const action = snapshot.actions.find((a) => a.id === id);
+          if (!action || action.status === "executed" || action.status === "rejected") continue;
+          if (action.action_type !== "calendar" && action.action_type !== "tool") continue;
+          try {
+            // The tick is the approval — but approveAction still runs the
+            // missing-info gate (ASK-not-GUESS): a card with unresolved params
+            // refuses here, loudly, instead of sending something half-built.
+            const approved = action.status === "suggested" ? approveAction(action) : action;
+            const r = await executeAction(approved, {
+              ...opts.execute,
+              persistClaim: async (claimed) => {
+                await commitUnderLock((fresh) => {
+                  fresh.actions = fresh.actions.map((a) => (a.id === claimed.id ? claimed : a));
+                });
+              },
+            });
+            executedNow.push(r.action);
+            console.log(`[ticktick] ticked → executed: ${action.action_type} "${String(action.params.title ?? action.headline ?? action.id)}" (${r.receipt?.ref ?? "no ref"})`);
+          } catch (e) {
+            // Loud, never silent: an invite the owner asked for that did NOT go
+            // out is exactly the failure that must not hide in a counter.
+            console.error(`[ticktick] ticked ${action.action_type} FAILED to execute: ${errString(e)}`);
+            await commitUnderLock((fresh) => {
+              fresh.sourceErrors["llm:tick-execute"] = {
+                message: `${action.id}: ${errString(e)}`,
+                at: new Date(startedAtMs).toISOString(),
+              };
+            }).catch(() => undefined);
+          }
+        }
+      }
+
+      // Everything else the readback learned: whole-task closes always record
+      // done; ticked items record done too when no executor is configured
+      // (the pre-§1 behaviour — a tick means "I already did it").
+      const done = new Set([...closed, ...(opts.execute ? [] : ticked)]);
+      if (done.size > 0 || executedNow.length > 0) {
+        const byId = new Map(executedNow.map((a) => [a.id, a]));
         await commitUnderLock((fresh) => {
-          fresh.actions = fresh.actions.map((a) =>
-            done.has(a.id) && (a.status === "suggested" || a.status === "approved")
+          fresh.actions = fresh.actions.map((a) => {
+            const exec = byId.get(a.id);
+            if (exec) return exec; // the executed action, receipt and all
+            return done.has(a.id) && (a.status === "suggested" || a.status === "approved")
               ? { ...a, status: "executed" as const }
-              : a,
-          );
+              : a;
+          });
         });
         saveSyncMap(opts.statePath, map);
         console.log(
-          `[ticktick] read back ${doneActionIds.length} finished item(s), ${unitsClosed} task(s) closed`,
+          `[ticktick] read back ${done.size} finished, ${executedNow.length} executed-by-tick, ${unitsClosed} task(s) closed`,
         );
       }
       await commitUnderLock((fresh) => {

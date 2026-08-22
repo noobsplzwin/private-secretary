@@ -148,7 +148,8 @@ describe("syncToTickTick", () => {
     const st = grouped();
     const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h" } };
     const r = readbackFromTickTick(st, map, []); // tt1 no longer active
-    expect(r.doneActionIds).toEqual(st.actions.map((a) => a.id));
+    expect(r.closed).toEqual(st.actions.map((a) => a.id));
+    expect(r.ticked).toEqual([]); // a task close is never an execution request
     // Remembered, not dropped: forgetting an owner-finished task is the same
     // forget that minted calendar twins when the ENGINE finished one.
     expect(r.map.T1!.done).toBeGreaterThan(0);
@@ -161,7 +162,8 @@ describe("syncToTickTick", () => {
     const st = grouped();
     const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h", done: 123 } };
     const r = readbackFromTickTick(st, map, []);
-    expect(r.doneActionIds).toEqual([]);
+    expect(r.ticked).toEqual([]);
+    expect(r.closed).toEqual([]);
     expect(r.unitsClosed).toBe(0);
     expect(r.map).toEqual(map);
   });
@@ -170,7 +172,8 @@ describe("syncToTickTick", () => {
     const st = grouped();
     const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h" } };
     const r = readbackFromTickTick(st, map, [{ id: "tt1", status: 0, items: [] }]);
-    expect(r.doneActionIds).toEqual([]);
+    expect(r.ticked).toEqual([]);
+    expect(r.closed).toEqual([]);
     expect(r.map).toEqual(map);
   });
 
