@@ -37,6 +37,8 @@ import { loadProjects, loadLeoProfile } from "../relay/io/projects.js";
 import { renderProjectCatalog } from "../relay/core/project.js";
 import { createAnthropicLlmCaller, createAnthropicJsonCaller } from "../relay/proc/llm-anthropic.js";
 import { createClaudeCliLlmCaller, createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
+import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
+import { loadState } from "../relay/io/state.js";
 import { createDeepseekLlmCaller, createDeepseekJsonCaller } from "../relay/proc/llm-deepseek.js";
 import type { ConsolidateDeps } from "../relay/proc/consolidate.js";
 import type { RefreshDeps } from "../relay/proc/refresh.js";
@@ -316,52 +318,68 @@ export interface FetchedThread {
 //   wechat — the persona's chat history, which arrives pre-dated.
 // A failing slice is skipped (partial context beats none); all-empty → null so
 // the caller can fall back.
-async function fetchAllForPerson(persona: Persona, rep: ActionItem): Promise<string | null> {
-  const slices: string[] = [];
+// A per-person corpus, no card required. personCorpus reads Slack DMs, all four
+// mailboxes and WeChat straight from the persona's handles — a strict superset of
+// what the old card-driven reader fetched, which took a representative ActionItem
+// and therefore made an OPEN CARD the precondition for a contact being looked at.
+//
+// The card survives only as an ENRICHMENT: personCorpus reads Slack DMs but not
+// channels, so when an open card for this person happens to exist its thread is
+// added. Without it, a commitment made in a channel would lose its evidence —
+// which today's reader does cover, and a trigger fix must not quietly regress.
+//
+// The DM index is memoized: it is one Slack listing shared by every person in a
+// tick, and refetching it per contact would multiply a rate-limited call by the
+// tick cap for no new information.
+let dmCache: { at: number; dms: Awaited<ReturnType<typeof slackDmIndexes>> } | null = null;
+const DM_CACHE_MS = 10 * 60 * 1000;
 
-  const repSlice = await fetchThread(rep).catch(() => null);
-  if (repSlice?.text) {
-    const platform = rep.source_message_id.split(":")[0] ?? "rep";
-    slices.push(`=== ${platform} (rep conversation) ===\n${repSlice.text}`);
+async function dmIndexes(): Promise<Awaited<ReturnType<typeof slackDmIndexes>>> {
+  if (dmCache && Date.now() - dmCache.at < DM_CACHE_MS) return dmCache.dms;
+  const dms = await slackDmIndexes();
+  dmCache = { at: Date.now(), dms };
+  return dms;
+}
+
+async function fetchCorpusFor(
+  persona: Persona,
+  resolvePersona: (handle: string) => Persona | null,
+): Promise<string | null> {
+  const slices: string[] = [];
+  try {
+    const base = await personCorpus(
+      {
+        slack: persona.handles?.slack,
+        gmail: persona.handles?.gmail,
+        wechat: persona.handles?.wechat,
+      },
+      await dmIndexes(),
+    );
+    if (base.trim()) slices.push(base);
+  } catch {
+    /* a dead source must not sink the person — the card slice may still land */
   }
 
-  const email = persona.handles?.gmail;
-  if (email) {
-    for (const mailbox of KNOWN_MAILBOXES) {
-      try {
-        const list = await gmailClientFor(mailbox).messagesList({
-          q: `(from:${email} OR to:${email}) newer_than:21d`,
-          maxResults: 10,
-        });
-        const threadIds = [...new Set((list.messages ?? []).map((m) => m.threadId))].slice(0, 2);
-        for (const id of threadIds) {
-          if (!id) continue;
-          // The rep conversation is already the first slice — do not repeat it.
-          if (rep.context?.thread_ref === id) continue;
-          const t = await gmailClientFor(mailbox).getThread({ id, format: "full" });
-          const text = (t.messages ?? [])
-            .map((m) => {
-              const ms = Number(m.internalDate ?? 0);
-              const day = ms > 0 ? new Date(ms).toISOString().slice(0, 10) : "?";
-              return `[${day}] From ${getHeader(m.payload, "From") ?? "?"}:\n${extractText(m)}`;
-            })
-            .join("\n---\n");
-          if (text.trim()) slices.push(`=== gmail (${mailbox}) ===\n${text}`);
-        }
-      } catch {
-        /* one mailbox failing must not sink the person */
+  // Channel coverage, when a card for this contact is open.
+  try {
+    const open = loadState(statePath).actions.filter(
+      (a) => a.status === "suggested" || a.status === "approved",
+    );
+    const mine = open
+      .filter((a) => {
+        const h = a.context?.sender_handle;
+        return h ? resolvePersona(h)?.key === persona.key : false;
+      })
+      .sort((a, b) => (a.created_at > b.created_at ? -1 : 1))[0];
+    if (mine) {
+      const t = await fetchThread(mine).catch(() => null);
+      if (t?.text) {
+        const platform = mine.source_message_id.split(":")[0] ?? "card";
+        slices.push(`=== ${platform} (open card conversation) ===\n${t.text}`);
       }
     }
-  }
-
-  const wechat = persona.handles?.wechat;
-  if (wechat && !rep.source_message_id.startsWith("wechat")) {
-    try {
-      const text = await wechatHistory(wechat, { limit: 60 });
-      if (text.trim()) slices.push(`=== wechat ===\n${text}`);
-    } catch {
-      /* wechat reader down — proceed with what we have */
-    }
+  } catch {
+    /* no card context available — the handle-based slices stand on their own */
   }
 
   return slices.length > 0 ? slices.join("\n\n") : null;
@@ -668,12 +686,14 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
         : llmMode === "deepseek"
           ? await createDeepseekJsonCaller({ model: draftModel })
           : createClaudeCliJsonCaller({ model: draftModel });
-    const { resolve: resolvePersona } = buildPersonaResolver(loadPersonas(personaDir));
+    const personas = loadPersonas(personaDir);
+    const { resolve: resolvePersona } = buildPersonaResolver(personas);
+    const byKey = new Map(personas.map((p) => [p.key, p]));
     console.log(`[notify] persona commitments update enabled via ${llmMode}`);
     return {
       json,
-      resolvePersona,
-      fetchAllForPerson,
+      personaFor: (key) => byKey.get(key) ?? null,
+      fetchCorpus: (persona) => fetchCorpusFor(persona, resolvePersona),
       personaDir,
     };
   } catch (e) {
@@ -711,6 +731,13 @@ console.log(
   const personaUpdate = await buildPersonaUpdate();
   const ticktickWriter = buildTickTickWriter();
   const ticktickReader = buildTickTickReader();
+  // Handle → persona key for the person-first traffic cursor. Built once: the
+  // roster changes only when a persona file is added, which needs a restart
+  // anyway, and this runs for every inbound message of every tick.
+  const { resolve: resolveForTraffic } = buildPersonaResolver(loadPersonas(personaDir));
+  const resolvePersonaKey = (handle: string): string | null =>
+    resolveForTraffic(handle)?.key ?? null;
+
   // Shadow list (PHASE 6c): re-read the ledgers from disk each call, because
   // the persona-update phase earlier in the same tick may have just changed
   // them — a cached copy would diff against stale commitments.
@@ -747,6 +774,7 @@ console.log(
           ...(ticktickWriter ? { ticktickWriter } : {}),
           ...(ticktickReader ? { ticktickReader } : {}),
           shadowPersonas,
+          resolvePersonaKey,
           maxDraftCandidates: maxDraft,
         });
         if (r.totalInbound > 0 || r.drafted > 0) {

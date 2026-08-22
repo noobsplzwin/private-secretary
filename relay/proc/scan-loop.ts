@@ -45,6 +45,7 @@ import { syncToTickTick, readbackFromTickTick, taskUnitsFrom, type TickTickWrite
 import { shouldSync } from "../core/ticktick-plan.js";
 import { deriveShadowList, diffShadow } from "../core/shadow-list.js";
 import { stabilizePlans } from "../core/plan-stability.js";
+import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { machineTimeZone } from "../io/settings.js";
@@ -118,6 +119,14 @@ export interface ScanLoopOptions {
   // commitments from each open contact's thread and writes them to the persona's
   // Commitments Ledger via the R1 chokepoint (Phase B, specs/persona-v3.md).
   personaUpdate?: PersonaUpdateDeps;
+  /**
+   * Maps a raw sender handle to a persona key, for the person-first traffic
+   * cursor. Deliberately NOT part of personaUpdate: traffic is recorded even
+   * when the person pass is off, so enabling it later does not start blind.
+   */
+  resolvePersonaKey?: (handle: string) => string | null;
+  /** Contacts assessed per tick. Bounds one busy hour's fan-out. */
+  maxPersonsPerTick?: number;
   // Which sources to poll this tick. Notification mode runs each source on
   // its OWN cadence (WeChat fast / Gmail medium / Slack slow), so each timer
   // calls runScanTick with a single source. Default = slack+gmail (the
@@ -583,6 +592,19 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         marks = advance(src, f.id, startedAtMs, marks);
       }
       state.marks = marks;
+      // PERSON-FIRST TRIGGER. The scan already knows who spoke, so the cursor
+      // costs nothing extra — the alternative was polling 75 personas to find
+      // out. Only messages that resolve to a known persona count; an unmapped
+      // handle cannot be assessed, and inventing a key for it would create a
+      // ghost contact.
+      if (opts.resolvePersonaKey) {
+        const spoke: Array<{ personaKey: string; timestampMs: number }> = [];
+        for (const m of sourceMessages) {
+          const key = opts.resolvePersonaKey(m.senderHandle);
+          if (key) spoke.push({ personaKey: key, timestampMs: m.timestampMs });
+        }
+        state.personTraffic = recordTraffic(state.personTraffic ?? {}, spoke);
+      }
     }
 
     // Cap: when a cold-cursor catch-up surfaces more candidates than we're
@@ -620,6 +642,12 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       const fresh = loadState(opts.statePath);
       fresh.marks = state.marks;
       fresh.sourceErrors = state.sourceErrors;
+      // personTraffic is owned by THIS tick (the scan sets it), so it is carried
+      // over. personAssessed is owned only by the phase-7 mutate, so it is NOT:
+      // loadState fills a missing field with {}, and `{}` is truthy — copying it
+      // from the tick's start-of-run snapshot silently wiped the cursor a phase
+      // later, and the pass then re-assessed the same person every single tick.
+      fresh.personTraffic = state.personTraffic ?? fresh.personTraffic;
       mutate(fresh);
       saveState(opts.statePath, fresh);
       return true;
@@ -1100,17 +1128,42 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   }
 
-  // ── PHASE 7 (UNLOCKED): persona commitments update. Writes persona YAML files
-  // (not loop-state), so no state lock. For each open contact with a resolved
-  // persona, extract new commitments from the thread → R1 write. TTL/cap inside.
+  // ── PHASE 7: the PERSON pass. Writes persona YAML files through R1, plus the
+  // assessment cursor in loop-state.
+  //
+  // Triggered by WHO SPOKE, not by who has a card open. The card-driven version
+  // could not see a contact whose traffic never became a card — and it re-ran on
+  // a 10-minute TTL whether or not anything had been said, which is the same
+  // clock-gated waste that made refresh 69% of the token bill. A quiet tick now
+  // costs nothing, which is the cost argument for person-first (spec §5).
   if (!opts.dryRun && opts.personaUpdate) {
-    const open = loadState(opts.statePath).actions.filter(
-      (a) => a.status === "suggested" || a.status === "approved",
+    const cursors = loadState(opts.statePath);
+    const queue = personsNeedingAssessment(
+      cursors.personTraffic ?? {},
+      cursors.personAssessed ?? {},
+      opts.maxPersonsPerTick ?? 3,
     );
-    if (open.length > 0) {
+    if (queue.length > 0) {
       try {
-        console.log(`[progress] updating persona commitments…`);
-        const pu = await updatePersonaCommitments(open, opts.personaUpdate);
+        console.log(`[progress] assessing ${queue.length} contact(s) with new traffic…`);
+        const pu = await updatePersonaCommitments(queue, opts.personaUpdate);
+        // Cursors advance for everyone taken off the queue, including the
+        // unreadable — otherwise one contact with no mapped handle sits at the
+        // head of the oldest-first queue every tick and starves the rest. Their
+        // next message re-queues them, so nothing is lost permanently.
+        if (pu.attempted.length > 0) {
+          await commitUnderLock((fresh) => {
+            fresh.personAssessed = markAssessed(fresh.personAssessed ?? {}, pu.attempted);
+          });
+        }
+        // Spec §6.2 wants this reported, never a silent skip: a contact
+        // reachable on no mapped handle is invisible to their own pass, and that
+        // is a data bug about the persona file, not a quiet no-op.
+        if (pu.unreadable.length > 0) {
+          console.log(
+            `[persona] no corpus for ${pu.unreadable.length} contact(s) — unmapped handles or every source down: ${pu.unreadable.join(", ")}`,
+          );
+        }
         // The discard rate is a FINDING, not noise: each one is a commitment or
         // status change whose supporting quote was not in the corpus — i.e. the
         // model creating. Silent-failure lessons apply (consolidate timed out

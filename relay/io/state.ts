@@ -43,6 +43,16 @@ export interface LoopState {
   // ran long enough for its lock to go stale (and get reclaimed) can't clobber
   // the reclaiming writer's update. Optional on input; loadState always fills it.
   revision?: number;
+  // PERSON-FIRST TRIGGER (specs/person-first-consolidation.md §3.1). Two
+  // per-person cursors, epoch ms, keyed by persona key:
+  //   personTraffic  — last time a message from this person was SEEN
+  //   personAssessed — last time the person pass ran for them
+  // A person needs assessing when traffic > assessed. That is self-limiting
+  // (once assessed they do not come back until they talk again), so it REPLACES
+  // the module-level TTL the pass used to carry — which also forgot everything
+  // on restart. Optional on input; loadState always fills them.
+  personTraffic?: Record<string, number>;
+  personAssessed?: Record<string, number>;
 }
 
 // Thrown when saveState detects the on-disk state advanced since the caller
@@ -69,6 +79,8 @@ function empty(): LoopState {
     plans: {},
     planOverrides: {},
     revision: 0,
+    personTraffic: {},
+    personAssessed: {},
   };
 }
 
@@ -88,6 +100,8 @@ export function loadState(path: string): LoopState {
     plans: parsed.plans ?? {},
     planOverrides: parsed.planOverrides ?? {},
     revision: parsed.revision ?? 0,
+    personTraffic: parsed.personTraffic ?? {},
+    personAssessed: parsed.personAssessed ?? {},
   };
 }
 

@@ -5,11 +5,10 @@
 // evidence required). This is the incremental update the roadmap calls Phase B;
 // it is NOT the forbidden full bootstrap.
 
-import type { ActionItem } from "../core/action-item.js";
 import type { Persona } from "../core/types.js";
+import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
-import { clusterKey } from "../core/unit-key.js";
 import { evidenceGrounded } from "../core/quote-check.js";
 import { CallGate } from "../core/call-gate.js";
 import {
@@ -24,27 +23,24 @@ export type PersonaUpdateJsonCaller = (req: PersonaUpdateRequest) => Promise<unk
 
 export interface PersonaUpdateDeps {
   json: PersonaUpdateJsonCaller;
-  resolvePersona: (handle: string) => Persona | null;
-  // The person's traffic across EVERY source their handles reach, not just the
-  // rep card's conversation. This is what lets a commitment raised on Slack be
-  // closed by a Gmail message — the engine drew exactly that conclusion once
-  // ("PCB agreements signed & returned by Yang") and could not reach it, because
-  // this pass only ever saw one thread. The run-notify implementation already
-  // degrades per-slice (a failing source is skipped), so no second fallback here.
-  fetchAllForPerson: (persona: Persona, rep: ActionItem) => Promise<string | null>;
+  /** The queue carries persona KEYS, so resolution is by key — no card, no handle. */
+  personaFor: (key: string) => Persona | null;
+  // The person's traffic across EVERY source their handles reach. This is what
+  // lets a commitment raised on Slack be closed by a Gmail message — the engine
+  // drew exactly that conclusion once ("PCB agreements signed & returned") and
+  // could not reach it, because this pass only ever saw one thread.
+  //
+  // No card parameter. It used to take a representative ActionItem, which made
+  // an OPEN CARD the precondition for a person being looked at: anyone who
+  // talked without producing a card was invisible to the ledger. The card is now
+  // at most an extra slice the implementation adds when one happens to exist.
+  fetchCorpus: (persona: Persona) => Promise<string | null>;
   personaDir: string;
-  maxPerTick?: number;
-  ttlMs?: number;
-  nowMs?: () => number;
   /** Dates the ASSESS verdicts. */
   now?: () => string;
 }
 
-const DEFAULT_TTL_MS = 15 * 60 * 1000;
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
-
-// Per-persona cooldown across ticks (module-level; resets on restart).
-const lastUpdateMs = new Map<string, number>();
 
 export interface PersonaUpdateResult {
   updated: Array<{ key: string; added: number; statusChanged: number; assessed: number }>;
@@ -52,45 +48,49 @@ export interface PersonaUpdateResult {
   discarded: number;
   /** ASSESS verdicts written. The discard/assess ratio is how model invention is watched. */
   assessed: number;
+  /** Everyone the pass took off the queue. Cursors advance for all of these. */
+  attempted: PersonQueueEntry[];
+  /**
+   * Keys whose corpus came back empty — no handles, or every source failed.
+   * Reported rather than silently skipped (spec §6.2): a person reachable on no
+   * mapped handle is invisible to their own pass, and that is a data bug worth
+   * seeing. Their cursor still advances, so one unreachable contact cannot
+   * occupy the oldest-first slot every tick and starve everyone behind them;
+   * their next message re-queues them.
+   */
+  unreadable: string[];
 }
 
 export async function updatePersonaCommitments(
-  openCards: Array<ActionItem & { sender_name?: string }>,
+  /** Who to assess — already selected and capped by core/person-queue. */
+  queue: ReadonlyArray<PersonQueueEntry>,
   deps: PersonaUpdateDeps,
 ): Promise<PersonaUpdateResult> {
-  const ttl = deps.ttlMs ?? DEFAULT_TTL_MS;
-  const nowMs = (deps.nowMs ?? (() => Date.now()))();
-  const maxPerTick = deps.maxPerTick ?? 3;
-
-  // One representative card per conversation (newest), that resolves to a persona.
-  const byPersona = new Map<string, { rep: ActionItem; persona: Persona }>();
-  for (const c of openCards) {
-    const sender = c.context?.sender_handle;
-    if (!sender) continue;
-    const persona = deps.resolvePersona(sender);
-    if (!persona) continue;
-    const cur = byPersona.get(persona.key);
-    if (!cur || c.created_at > cur.rep.created_at) byPersona.set(persona.key, { rep: c, persona });
-  }
-
-  const eligible = [...byPersona.entries()]
-    .filter(([k]) => !lastUpdateMs.has(k) || nowMs - lastUpdateMs.get(k)! >= ttl)
-    .sort(([a], [b]) => (lastUpdateMs.get(a) ?? 0) - (lastUpdateMs.get(b) ?? 0))
-    .slice(0, maxPerTick);
-
   const updated: PersonaUpdateResult["updated"] = [];
+  const attempted: PersonQueueEntry[] = [];
+  const unreadable: string[] = [];
   let discarded = 0;
   let assessed = 0;
-  for (const [key, { rep, persona }] of eligible) {
-    lastUpdateMs.set(key, nowMs); // claim the slot even on a no-op
-    const thread = await deps.fetchAllForPerson(persona, rep);
-    if (!thread) continue;
 
-    const file = personaPath(deps.personaDir, key);
+  for (const entry of queue) {
+    const persona = deps.personaFor(entry.personaKey);
+    if (!persona) {
+      unreadable.push(entry.personaKey);
+      attempted.push(entry);
+      continue;
+    }
+    attempted.push(entry);
+
+    const corpus = await deps.fetchCorpus(persona);
+    if (!corpus) {
+      unreadable.push(entry.personaKey);
+      continue;
+    }
+
     const r = await extractCommitmentsOnce({
-      file,
+      file: personaPath(deps.personaDir, entry.personaKey),
       displayName: persona.displayName,
-      corpus: thread,
+      corpus,
       json: deps.json,
       ...(deps.now ? { now: deps.now } : {}),
     });
@@ -98,18 +98,15 @@ export async function updatePersonaCommitments(
     discarded += r.discarded;
     assessed += r.assessed;
     if (r.added > 0 || r.statusChanged > 0 || r.assessed > 0)
-      updated.push({ key, added: r.added, statusChanged: r.statusChanged, assessed: r.assessed });
+      updated.push({
+        key: entry.personaKey,
+        added: r.added,
+        statusChanged: r.statusChanged,
+        assessed: r.assessed,
+      });
   }
 
-  return { updated, discarded, assessed };
-}
-
-// Same conversation grouping key the rest of the daemon uses.
-export { clusterKey };
-
-// Test seam.
-export function _resetPersonaUpdateTtl(): void {
-  lastUpdateMs.clear();
+  return { updated, discarded, assessed, attempted, unreadable };
 }
 
 

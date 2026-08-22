@@ -49,18 +49,19 @@ function personaDirWith(commitments: unknown[]): string {
   return dir;
 }
 
+// The pass now takes WHO to assess, not which cards are open.
+const QUEUED = { personaKey: "zech-noiseux", trafficMs: 1 };
+
 const OPEN = [{ who: "them", what: "Send the manufacturing agreement for signature", status: "open" }];
 
 function deps(over: Partial<PersonaUpdateDeps> & { reply?: unknown }): PersonaUpdateDeps {
   return {
     json: async () => over.reply ?? { commitments: [], updates: [] },
-    resolvePersona: (h) => (h === "U_ZECH" ? zech : null),
+    personaFor: (key) => (key === "zech-noiseux" ? zech : null),
     // The quote gate verifies evidence against THIS corpus — fixtures below
     // quote it verbatim on purpose.
-    fetchAllForPerson: async () => "Yang: agreement signed and returned. me: please review the countersigned copy",
+    fetchCorpus: async () => "Yang: agreement signed and returned. me: please review the countersigned copy",
     personaDir: "",
-    ttlMs: 0,
-    nowMs: () => 1,
     ...over,
   };
 }
@@ -80,7 +81,7 @@ describe("updatePersonaCommitments — status transitions", () => {
   // ledger was append-only, so a finished commitment had no way to finish.
   it("closes a tracked commitment the conversation shows done", async () => {
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: { commitments: [], updates: [{ index: 0, status: "done", evidence: "signed and returned" }] },
@@ -92,7 +93,7 @@ describe("updatePersonaCommitments — status transitions", () => {
 
   it("ignores an out-of-range index and a no-op transition", async () => {
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: {
@@ -110,7 +111,7 @@ describe("updatePersonaCommitments — status transitions", () => {
 
   it("applies a transition and an addition in one write", async () => {
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: {
@@ -131,7 +132,7 @@ describe("updatePersonaCommitments — quote gate", () => {
   it("discards a transition whose evidence is not in the corpus", async () => {
     const dir = personaDirWith(OPEN);
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: {
@@ -147,7 +148,7 @@ describe("updatePersonaCommitments — quote gate", () => {
   it("discards an invented new commitment the same way", async () => {
     const dir = personaDirWith(OPEN);
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: {
@@ -162,14 +163,14 @@ describe("updatePersonaCommitments — quote gate", () => {
 });
 
 describe("updatePersonaCommitments — cross-source retrieval", () => {
-  it("prefers fetchAllForPerson and hands the prompt every source", async () => {
+  it("hands the prompt every source the person is reachable on", async () => {
     const dir = personaDirWith(OPEN);
     let seenThread = "";
     await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
-        fetchAllForPerson: async () => "=== slack ===\nraised here\n=== gmail ===\nsigned and returned",
+        fetchCorpus: async () => "=== slack ===\nraised here\n=== gmail ===\nsigned and returned",
         json: async (req) => {
           seenThread = req.userText;
           return { commitments: [], updates: [] };
@@ -196,9 +197,9 @@ describe("persona-update call gate", () => {
     let calls = 0;
     const d = () =>
       deps({ personaDir: dir, json: async () => { calls++; return { commitments: [], updates: [] }; } });
-    await updatePersonaCommitments([card()], d());
+    await updatePersonaCommitments([QUEUED], d());
     expect(calls).toBe(1);
-    await updatePersonaCommitments([card()], d());
+    await updatePersonaCommitments([QUEUED], d());
     expect(calls).toBe(1);
   });
 
@@ -207,11 +208,11 @@ describe("persona-update call gate", () => {
     const d = (corpus: string) =>
       deps({
         personaDir: dir,
-        fetchAllForPerson: async () => corpus,
+        fetchCorpus: async () => corpus,
         json: async () => { calls++; return { commitments: [], updates: [] }; },
       });
-    await updatePersonaCommitments([card()], d("Yang: agreement signed and returned."));
-    await updatePersonaCommitments([card()], d("Yang: agreement signed and returned.\nYang: one more thing"));
+    await updatePersonaCommitments([QUEUED], d("Yang: agreement signed and returned."));
+    await updatePersonaCommitments([QUEUED], d("Yang: agreement signed and returned.\nYang: one more thing"));
     expect(calls).toBe(2);
   });
 
@@ -223,8 +224,8 @@ describe("persona-update call gate", () => {
         personaDir: dir,
         json: async () => { calls++; if (fail) throw new Error("timeout"); return { commitments: [], updates: [] }; },
       });
-    await updatePersonaCommitments([card()], d(true));
-    await updatePersonaCommitments([card()], d(false));
+    await updatePersonaCommitments([QUEUED], d(true));
+    await updatePersonaCommitments([QUEUED], d(false));
     expect(calls).toBe(2);
   });
 });
@@ -248,7 +249,7 @@ describe("assess verdicts", () => {
 
   it("lands a grounded verdict on the commitment, dated", async () => {
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         now: () => "2026-08-22T12:00:00Z",
@@ -276,7 +277,7 @@ describe("assess verdicts", () => {
   // on the owner's list that nobody ever asked of him.
   it("discards a verdict whose evidence is not in the corpus", async () => {
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: reply({ index: 0, needs_leo: true, evidence: "Leo please send the revised contract today" }),
@@ -290,7 +291,7 @@ describe("assess verdicts", () => {
   it("ignores a verdict aimed at work the CONTACT owes", async () => {
     dir = personaDirWith([{ who: "them", what: "Send the manufacturing agreement", status: "open" }]);
     const r = await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: reply({ index: 0, needs_leo: true, evidence: "agreement signed and returned" }),
@@ -302,7 +303,7 @@ describe("assess verdicts", () => {
 
   it("drops next_step when the verdict says Leo is not needed", async () => {
     await updatePersonaCommitments(
-      [card()],
+      [QUEUED],
       deps({
         personaDir: dir,
         reply: reply({
@@ -324,11 +325,11 @@ describe("assess verdicts", () => {
   it("replaces a stale verdict rather than keeping it", async () => {
     const run = (needs_leo: boolean, at: string, corpus: string) =>
       updatePersonaCommitments(
-        [card()],
+        [QUEUED],
         deps({
           personaDir: dir,
           now: () => at,
-          fetchAllForPerson: async () => corpus,
+          fetchCorpus: async () => corpus,
           reply: reply({ index: 0, needs_leo, evidence: "review the countersigned copy" }),
         }),
       );

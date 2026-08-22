@@ -1170,3 +1170,75 @@ describe("runScanTick", () => {
     expect(loadState(statePath).sourceErrors["llm:draft-empty"]).toBeUndefined();
   });
 });
+
+// PHASE 7 trigger (specs/person-first-consolidation.md §3.1). The pass used to
+// fire on OPEN CARDS and a 10-minute TTL, so a contact who spoke without
+// producing a card was never assessed, and one who produced a card was
+// re-assessed whether or not they had said anything. These pin the new axis --
+// and the failure they guard against is SILENT: a broken trigger looks exactly
+// like a quiet tick.
+describe("person-first assessment trigger", () => {
+  const slack = () =>
+    slackStub([{ id: "C1", is_im: true }], { C1: [{ ts: "100.0", user: "U2", text: `hi <@${SELF_SLACK}>` }] });
+
+  it("records who spoke, keyed by persona", async () => {
+    await runScanTick({
+      statePath,
+      slackClient: slack(),
+      resolvePersonaKey: (h) => (h === "U2" ? "someone" : null),
+    });
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(saved.personTraffic.someone).toBe(100_000);
+  });
+
+  it("records nothing for a handle no persona claims", async () => {
+    await runScanTick({ statePath, slackClient: slack(), resolvePersonaKey: () => null });
+    expect(JSON.parse(readFileSync(statePath, "utf8")).personTraffic).toEqual({});
+  });
+
+  it("assesses the contact who spoke and advances their cursor", async () => {
+    const seen: string[] = [];
+    await runScanTick({
+      statePath,
+      slackClient: slack(),
+      resolvePersonaKey: (h) => (h === "U2" ? "someone" : null),
+      personaUpdate: {
+        json: async () => ({ commitments: [], updates: [] }),
+        personaFor: (key) => ({ key, displayName: key, handles: {} }) as never,
+        fetchCorpus: async (persona) => {
+          seen.push(persona.key);
+          return "some corpus";
+        },
+        personaDir: dir,
+      },
+    });
+    expect(seen).toEqual(["someone"]);
+    const saved = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(saved.personAssessed.someone).toBe(100_000);
+  });
+
+  // The cost argument for person-first: a tick where nobody talked must not
+  // spend a single call (spec §5).
+  it("assesses nobody when the cursor is already caught up", async () => {
+    const seen: string[] = [];
+    const deps = {
+      json: async () => ({ commitments: [], updates: [] }),
+      personaFor: (key: string) => ({ key, displayName: key, handles: {} }) as never,
+      fetchCorpus: async (persona: { key: string }) => {
+        seen.push(persona.key);
+        return "some corpus";
+      },
+      personaDir: dir,
+    };
+    const opts = {
+      statePath,
+      resolvePersonaKey: (h: string) => (h === "U2" ? "someone" : null),
+      personaUpdate: deps,
+    };
+    await runScanTick({ ...opts, slackClient: slack() });
+    expect(seen).toEqual(["someone"]);
+    // Second tick: the same message, already seen -- no new traffic, no call.
+    await runScanTick({ ...opts, slackClient: slack() });
+    expect(seen).toEqual(["someone"]);
+  });
+});
