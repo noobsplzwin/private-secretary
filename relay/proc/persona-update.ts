@@ -11,6 +11,7 @@ import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { clusterKey } from "../core/unit-key.js";
 import { evidenceGrounded } from "../core/quote-check.js";
+import { CallGate } from "../core/call-gate.js";
 import {
   buildPersonaUpdateRequest,
   parseExtractedCommitments,
@@ -113,6 +114,11 @@ export function _resetPersonaUpdateTtl(): void {
  * Returns null when the persona file is unreadable or the LLM call failed —
  * a single contact's failure must not sink a batch.
  */
+// Identical corpus + identical tracked list = identical answer. Measured: 909
+// real calls carried only 202 distinct inputs, so 78% of this pass re-asked a
+// question it had already answered. See relay/core/call-gate.ts.
+const extractGate = new CallGate();
+
 export async function extractCommitmentsOnce(opts: {
   file: string;
   displayName: string;
@@ -126,12 +132,17 @@ export async function extractCommitmentsOnce(opts: {
     return null;
   }
 
+  // Both of these ride the prompt, so both belong in the signature.
+  const sig = CallGate.signature(opts.corpus, JSON.stringify(existing));
+  if (extractGate.answered(opts.file, sig)) return { added: 0, statusChanged: 0, discarded: 0 };
+
   let extracted;
   let transitions;
   try {
     const raw = await opts.json(
       buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: opts.corpus }),
     );
+    extractGate.record(opts.file, sig); // only once the call RETURNED
     extracted = parseExtractedCommitments(raw);
     transitions = parseExtractedUpdates(raw, existing.length);
   } catch {
@@ -188,4 +199,9 @@ export async function extractCommitmentsOnce(opts: {
     return { added: 0, statusChanged: 0, discarded };
   }
   return { added: fresh.length, statusChanged, discarded };
+}
+
+/** Test seam: forget which extractions have already been answered. */
+export function _resetExtractGate(): void {
+  extractGate.clear();
 }

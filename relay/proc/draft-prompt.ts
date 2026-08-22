@@ -269,6 +269,14 @@ ${ITEM_STANDARD}
 You will be given the sender's persona (or told they're a new contact) and their
 recent messages. Decide and call ${TOOL_NAME}.`;
 
+// Date/timezone rules: STABLE across every call, so they live in the system
+// prompt (a cached prefix) rather than in userText behind the volatile
+// timestamp. Measured: hoisting the stable blocks out of userText cut a
+// steady-state draft call from $0.1805 to $0.0669 (cache_write 16.4k -> 5.2k).
+const DATE_RULES = `TIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the conversation states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon", "Asia/Shanghai"). A message sent on <MSG_DATE> saying "Thursday 3pm Portugal time" is the FIRST Thursday on or after <MSG_DATE>, at 15:00, tz "Europe/Lisbon" — resolved against THAT message's own at= stamp, never against CURRENT TIME. The conversion is done for you; doing it yourself has produced the wrong hour.
+
+ANCHOR TO THE MESSAGE, NOT TO TODAY. A thread from two weeks ago that says "Thursday 2-3pm" means the Thursday after THAT message — it does NOT mean this week. Re-anchoring an old relative date onto the current week is how a visit that happened last week kept reappearing as if it were today, week after week, and could never expire. If the anchoring message is old and the event has passed, the matter is over: say so instead of moving the date forward.`;
+
 function describePersona(p: Persona | null): string {
   if (!p) {
     return "SENDER PERSONA: (none — new contact, no profile yet). Be conservative: " +
@@ -380,9 +388,7 @@ export function buildDraftRequest(opts: {
   const personaBlock = describePersona(opts.persona);
   const msgBlock = opts.messages.map(describeMessage).join("\n\n");
   const timeLine = opts.now
-    ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""} — the sender's local timezone is the local one unless thread context says otherwise. Resolve relative dates (明天/今晚/next Friday) against the per-message timestamps below, in the sender's local date.\n\nTIMEZONES — do NOT convert. Write params.start/params.end as the WALL CLOCK time exactly as the conversation states it ("YYYY-MM-DDTHH:mm", no Z, no offset), and put the IANA zone that wall time belongs to in params.tz (e.g. "Europe/Lisbon", "Asia/Shanghai"). A message sent on <MSG_DATE> saying "Thursday 3pm Portugal time" is the FIRST Thursday on or after <MSG_DATE>, at 15:00, tz "Europe/Lisbon" — resolved against THAT message's own at= stamp, never against CURRENT TIME. The conversion is done for you; doing it yourself has produced the wrong hour.
-
-ANCHOR TO THE MESSAGE, NOT TO TODAY. A thread from two weeks ago that says "Thursday 2-3pm" means the Thursday after THAT message — it does NOT mean this week. Re-anchoring an old relative date onto the current week is how a visit that happened last week kept reappearing as if it were today, week after week, and could never expire. If the anchoring message is old and the event has passed, the matter is over: say so instead of moving the date forward.\n\n`
+    ? `CURRENT TIME: ${opts.now} (UTC)${opts.nowLocal ? ` = local ${opts.nowLocal}` : ""} — the sender's local timezone is the local one unless thread context says otherwise. Resolve relative dates (明天/今晚/next Friday) against the per-message timestamps below, in the sender's local date.`
     : "";
   const recipientHint =
     opts.knownPersonaKeys.length > 0
@@ -414,7 +420,10 @@ inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.
     opts.projectCatalog && opts.projectCatalog.trim()
       ? `\n\nPROJECT CATALOG — set project_id to the BEST-FITTING id below by topic/domain (the message need not name it); "MISC" only if none genuinely fit:\n${opts.projectCatalog.trim()}`
       : "";
-  const userText = `${timeLine}${personaBlock}${projectBlock}${catalogBlock}${relatedBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}${recipientHint}\n\nDecide the action items and call ${TOOL_NAME}.`;
+  // userText carries ONLY per-call content. Every stable block (catalog,
+  // known people, date rules, Leo profile) is in `system` so the prefix is
+  // byte-identical between calls and reads from cache instead of rewriting.
+  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
   // The connected MCP tools the model may route a tool card to.
   const toolHint =
     opts.toolKeys && opts.toolKeys.length > 0
@@ -422,7 +431,7 @@ inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.
       : "";
   // Leo profile conditions HOW to decide (priorities, delegation, decision style,
   // hard rules) so the action is the one LEO would take.
-  const base = systemBase() + toolHint;
+  const base = systemBase() + toolHint + `\n\n${DATE_RULES}` + catalogBlock + recipientHint;
   const system = opts.leoProfile && opts.leoProfile.trim()
     ? `${base}\n\n## HOW LEO DECIDES (decide as Leo would — his priorities, delegation, style, hard rules; do NOT override the HARD RULES above):\n${opts.leoProfile.trim()}`
     : base;

@@ -23,6 +23,7 @@ import {
 import type { Persona, Platform } from "../core/types.js";
 import { nowLocalIn } from "../core/when.js";
 import { machineTimeZone } from "../io/settings.js";
+import { CallGate } from "../core/call-gate.js";
 import { clusterKey } from "../core/unit-key.js";
 import { buildRefreshRequest } from "./refresh-prompt.js";
 import type { LlmCaller } from "./draft.js";
@@ -74,6 +75,14 @@ function platformOf(card: ActionItem): Platform | undefined {
 // Per-conversation TTL across ticks (module-level; resets on daemon restart).
 const lastRefreshMs = new Map<string, number>();
 
+// CONTENT GATE, beside the clock gate. The clock alone made this pass 70% of
+// every LLM call and 69% of the spend; 5,186 real calls covered just 243
+// distinct thread states. The key is the THREAD, not the card: this pass asks
+// "given this thread, what should this conversation's card be?", so an
+// unchanged thread cannot yield a new answer. See relay/core/call-gate.ts for
+// the measurement and for why keying on the card defeated itself.
+const threadGate = new CallGate();
+
 export async function refreshOpenTasks(
   openCards: Array<ActionItem & { sender_name?: string }>,
   deps: RefreshDeps,
@@ -111,6 +120,11 @@ export async function refreshOpenTasks(
     const thread = fetched.text;
     if (!thread) continue;
 
+    // Already answered for this exact thread state → no call.
+    // Catalog/tools ride the prompt too, so a change to them CAN change the answer.
+    const sig = CallGate.signature(thread, deps.projectCatalog, (deps.toolKeys ?? []).join(","));
+    if (threadGate.answered(key, sig)) continue;
+
     const sender = rep.context!.sender_handle!;
     const persona = deps.resolvePersona(sender);
     // Clock anchor for the refresh prompt — same construction as draft.ts.
@@ -127,6 +141,9 @@ export async function refreshOpenTasks(
     } catch {
       continue; // a single conversation's failure must not sink the pass
     }
+    // Recorded only on a call that RETURNED — a transient failure must stay
+    // retryable rather than being memoized as "already handled".
+    threadGate.record(key, sig);
     if (!actions || actions.length === 0) continue;
 
     const platform = platformOf(rep);
@@ -201,4 +218,5 @@ export async function refreshOpenTasks(
 // Test seam: clear the TTL memory so a test starts cold.
 export function _resetRefreshTtl(): void {
   lastRefreshMs.clear();
+  threadGate.clear();
 }

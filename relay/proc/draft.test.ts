@@ -38,7 +38,7 @@ describe("buildDraftRequest (pure prompt)", () => {
     expect(req.system).toContain("personal secretary");
     expect(req.userText).toContain("Michael Dobosz");
     expect(req.userText).toContain("what supply should we spec");
-    expect(req.userText).toContain("michael-dobosz"); // known persona keys hint
+    expect(req.system).toContain("michael-dobosz"); // roster rides the cached system prefix
     expect(req.toolName).toBe("emit_action_items");
     expect((req.toolInputSchema as { required: string[] }).required).toContain("actions");
   });
@@ -654,12 +654,66 @@ describe("an invented name in next_actions is reported", () => {
   it("sends real display names to the model, not just keys", async () => {
     let seenText = "";
     const llm: LlmCaller = async (req) => {
-      seenText = req.userText;
+      seenText = req.system;
       return [{ action_type: "task", reason: "r", confidence: 0.9, params: { title: "t" } } as DraftedAction];
     };
     await draftActions([msg()], deps(llm));
-    // the roster rides in userText, alongside the messages it applies to
+    // The roster is STABLE, so it rides the system prefix, not userText: behind
+    // the volatile timestamp it paid cache_write on every single call.
     expect(seenText).toContain("michael-dobosz = Michael Dobosz");
     expect(seenText).toContain("NEVER name anyone");
+  });
+});
+
+// Token cost, not prose: `claude -p` bills the prompt PREFIX. A prefix that is
+// byte-identical to the previous call reads from cache at 0.1x input; one byte
+// of drift re-writes everything after it at 1.25x. Measured on two real calls
+// with a 27k-char stable block: identical prefix $0.0669, drifting prefix
+// $0.1805 — 63% of a draft call. Anything per-message/per-sender/per-clock that
+// leaks into `system` silently deletes that saving, with no test and no log to
+// notice it. Hence this.
+describe("system prompt is a stable cache prefix", () => {
+  const req = (over: Parameters<typeof buildDraftRequest>[0]) => buildDraftRequest(over);
+  const stable = {
+    knownPersonaKeys: ["michael-dobosz"],
+    knownPeople: ["michael-dobosz = Michael Dobosz"],
+    projectCatalog: "REV5 = Rev5 release",
+    leoProfile: "delegates hardware",
+  };
+
+  it("is identical across different senders, messages and clocks", () => {
+    const a = req({
+      ...stable,
+      persona: michael,
+      messages: [msg({ text: "first message" })],
+      now: "2026-08-20T10:00:00.000Z",
+      nowLocal: "2026-08-20 18:00 (UTC+08:00)",
+    });
+    const b = req({
+      ...stable,
+      persona: { ...michael, key: "someone-else", displayName: "Someone Else" },
+      messages: [msg({ text: "a totally different message" })],
+      now: "2026-08-20T23:47:11.900Z",
+      nowLocal: "2026-08-21 07:47 (UTC+08:00)",
+    });
+    expect(a.system).toBe(b.system);
+    expect(a.userText).not.toBe(b.userText); // the variation is real, just not in the prefix
+  });
+
+  it("keeps the volatile clock OUT of the cached prefix", () => {
+    const a = req({ ...stable, persona: michael, messages: [msg()], now: "2026-08-20T10:00:00.000Z" });
+    expect(a.system).not.toContain("2026-08-20T10:00:00.000Z");
+    expect(a.userText).toContain("2026-08-20T10:00:00.000Z");
+  });
+
+  // The blocks whose hoisting bought the saving — assert they are in the prefix
+  // so a future "tidy the prompt" edit cannot quietly move them back.
+  it("carries the stable blocks in the prefix, not per call", () => {
+    const a = req({ ...stable, persona: michael, messages: [msg()] });
+    expect(a.system).toContain("PROJECT CATALOG");
+    expect(a.system).toContain("KNOWN PEOPLE");
+    expect(a.system).toContain("ANCHOR TO THE MESSAGE");
+    expect(a.userText).not.toContain("PROJECT CATALOG");
+    expect(a.userText).not.toContain("KNOWN PEOPLE");
   });
 });

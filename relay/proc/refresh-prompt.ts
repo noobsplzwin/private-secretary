@@ -120,8 +120,12 @@ export function buildRefreshRequest(opts: {
     : "";
   const userText =
     timeLine +
-    `${describePersona(opts.persona)}\n\n${cardBlock}${catalogBlock}${toolBlock}\n\n` +
+    `${describePersona(opts.persona)}\n\n${cardBlock}\n\n` +
     `FULL RECENT THREAD (both sides, newest last):\n${opts.thread}\n\n` +
     `Re-decide what this card should be now and call ${TOOL_NAME}.`;
-  return { system: SYSTEM, userText, toolName: TOOL_NAME, toolInputSchema: ACTION_ITEM_TOOL_SCHEMA };
+  // The catalog and the tool roster are STABLE, so they ride the system prefix:
+  // behind the volatile clock in userText they paid cache_write every call.
+  // Same fix, same reason as draft-prompt — see draft.test.ts "stable cache prefix".
+  const system = SYSTEM + catalogBlock + toolBlock;
+  return { system, userText, toolName: TOOL_NAME, toolInputSchema: ACTION_ITEM_TOOL_SCHEMA };
 }

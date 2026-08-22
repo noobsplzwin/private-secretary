@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { consolidateTasks } from "./consolidate.js";
+import { describe, it, expect, beforeEach } from "vitest";
+import { consolidateTasks, _resetGroupingGate } from "./consolidate.js";
 import { buildConsolidationRequest } from "./consolidate-prompt.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { TaskRegistry } from "../core/tasks.js";
@@ -25,6 +25,8 @@ function jsonStub(assignments: Array<{ card_id: string; task_title: string }>) {
 }
 
 describe("consolidateTasks", () => {
+  // Module-level call-gate memo; without this it leaks between cases.
+  beforeEach(() => _resetGroupingGate());
   it("groups two cards with the same title under one shared, stable task_id", async () => {
     const cards = [card("a"), card("b")];
     const title = "采埃孚悬挂 实车测试@安亭 · 约张工";
@@ -152,5 +154,41 @@ describe("consolidate prompt: what is NOT one task", () => {
     expect(system).toContain("The SAME supplier / vendor / partner");
     expect(system).toContain("A shared KEYWORD is not a shared");
     expect(system).toContain("The SAME MESSAGE is not enough");
+  });
+});
+
+// Measured: 502 real calls of this pass carried only 307 distinct inputs, so 39%
+// of them paid to re-derive a grouping already derived.
+describe("consolidate call gate", () => {
+  beforeEach(() => _resetGroupingGate());
+
+  it("does not call the LLM twice for the same cards and registry", async () => {
+    let calls = 0;
+    const cards = [card("a", { params: { title: "Ship Rev5" } }), card("b", { params: { title: "Rev5 release checklist" } })];
+    const json = async () => {
+      calls++;
+      return { assignments: [{ card_id: "a", task_title: "Rev5 release" }, { card_id: "b", task_title: "Rev5 release" }] };
+    };
+    await consolidateTasks(cards, {}, { json });
+    expect(calls).toBe(1);
+    await consolidateTasks(cards, {}, { json });
+    expect(calls).toBe(1);
+  });
+
+  it("calls again once the open cards change", async () => {
+    let calls = 0;
+    const json = async () => { calls++; return { assignments: [] }; };
+    await consolidateTasks([card("a", { params: { title: "Ship Rev5" } }), card("b", { params: { title: "Rev5 checklist" } })], {}, { json });
+    await consolidateTasks([card("a", { params: { title: "Ship Rev5" } }), card("c", { params: { title: "Book the HK hotel" } })], {}, { json });
+    expect(calls).toBe(2);
+  });
+
+  it("stays retryable when the call throws", async () => {
+    let calls = 0;
+    const cards = [card("a", { params: { title: "Ship Rev5" } }), card("b", { params: { title: "Rev5 checklist" } })];
+    const json = (fail: boolean) => async () => { calls++; if (fail) throw new Error("timeout"); return { assignments: [] }; };
+    await expect(consolidateTasks(cards, {}, { json: json(true) })).rejects.toThrow();
+    await consolidateTasks(cards, {}, { json: json(false) });
+    expect(calls).toBe(2);
   });
 });

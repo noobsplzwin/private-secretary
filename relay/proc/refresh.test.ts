@@ -85,14 +85,17 @@ describe("refreshOpenTasks", () => {
 
   it("respects the per-conversation TTL cooldown", async () => {
     const c = card("m1");
-    const base = { actions: [CAL] };
-    const r1 = await refreshOpenTasks([c], deps({ ...base, nowMs: () => 1000, ttlMs: 600_000 }));
+    // Each round gets NEW thread content, so this isolates the clock gate from
+    // the content gate ("refresh content gate" below) — and asserts the
+    // stronger thing: the clock holds even when the thread really did move.
+    const base = (t: number, thread: string) => deps({ actions: [CAL], thread, nowMs: () => t, ttlMs: 600_000 });
+    const r1 = await refreshOpenTasks([c], base(1000, "张工: 周三九点半定了"));
     expect(r1.refreshedKeys).toEqual(["wechat::张工"]);
     // within TTL → skipped
-    const r2 = await refreshOpenTasks([c], deps({ ...base, nowMs: () => 2000, ttlMs: 600_000 }));
+    const r2 = await refreshOpenTasks([c], base(2000, "张工: 周三九点半定了\n张工: 再加一句"));
     expect(r2.refreshedKeys).toEqual([]);
     // past TTL → refreshes again
-    const r3 = await refreshOpenTasks([c], deps({ ...base, nowMs: () => 700_000, ttlMs: 600_000 }));
+    const r3 = await refreshOpenTasks([c], base(700_000, "张工: 周三九点半定了\n张工: 改到周四"));
     expect(r3.refreshedKeys).toEqual(["wechat::张工"]);
   });
 
@@ -261,6 +264,86 @@ describe("refresh can turn open work into a ticket", () => {
       persona: null,
       toolKeys: ["jira", "ticktick"],
     });
-    expect(req.userText).toContain("jira, ticktick");
+    // In the system prefix, not userText: it is stable, so it must cache.
+    expect(req.system).toContain("jira, ticktick");
+  });
+});
+
+// The measurement that motivated this: refresh was 70% of every LLM call and
+// 69% of spend ($977 over ~3 days) while gated on the 10-minute clock ALONE.
+// A thread with no new message cannot produce a different card, so every one of
+// those calls bought nothing.
+describe("refresh content gate", () => {
+  const eligible = (t: number) => ({ nowMs: () => t, ttlMs: 600_000 });
+
+  it("does not call the LLM again for an unchanged thread", async () => {
+    let calls = 0;
+    const d = (t: number) =>
+      deps({ actions: [CAL], thread: "me: ...\n张工: 周三九点半定了", ...eligible(t), llm: async () => { calls++; return [CAL]; } });
+    const c = card("m1");
+    await refreshOpenTasks([c], d(1_000));
+    expect(calls).toBe(1);
+    await refreshOpenTasks([c], d(700_000)); // past the TTL, so the clock allows it
+    expect(calls).toBe(1); // the CONTENT did not change — no second call
+  });
+
+  it("calls again once the thread actually changes", async () => {
+    let calls = 0;
+    const d = (t: number, thread: string) =>
+      deps({ actions: [CAL], thread, ...eligible(t), llm: async () => { calls++; return [CAL]; } });
+    const c = card("m1");
+    await refreshOpenTasks([c], d(1_000, "张工: 周三九点半定了"));
+    await refreshOpenTasks([c], d(700_000, "张工: 周三九点半定了\n张工: 改到周四"));
+    expect(calls).toBe(2);
+  });
+
+  // Measured, and the opposite of this file's first cut: refresh emits cards
+  // with a FRESH uuid, so keying the gate on the card made refresh re-trigger
+  // itself — 5,186 real calls carried 3,825 card ids over 243 thread states,
+  // and the gate caught 26% where the thread key catches 95%.
+  it("does not call again for a NEW card id on the same thread", async () => {
+    let calls = 0;
+    const d = (t: number) =>
+      deps({ actions: [CAL], ...eligible(t), llm: async () => { calls++; return [CAL]; } });
+    await refreshOpenTasks([card("m1")], d(1_000));
+    await refreshOpenTasks([card("m2", { created_at: "2026-06-24T00:00:00Z" })], d(700_000));
+    expect(calls).toBe(1);
+  });
+
+  // The catalog is IN the prompt, so a change to it can legitimately change the
+  // answer even on an unchanged thread.
+  it("calls again when the project catalog changes", async () => {
+    let calls = 0;
+    const d = (t: number, projectCatalog: string) =>
+      deps({ actions: [CAL], ...eligible(t), projectCatalog, llm: async () => { calls++; return [CAL]; } });
+    const c = card("m1");
+    await refreshOpenTasks([c], d(1_000, "REV5 = Rev5 release"));
+    await refreshOpenTasks([c], d(700_000, "REV5 = Rev5 release\nHK01 = 香港出差"));
+    expect(calls).toBe(2);
+  });
+
+  // Oscillation is real: fetchThread returns a sliding window, so a state can
+  // come back. A last-signature-only memo would re-pay for every return trip.
+  it("remembers more than the last state", async () => {
+    let calls = 0;
+    const d = (t: number, thread: string) =>
+      deps({ actions: [CAL], thread, ...eligible(t), llm: async () => { calls++; return [CAL]; } });
+    const c = card("m1");
+    await refreshOpenTasks([c], d(1_000, "A"));
+    await refreshOpenTasks([c], d(700_000, "B"));
+    await refreshOpenTasks([c], d(1_400_000, "A")); // back to a state already answered
+    expect(calls).toBe(2);
+  });
+
+  // A transient failure must not be memoized as "already handled" — that would
+  // silently freeze the card until someone happened to send a new message.
+  it("stays retryable when the call throws", async () => {
+    let calls = 0;
+    const d = (t: number, fail: boolean) =>
+      deps({ actions: [CAL], ...eligible(t), llm: async () => { calls++; if (fail) throw new Error("timeout"); return [CAL]; } });
+    const c = card("m1");
+    await refreshOpenTasks([c], d(1_000, true));
+    await refreshOpenTasks([c], d(700_000, false));
+    expect(calls).toBe(2);
   });
 });
