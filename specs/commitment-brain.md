@@ -206,20 +206,24 @@ type Anchor =
 // 没有 location 类型:系统无位置信号源,不可机检的锚不许 LLM 发明
 ```
 
-**浮现层是纯派生函数**(批判#14:第二台落盘状态机=双写漂移)。只持久化三个
-字段:`snooze_until / nudge_at / review_misses`,DORMANT/ARMED/SURFACED/WAITING
-全部现算:
+**浮现层是纯派生函数**(批判#14:第二台落盘状态机=双写漂移)。只持久化两个
+字段:`snooze_until / nudge_at`,所有归属现算。
 
-| 派生态 | 主列表 | 每日 brief | 周 review |
-|---|---|---|---|
-| SURFACED(matter 的唯一下一步) | **是** | 镜像 | 是 |
-| ARMED(锚已触发,竞争中) | 否 | 候补区(折叠) | 是 |
-| WAITING(球在对方,nudge_at 到期→「该催了」区) | 否 | 等待区 | 是 |
-| DORMANT(无锚/未触发) | 否 | 否 | **是(唯一出口)** |
+**表面 = TickTick 三级清单**(owner 裁决,2026-08-22:清单按优先级分三级),
+准入判据全部机械:
 
-**Cap 只设在浮现层**(批判 P0-4):主列表每 matter ≤1 行(owner 的「一个下一步
-动作」);账本无硬 cap,每 matter open>5 触发系统告警(说明上游门在漏,不拒绝
-数据)。排序键 = `(有人在等我 desc, due asc nulls-last)`;WAITING 永不占主列表。
+| 级 | 清单 | 准入(代码判定) |
+|---|---|---|
+| L1 今日 | 必须今天动 | `due ≤ 今天`(含过期——过期更急,不是消失)∨ 未应答的 directive 指向我(我欠对方回应:有人在等我) |
+| L2 本周 | 该排上日程 | `due ≤ 7 天` ∨ 活跃 matter 的唯一下一步(无日期) |
+| L3 待办池 | 沉底的去处 | 其余全部 `performer=owner ∧ COMMITTED`。**低优先级往后排的终点,永不消失** |
+
+WAITING(球在对方)不占任何一级,住每日简报的等待区;nudge_at 到期进「该催了」。
+
+**Cap 只设在 L1+L2**(批判 P0-4 修订):每 matter 在 L1+L2 合计 ≤1 行(owner 的
+「一个下一步动作」),同 matter 其余 COMMITTED 沉 L3;L3 无 cap——G11 不变量由
+三级清单整体满足(每条 open 必在某级可达)。账本无硬 cap,每 matter open>5 触发
+系统告警(上游门在漏)。级内排序 = `(有人在等我 desc, due asc nulls-last)`。
 
 监控成本:event 锚搭 per-person 游标便车(~0);time 锚每日一次 sweep;none 锚
 每周一次。WAITING 被新消息解决的判断是 LLM 提案,过 G2 + `ts > waiting.since`
@@ -229,29 +233,32 @@ type Anchor =
 数量守恒断言(候选数==入账数+PARKED 数,违反响亮崩)+ 每轮捕获回执 digest +
 覆盖率差集报告(「⚠ 3 人发了消息但不在监控范围:Echo…」——集合减法,零 LLM)。
 
-## 6. 遗忘与生命周期(单一管道)
+## 6. 遗忘与生命周期
 
-批判裁决 P0-2,全系统只有一条遗忘管道:
+owner 裁决(2026-08-22)推翻周清扫:**「系统删待办」这个概念不存在**。你自己的
+成立承诺只有两个出口——履行了就关闭,没履行就往后沉(L1→L2→L3),永远可达。
+尸体问题的正解是关闭检测,不是遗忘兜底。出口全景:
 
-- **performer=owner 的 COMMITTED 永不被系统自动关闭**——只降可见度
-  (review_misses≥2 → 进周清扫批次),周清扫**默认归档、owner 勾选保留**
-  (方向反转:303 条的病根是默认保留、逐条确认删)。owner 过目即满足契约。
-- **performer=对方的跟踪项**允许 TTL 自动降级(时钟到期 → CLOSED_LAPSED,
-  brief 报备)。时钟重置的唯一途径:一条新的、过 quote gate 的逐字证据。
-  人还在聊别的 ≠ 强化(Schacter transience 的机械化)。
-- 时钟全局只有 3 个(批判#17):未应答(work 3 工作日/social 7 天)、待验收
-  (requester=对方 7 天 auto_accept;=owner 一键验收)、遗忘(review_misses≥2)。
+| 情形 | 出口 | 执行层 |
+|---|---|---|
+| 承诺履行了 | closure sweep / REPORTED 验收 / owner 勾选 → CLOSED_DONE | LLM 提名+G8 门 / owner |
+| 还是待办、优先级低 | 沉到 L3 待办池,不消失 | 代码(派生) |
+| 请求发出没人接、「我看看」悬着 | 时钟到期 → CLOSED_LAPSED(未成立的对话,不是待办) | 代码 |
+| 对方欠的跟踪项长期没动静 | TTL 降级 → CLOSED_LAPSED(brief 报备) | 代码 |
+| 垃圾候选 | 在 G1-G10 门口就死,从未入账 | 代码 |
+
+- 时钟全局 3 个:未应答(work 3 工作日/social 7 天)、待验收(requester=对方
+  7 天 auto_accept;=owner 一键验收)、跟踪项 TTL。时钟只作用于**未成立状态**和
+  **对方侧**,永不作用于 performer=owner 的 COMMITTED。
 - **复活**(批判#5):CLOSED_DONE/DECLINED 等墓碑**永死**;CLOSED_LAPSED 凭
   `ts > closed_at` 的新证据进裁决队列;**永不自动复活**。
-- **安全阀**(永不自动遗忘):has_money(正则自动置位)、has_contract(LLM 提
-  议+owner 确认)、pinned(仅 owner)。安全阀防遗忘,不防带证据的关闭。
-- append-only 防 Schacter 的 bias(当前信念重写历史):what 变更只能走
-  supersede 链,旧记录冻结;防 suggestibility(自我喂养污染):抽取 prompt 的
-  输入只含原始消息,既有账本条目只以 key 哈希参与去重,其文本永不回流。
+- **安全阀**照旧:has_money / has_contract / pinned 连时钟都不吃。
+- append-only 防 bias(what 变更只走 supersede 链);no-self-feeding 防
+  suggestibility(抽取输入只含原始消息,账本文本永不回流)。
 
 Schacter 七宗罪对照:transience=TTL 状态机 / absent-mindedness=G10 覆盖守恒 /
 blocking=G11 render invariant / misattribution=G1+G3 / suggestibility=
-no-self-feeding / bias=append-only / persistence=本节全部。
+no-self-feeding / bias=append-only / persistence=关闭检测+三级下沉(非遗忘)。
 
 **Mauss 互惠账:不建**(owner 裁决,2026-08-22,推翻批判#9)。催不催、何时催,
 标准是事情对企业的价值与时间压力,不是人情余额 —— 互惠不得影响任何行动或排序。
@@ -262,12 +269,12 @@ per-person 履约统计不进入本设计。
 第一铁律:owner 的每个低摩擦手势都有代码路径写回账本;账本每次变化都能被一个
 手势撤销或确认。**手势查表,不经 LLM**(唯一 LLM 通道是自然语言 chat)。
 
-手势表:TickTick 勾选=验收(CLOSED_DONE)/ 删除=dropped(次日 digest 四选一补问
-原因,不答=confirmed)/ 挪清单@不是我的=performer 改判+反例入库 / 挪清单@过时了
-=LAPSED+时窗反例 / 挪日期=due 更新 / digest 一键(confirm_done/not_mine/stale/
-merge_up/wrong_detail/restore/create_persona/mute_sender)。
-⚠ 落地前置:验证 TickTick 同步能否读回 move/delete/reschedule 事件(批判#23),
-不可行则这三种手势降级为 digest 按钮。
+手势表(owner 裁决,2026-08-22):勾选 = **自动执行(A 类:Jira/Calendar)+
+完成**(已上线,幂等);删除 = 丢弃(dropped);清单间移动 = 优先级改判(L1/L2/L3
+对应 due/紧急度更新);挪日期 = due 更新;digest 一键(confirm_done/not_mine/
+wrong_detail/restore/create_persona/mute_sender)。
+⚠ 落地前置:验证 TickTick 能否读回 delete/move/reschedule 事件(批判#23),
+读不回的手势降级为每日简报一键按钮。
 
 **裁决即训练**(Schank「从失败中重组记忆」,批判#10):Adjudication log 是唯一
 失败数据源,**永久保留**(账本可遗忘,裁决日志不遗忘);golden replay 标注集从
@@ -339,10 +346,11 @@ performer)、`status: overdue`(改派生视图)、按条数取语料(改时间�
 - owner 的每次裁决自动回灌标注集——**评估集单调增长,系统的成绩单由 owner 的
   真实裁决构成**,不由自评构成。
 
-## 12. 未裁决问题(已决的移入正文)
+## 12. 裁决记录与待验证项
 
-- ✅ ACK:按对话内容定,不按人(§3,owner 2026-08-22)
-- ✅ 互惠账:砍掉,决策只按企业最优(§6,owner 2026-08-22)
-1. 周清扫的节奏:周日晚还是周一早?
-2. TickTick 手势(挪清单/挪日期/删除)若 API 读不回事件,接受降级为每日简报
-   一键按钮吗?(勾选已确认可读回;此问只关其余三种手势)
+已决(owner,2026-08-22):ACK 按对话内容定(§3)/ 互惠账砍掉(§6)/
+周清扫废除——系统永不自动删 owner 的待办,低优先级下沉不消失(§6)/
+清单按优先级分三级(§5)/ 勾选=自动执行+完成、删除=丢弃(§7)。
+
+待验证(工程,非裁决):TickTick API 能否读回 delete/move/reschedule 事件;
+读不回的手势走每日简报按钮。
