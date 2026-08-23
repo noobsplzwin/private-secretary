@@ -76,6 +76,13 @@ export interface GroundTruthItem {
   /** The owner's own words when he ruled. Provenance, never scored. */
   ownerQuote?: string;
   /**
+   * Set when the item cannot exist in the frozen input at all (no persona, a
+   * corrupt handle, a persona-less sender). These misses measure the INPUT
+   * layer — the person-discovery holes — identically for every strategy, so
+   * the scorecard buckets them apart from strategy misses.
+   */
+  inputUnreachable?: string;
+  /**
    * real items only: the recall hard-set. These are things the owner had to
    * point out himself (the Echo case) — a strategy that misses one fails the
    * run outright, per the blueprint's "recall 硬门".

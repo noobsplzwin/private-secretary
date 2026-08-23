@@ -103,13 +103,15 @@ export interface Scorecard {
   reproducedMistakes: Record<string, number>; // verdict → count
   /** matched nothing — needs owner review, NOT auto-scored */
   unknown: number;
-  /** real items the strategy missed */
+  /** real items the strategy missed and COULD have found */
   misses: string[];
-  /** mustFind items missed — any entry here fails the run */
+  /** real items no strategy can find — the input layer's holes, constant across strategies */
+  inputMisses: string[];
+  /** reachable mustFind items missed — any entry here fails the run */
   hardMisses: string[];
   /** TP / (TP + reproduced mistakes). Unknowns excluded — they are unscored. */
   precisionKnown: number;
-  /** TP / |real| */
+  /** TP / |reachable real| — input-unreachable items excluded from the denominator */
   recall: number;
 }
 
@@ -130,9 +132,11 @@ export function score(
   }
   const realIds = ground.filter((g) => g.verdict === "real");
   const matchedIds = new Set(match.pairs.map((p) => p.groundId));
-  const misses = realIds.filter((g) => !matchedIds.has(g.id)).map((g) => g.id);
-  const hardMisses = realIds
-    .filter((g) => g.mustFind && !matchedIds.has(g.id))
+  const missed = realIds.filter((g) => !matchedIds.has(g.id));
+  const misses = missed.filter((g) => !g.inputUnreachable).map((g) => g.id);
+  const inputMisses = missed.filter((g) => g.inputUnreachable).map((g) => g.id);
+  const hardMisses = missed
+    .filter((g) => g.mustFind && !g.inputUnreachable)
     .map((g) => g.id);
   const badCount = Object.values(reproduced).reduce((a, b) => a + b, 0);
   return {
@@ -143,8 +147,12 @@ export function score(
     reproducedMistakes: reproduced,
     unknown: match.unmatchedProposals.length,
     misses,
+    inputMisses,
     hardMisses,
     precisionKnown: tp + badCount === 0 ? 0 : tp / (tp + badCount),
-    recall: realIds.length === 0 ? 0 : tp / realIds.length,
+    recall: (() => {
+      const reachable = realIds.filter((g) => !g.inputUnreachable).length;
+      return reachable === 0 ? 0 : tp / reachable;
+    })(),
   };
 }

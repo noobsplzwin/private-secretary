@@ -94,7 +94,8 @@ console.log(`
 真阳性(TP)      ${card.truePositives} / ${ground.filter((g) => g.verdict === "real").length} real
 复现已知错误      ${JSON.stringify(card.reproducedMistakes)}
 未知提案(待裁决) ${card.unknown}
-漏检             ${card.misses.length}  ${card.misses.join(", ")}
+漏检(策略责任)  ${card.misses.length}  ${card.misses.join(", ")}
+输入层漏检        ${card.inputMisses.length}  ${card.inputMisses.join(", ")}(发掘人的洞,所有策略共同的天花板)
 硬门漏检          ${card.hardMisses.length > 0 ? `❌ FAIL: ${card.hardMisses.join(", ")}` : "✅ 0"}
 precision(known) ${(card.precisionKnown * 100).toFixed(0)}%
 recall           ${(card.recall * 100).toFixed(0)}%
