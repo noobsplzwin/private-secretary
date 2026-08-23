@@ -157,10 +157,13 @@ type SpeechAct = {
 比较忙/要问一下老板→declination)、拖延性关闭(先放放——按说话人角色分流:
 requester 说=WITHDRAW,performer 说=HEDGE)。
 
-**ACK 特判**(owner 永久裁决项):「收到」回应带具体交付物+entity 的 work-frame
-分派 → 进 owner 裁决队列(权力关系机器不可知);其余 ACK 不填槽位,REQUESTED
-保持 open。L0 的 ack 短语过滤加旁路(批判#7):短语时序上跟在某 open REQUESTED
-之后且同会话 → 放行进分类,否则 CONTEXT_ONLY。
+**ACK 规则**(owner 裁决,2026-08-22,取代原「永久人工裁决」设计):「收到」的
+含义由它回应的 FPP 的内容机械决定 ——
+FPP 是 directive ∧ 含具体交付物(过 G9)∧ 指向 owner → ACK = 接受,推
+REQUESTED→COMMITTED(证据 = ACK 话语本身);FPP 是 assertive/FYI/通知 →
+ACK = 归档为知识,零承诺。边界情况(directive 但交付物模糊)→ 裁决队列。
+L0 的 ack 短语过滤加旁路(批判#7):短语时序上跟在某 open REQUESTED 之后且
+同会话 → 放行进分类,否则 CONTEXT_ONLY。
 
 **Frame 单向阀**(Goffman):代码算 prior(渠道/群vs私聊/关系/matter 绑定),
 LLM 只许把 work 降为 social,**不许把 social 升为 work**(升格需命中机械白名单:
@@ -250,10 +253,9 @@ Schacter 七宗罪对照:transience=TTL 状态机 / absent-mindedness=G10 覆盖
 blocking=G11 render invariant / misattribution=G1+G3 / suggestibility=
 no-self-feeding / bias=append-only / persistence=本节全部。
 
-**Mauss 互惠账**(批判#9,最小实现):per-person 派生计数
-(CLOSED_DONE/RENEGED 按角色分组),纯派生视图,展示在催办候选与周 review
-(欠对方人情时不该三天就催;renege 后追不追,owner 拿着余额才裁得动)。
-不建新状态,不自动调参。
+**Mauss 互惠账:不建**(owner 裁决,2026-08-22,推翻批判#9)。催不催、何时催,
+标准是事情对企业的价值与时间压力,不是人情余额 —— 互惠不得影响任何行动或排序。
+per-person 履约统计不进入本设计。
 
 ## 7. 延展心智交互契约
 
@@ -337,10 +339,10 @@ performer)、`status: overdue`(改派生视图)、按条数取语料(改时间�
 - owner 的每次裁决自动回灌标注集——**评估集单调增长,系统的成绩单由 owner 的
   真实裁决构成**,不由自评构成。
 
-## 12. 留给 owner 的未裁决问题
+## 12. 未裁决问题(已决的移入正文)
 
-1. ACK 升格(「收到」= 接受?)按人还是按对话定?——设计为永久 owner 裁决项,
-   但可让系统记住 per-person 的历史裁决作为默认呈现。
-2. 周清扫的节奏:周日晚还是周一早?(影响 brief 的内容切分)
-3. 互惠账要不要在催办文案里显式引用(「他上月帮过你三次」)还是只作排序信号?
-4. TickTick 手势(挪清单/挪日期)若 API 读不回,接受降级为 digest 按钮吗?
+- ✅ ACK:按对话内容定,不按人(§3,owner 2026-08-22)
+- ✅ 互惠账:砍掉,决策只按企业最优(§6,owner 2026-08-22)
+1. 周清扫的节奏:周日晚还是周一早?
+2. TickTick 手势(挪清单/挪日期/删除)若 API 读不回事件,接受降级为每日简报
+   一键按钮吗?(勾选已确认可读回;此问只关其余三种手势)
