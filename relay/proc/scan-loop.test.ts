@@ -1023,6 +1023,7 @@ describe("person-first assessment trigger", () => {
   it("records who spoke, keyed by persona", async () => {
     await runScanTick({
       statePath,
+      sources: ["slack"],
       slackClient: slack(),
       resolvePersonaKey: (h) => (h === "U2" ? "someone" : null),
     });
@@ -1031,7 +1032,8 @@ describe("person-first assessment trigger", () => {
   });
 
   it("records nothing for a handle no persona claims", async () => {
-    await runScanTick({ statePath, slackClient: slack(), resolvePersonaKey: () => null });
+    await runScanTick({ statePath,
+      sources: ["slack"], slackClient: slack(), resolvePersonaKey: () => null });
     expect(JSON.parse(readFileSync(statePath, "utf8")).personTraffic).toEqual({});
   });
 
@@ -1039,6 +1041,7 @@ describe("person-first assessment trigger", () => {
     const seen: string[] = [];
     await runScanTick({
       statePath,
+      sources: ["slack"],
       slackClient: slack(),
       resolvePersonaKey: (h) => (h === "U2" ? "someone" : null),
       personaUpdate: {
@@ -1071,6 +1074,7 @@ describe("person-first assessment trigger", () => {
     };
     const opts = {
       statePath,
+      sources: ["slack" as const],
       resolvePersonaKey: (h: string) => (h === "U2" ? "someone" : null),
       personaUpdate: deps,
     };
@@ -1105,6 +1109,7 @@ describe("the list is the ledger", () => {
     const { created, writer } = writerStub();
     await runScanTick({
       statePath,
+      sources: ["slack"],
       slackClient: slackStub([{ id: "C1", is_im: true }], {
         C1: [{ ts: "100.0", user: "U2", text: `hi <@${SELF_SLACK}>` }],
       }),

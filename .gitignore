@@ -7,6 +7,13 @@ state-demo/
 # The aggregate baseline reports in eval/*.json|md ARE committed — they hold
 # only counts, no message text.
 eval/replay-corpus/
+# L2A bench data: ground truth carries real names + business facts, the frozen
+# corpus carries real chat text, detail reports quote both. NEVER commit.
+# Aggregate scorecards (eval/l2a-reports/scorecard-*.json) hold counts only
+# and ARE committed.
+eval/ground-truth.yaml
+eval/l2a-corpus/
+eval/l2a-reports/detail-*
 .gstack/
 *.log
 .DS_Store
