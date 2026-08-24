@@ -62,7 +62,8 @@ export type GroundVerdict =
   | "not_mine" // someone else's first-person commitment mis-assigned to him
   | "stale" // long-finished or long-ago; must not resurface
   | "invented_detail" // right work, fabricated entity (the U2A8 case)
-  | "too_granular"; // a thought/consideration, not a deliverable
+  | "too_granular" // a thought/consideration, not a deliverable
+  | "wrong_action"; // real matter, but the proposed action is not what the situation needs
 
 export interface GroundTruthItem {
   id: string;

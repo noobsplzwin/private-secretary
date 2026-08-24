@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { parse } from "yaml";
 import type { GroundTruthItem, GroundVerdict } from "./l2a.js";
 
-const VERDICTS: GroundVerdict[] = ["real", "not_mine", "stale", "invented_detail", "too_granular"];
+const VERDICTS: GroundVerdict[] = ["real", "not_mine", "stale", "invented_detail", "too_granular", "wrong_action"];
 
 export function loadGroundTruth(path: string): GroundTruthItem[] {
   const raw = parse(readFileSync(path, "utf8")) as { items?: unknown[] };
