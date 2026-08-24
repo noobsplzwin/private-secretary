@@ -42,6 +42,9 @@ config/tools.json
 
 # Personas are dossiers on real people — never commit them.
 personas/*.yaml
+personas/_backup*/
+# The owner's matter registry: business facts. NEVER commit.
+config/matters.yaml
 personas/_staged/
 !personas/_example/
 
