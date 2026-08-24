@@ -62,6 +62,15 @@ const card = score(strategy.name, manifest.frozenAt, proposals, ground, match);
 
 // ── reports ──
 const stamp = new Date().toISOString().slice(0, 10);
+
+// Raw proposals, so a later change to the matcher or to the ground truth can be
+// re-scored offline instead of costing another 80-minute LLM run. (2026-08-25:
+// tightening the hint rule stranded S0's card for exactly this reason.)
+writeFileSync(
+  `${reportDir}/proposals-${strategy.name}-${stamp}.json`,
+  JSON.stringify({ strategy: strategy.name, frozenAt: manifest.frozenAt, proposals }, null, 2),
+);
+
 writeFileSync(
   `${reportDir}/scorecard-${strategy.name}-${stamp}.json`,
   JSON.stringify({ ...card, elapsedSeconds: elapsed, groundTruthSize: ground.length }, null, 2),

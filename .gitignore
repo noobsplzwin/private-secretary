@@ -14,6 +14,7 @@ eval/replay-corpus/
 eval/ground-truth.yaml
 eval/l2a-corpus/
 eval/l2a-reports/detail-*
+eval/l2a-reports/proposals-*
 .gstack/
 *.log
 .DS_Store
