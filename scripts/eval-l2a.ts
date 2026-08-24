@@ -14,6 +14,7 @@ import { loadGroundTruth } from "../relay/eval/l2a-ground.js";
 import { matchProposals, score } from "../relay/eval/l2a-match.js";
 import type { EvalInput, FrozenPerson, L2AStrategy } from "../relay/eval/l2a.js";
 import { s0Current } from "../relay/eval/strategies/s0-current.js";
+import { s1Cfa } from "../relay/eval/strategies/s1-cfa.js";
 import { createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
 
 const argv = process.argv.slice(2);
@@ -41,6 +42,7 @@ const input: EvalInput = { frozenAt: manifest.frozenAt, matters: [], persons };
 // ── strategy registry ──
 const strategies: Record<string, () => L2AStrategy> = {
   s0: () => s0Current(createClaudeCliJsonCaller({ timeoutMs: 480_000 })),
+  s1: () => s1Cfa(createClaudeCliJsonCaller({ timeoutMs: 480_000 })),
 };
 const make = strategies[strategyName];
 if (!make) {
