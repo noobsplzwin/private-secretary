@@ -32,6 +32,34 @@ describe("matchProposals", () => {
     expect(m.unmatchedGround).toEqual(["g1"]);
   });
 
+  // REGRESSION 2026-08-24: the S0 scorecard reported a true positive for
+  // 「和朱桦去井智科技」 because the proposal 「帮朱桦搭 PPT agent」 shared the
+  // name 朱桦. A person says WHO, never WHAT — one anchor is not a match.
+  it("one shared person-name does NOT match a two-anchor item", () => {
+    const m = matchProposals(
+      [p({ title: "帮朱桦搭 Claude agent 自动生成 NXP 格式 PPT", evidence: [] })],
+      [g({ id: "jingzhi", title: "和朱桦去井智科技", matchHints: ["井智", "朱桦"] })],
+    );
+    expect(m.pairs).toEqual([]);
+    expect(m.unmatchedProposals).toEqual([0]);
+  });
+
+  it("both anchors present still matches on hints alone", () => {
+    const m = matchProposals(
+      [p({ title: "约朱桦时间去井智科技拜访", evidence: [] })],
+      [g({ id: "jingzhi", title: "和朱桦去井智科技", matchHints: ["井智", "朱桦"] })],
+    );
+    expect(m.pairs).toHaveLength(1);
+  });
+
+  it("a single-anchor item still matches on its one anchor", () => {
+    const m = matchProposals(
+      [p({ title: "Visit 茂名 — moved to Saturday", evidence: [] })],
+      [g({ id: "maoming", title: "8/28 与金小奇、诚哥去茂名", matchHints: ["茂名"] })],
+    );
+    expect(m.pairs).toHaveLength(1);
+  });
+
   it("a match hint (entity) pins lexically distant same-work pairs", () => {
     const m = matchProposals(
       [p({ title: "安排瑞萨周一寄两块开发板给陈古龙", evidence: ["我让他们周一给你寄两块U2A8的板子"] })],

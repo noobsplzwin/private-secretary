@@ -48,10 +48,16 @@ export interface MatchResult {
 const MATCH_THRESHOLD = 0.45;
 
 /**
- * Greedy best-first matching, constrained to the same persona. A match hint
- * (entity/name token appearing verbatim in the proposal title or evidence)
- * counts as a hit regardless of overlap — entities are the strongest identity
- * signal we have, and they are exactly what G3 anchors.
+ * Greedy best-first matching, constrained to the same persona. Match hints
+ * (entity/name tokens appearing verbatim in the proposal title or evidence)
+ * can carry a pair to threshold on their own — entities are the strongest
+ * identity signal we have, and they are exactly what G3 anchors.
+ *
+ * But ONE shared entity is not evidence of the same work: 「和朱桦去井智科技」
+ * and 「帮朱桦搭 PPT agent」 share 朱桦 and nothing else, and the 2026-08-24 S0
+ * run scored that as a true positive. A person's name says WHO, never WHAT.
+ * So a hint-carried match needs TWO independent anchors when the item offers
+ * two — one-hint items (「茂名」) still match on their single anchor.
  */
 export function matchProposals(
   proposals: readonly ProposedTodo[],
@@ -65,11 +71,11 @@ export function matchProposals(
       // all — that unresolvability is part of what the bench measures).
       if (gt.personaKey !== "*" && gt.personaKey !== proposals[p]!.personaKey) continue;
       const text = `${proposals[p]!.title} ${proposals[p]!.evidence.join(" ")}`;
-      const hintHit = (gt.matchHints ?? []).some((h) =>
-        text.toLowerCase().includes(h.toLowerCase()),
-      );
+      const hints = gt.matchHints ?? [];
+      const hintHits = hints.filter((h) => text.toLowerCase().includes(h.toLowerCase())).length;
+      const hintCarries = hints.length > 0 && hintHits >= Math.min(2, hints.length);
       const score = overlapScore(proposals[p]!.title, gt.title);
-      const eff = hintHit ? Math.max(score, MATCH_THRESHOLD) : score;
+      const eff = hintCarries ? Math.max(score, MATCH_THRESHOLD) : score;
       if (eff >= MATCH_THRESHOLD) candidates.push({ p, g, score: eff });
     }
   }

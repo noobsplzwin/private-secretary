@@ -1,0 +1,29 @@
+{
+  "strategy": "s0-current",
+  "frozenAt": "2026-08-24T05:08:06.420Z",
+  "proposals": 12,
+  "truePositives": 2,
+  "reproducedMistakes": {
+    "not_mine": 2,
+    "stale": 2,
+    "invented_detail": 1
+  },
+  "unknown": 5,
+  "misses": [
+    "r-ds-epic",
+    "r-3500-order",
+    "r-zqy-payment"
+  ],
+  "inputMisses": [
+    "r-echo-lab",
+    "r-credit-card"
+  ],
+  "hardMisses": [
+    "r-3500-order",
+    "r-zqy-payment"
+  ],
+  "precisionKnown": 0.2857142857142857,
+  "recall": 0.5,
+  "elapsedSeconds": 4927,
+  "groundTruthSize": 21
+}
