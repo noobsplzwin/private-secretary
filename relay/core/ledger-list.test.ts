@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveLedgerTasks } from "./ledger-list.js";
+import { deriveLedgerTasks, POOL_LIST } from "./ledger-list.js";
 import type { Commitment } from "./persona-v3.js";
 
 const NOW = Date.parse("2026-08-22T12:00:00Z");
@@ -16,15 +16,57 @@ const c = (over: Partial<Commitment>): Commitment => ({
   ...over,
 });
 
+// Every matter these tests name is live unless a test says otherwise.
+const LIVE: ReadonlySet<string> = new Set(["m1", "m2", "antenna", "fcc", "order-3500"]);
+const derive = (
+  personas: Parameters<typeof deriveLedgerTasks>[0],
+  zone = ZONE,
+  now = NOW,
+  live: ReadonlySet<string> = LIVE,
+) => deriveLedgerTasks(personas, zone, now, live);
+
 const persona = (commitments: Commitment[], key = "zech", display_name = "Zech Noiseux") => ({
   key,
   display_name,
   commitments,
 });
 
+describe("the promotion gate — a matter is what earns a row its slot", () => {
+  // 2026-08-24 clearance swept 163 matter-less rows by hand; ten days later the
+  // ledger had minted 59 more. A cleanup is not a gate.
+  it("sinks a matter-less commitment to the pool at no priority", () => {
+    const [row] = derive([persona([c({ due: "2026-08-23", ...assessed(true) })])]);
+    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0); // imminent, but nothing outside a live matter may claim the day
+  });
+
+  it("sinks a commitment whose matter the owner has closed", () => {
+    const [row] = derive([persona([c({ matter_id: "maoming-trip", ...assessed(true) })])]);
+    expect(row!.payload.project).toBe(POOL_LIST);
+  });
+
+  it("promotes a commitment in a live matter, keeping its deadline priority", () => {
+    const [row] = derive([persona([c({ matter_id: "fcc", due: "2026-08-23", ...assessed(true) })])]);
+    expect(row!.payload.project).toBeUndefined(); // the default working list
+    expect(row!.payload.priority).toBe(5);
+  });
+
+  it("sinks — never drops: the row still exists and keeps its key", () => {
+    const sunk = derive([persona([c({ ...assessed(true) })])]);
+    const live = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])]);
+    expect(sunk).toHaveLength(1);
+    expect(sunk[0]!.unitKey).toBe(live[0]!.unitKey); // same work, same identity, different shelf
+  });
+
+  it("an empty registry sinks everything rather than promoting silently", () => {
+    const [row] = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])], ZONE, NOW, new Set());
+    expect(row!.payload.project).toBe(POOL_LIST);
+  });
+});
+
 describe("deriveLedgerTasks", () => {
   it("derives a row only from open + who=me + needs_leo", () => {
-    const rows = deriveLedgerTasks(
+    const rows = derive(
       [
         persona([
           c({ ...assessed(true) }),
@@ -42,7 +84,7 @@ describe("deriveLedgerTasks", () => {
   });
 
   it("renders the verdict's next_step as the checklist and the quote as the note", () => {
-    const [row] = deriveLedgerTasks(
+    const [row] = derive(
       [persona([c({ ...assessed(true, { next_step: "把签好的 NDA 扫描发回李冰" }) })])],
       ZONE,
       NOW,
@@ -54,7 +96,7 @@ describe("deriveLedgerTasks", () => {
   });
 
   it("renders TEXT when the verdict carries no next_step", () => {
-    const [row] = deriveLedgerTasks([persona([c({ ...assessed(true) })])], ZONE, NOW);
+    const [row] = derive([persona([c({ ...assessed(true) })])], ZONE, NOW);
     expect(row!.payload.kind).toBe("TEXT");
     expect(row!.payload.content).toContain("依据");
   });
@@ -62,19 +104,23 @@ describe("deriveLedgerTasks", () => {
   // Priority is mechanical, from the deadline alone. Never invented: an undated
   // commitment carries no flag, so TickTick's date views stay meaningful.
   it("prioritises by deadline proximity and never invents a date", () => {
-    const rows = deriveLedgerTasks(
+    const rows = derive(
       [
         persona([
-          c({ what: "imminent", due: "2026-08-23", ...assessed(true) }),
-          c({ what: "this week", due: "2026-08-27", ...assessed(true) }),
-          c({ what: "far off", due: "2026-10-01", ...assessed(true) }),
-          c({ what: "overdue", due: "2026-08-10", ...assessed(true) }),
-          c({ what: "undated", ...assessed(true) }),
-          c({ what: "free-text date", due: "before the Shenzhen trip", ...assessed(true) }),
+          // Each carries its OWN live matter: deadline priority is what a
+          // promoted row gets, and one shared matter would collapse them into
+          // a single chain row.
+          c({ what: "imminent", due: "2026-08-23", matter_id: "p1", ...assessed(true) }),
+          c({ what: "this week", due: "2026-08-27", matter_id: "p2", ...assessed(true) }),
+          c({ what: "far off", due: "2026-10-01", matter_id: "p3", ...assessed(true) }),
+          c({ what: "overdue", due: "2026-08-10", matter_id: "p4", ...assessed(true) }),
+          c({ what: "undated", matter_id: "p5", ...assessed(true) }),
+          c({ what: "free-text date", due: "before the Shenzhen trip", matter_id: "p6", ...assessed(true) }),
         ]),
       ],
       ZONE,
       NOW,
+      new Set(["p1", "p2", "p3", "p4", "p5", "p6"]),
     );
     const by = (t: string) => rows.find((r) => r.payload.title === t)!.payload;
     expect(by("imminent").priority).toBe(5);
@@ -88,7 +134,7 @@ describe("deriveLedgerTasks", () => {
 
   it("keys rows by persona and wording, stable across calls", () => {
     const twice = [0, 1].map(
-      () => deriveLedgerTasks([persona([c({ ...assessed(true) })])], ZONE, NOW)[0]!.unitKey,
+      () => derive([persona([c({ ...assessed(true) })])], ZONE, NOW)[0]!.unitKey,
     );
     expect(twice[0]).toBe(twice[1]);
     expect(twice[0]).toMatch(/^ledger_zech_/);
@@ -100,7 +146,7 @@ describe("deriveLedgerTasks", () => {
       c({ matter_id: "antenna-2026", ...over });
 
     it("collapses a matter into one row led by the active who=me link", () => {
-      const rows = deriveLedgerTasks(
+      const rows = derive(
         [
           persona([
             antenna({ what: "找供应商采购天线", ...assessed(true, { next_step: "下单并付款" }) }),
@@ -119,7 +165,7 @@ describe("deriveLedgerTasks", () => {
     // The owner's own adjudication of the antenna matter: fully handed off →
     // "不需要任何我做的事情，但是还是要算作一个commitment".
     it("derives nothing when the matter's open links all sit with others", () => {
-      const rows = deriveLedgerTasks(
+      const rows = derive(
         [
           persona([
             antenna({ what: "找供应商采购天线", ...assessed(false, { blocked_on: "them" }) }),

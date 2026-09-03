@@ -37,6 +37,7 @@ import { readPersonaV3File } from "../relay/io/persona-store.js";
 import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
 import { loadProjects, loadLeoProfile } from "../relay/io/projects.js";
+import { activeMatterIds, readMatters } from "../relay/io/matters.js";
 import { renderProjectCatalog } from "../relay/core/project.js";
 import { createAnthropicLlmCaller, createAnthropicJsonCaller } from "../relay/proc/llm-anthropic.js";
 import { createClaudeCliLlmCaller, createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
@@ -695,6 +696,18 @@ console.log(
   // The LIST's source (PHASE 6b): re-read the ledgers from disk each call,
   // because the person pass earlier in the same tick may have just changed
   // them — a cached copy would render stale commitments.
+  // The owner's matter registry gates promotion (core/ledger-list.ts). Read per
+  // call so an edit to matters.yaml takes effect on the next scan, not the next
+  // restart — the registry is the one thing the owner edits by hand.
+  const activeMatters = (): ReadonlySet<string> => {
+    try {
+      return activeMatterIds(readMatters(resolve(process.cwd(), "config/matters.yaml")));
+    } catch (e) {
+      console.error(`[notify] matters.yaml unreadable — every row sinks to the pool: ${(e as Error).message}`);
+      return new Set();
+    }
+  };
+
   const ledgerPersonas = (): Array<{ key: string; display_name?: string; commitments?: Commitment[] }> => {
     const out: Array<{ key: string; display_name?: string; commitments?: Commitment[] }> = [];
     for (const f of readdirSync(personaDir)) {
@@ -730,6 +743,7 @@ console.log(
           ...(ticktickReader ? { ticktickReader } : {}),
           ...(executeDeps ? { execute: executeDeps } : {}),
           ledgerPersonas,
+          activeMatters,
           resolvePersonaKey,
           maxDraftCandidates: maxDraft,
         });

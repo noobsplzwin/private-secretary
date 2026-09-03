@@ -66,3 +66,7 @@ config/owner-voice.md
 # Local only — NEVER commit.
 .kimi-code/
 .kimi/
+
+# Clash 配置备忘：含真实节点 IP / 密码 / obfs-password。
+# 本地参考用，两个远程都是公开的 —— NEVER commit.
+docs/clash-verge-setup/

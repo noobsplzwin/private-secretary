@@ -21,6 +21,16 @@
 // real-world matter, so they produce at most ONE row — the active link where
 // the work sits with Leo. A matter whose only open links sit with others
 // produces nothing, however many entries it has.
+//
+// PROMOTION GATE (owner, 2026-09-03): a matter is the owner's own answer to
+// "what am I actually working on", so belonging to a LIVE one is what earns a
+// row its place on the working list. A commitment with no matter, or one whose
+// matter the owner has closed, still gets a row — it sinks to the 待办池 list
+// at no priority. It is never dropped: 系统删待办这个概念不存在。
+//
+// This is the gate the 2026-08-24 clearance did by hand. Ten days later the
+// ledger had minted 59 fresh matter-less rows, because a one-off cleanup is
+// not a gate. Prompt rules die; code gates live.
 
 import { stableHash } from "./unit-key.js";
 import { dueFields } from "./ticktick-plan.js";
@@ -35,6 +45,10 @@ export interface LedgerPersona {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Where sunk rows go. The list must exist in TickTick — the io layer resolves
+ * a name and throws rather than inventing a list. */
+export const POOL_LIST = "待办池";
 
 // Priority is MECHANICAL, from the deadline alone — the ranking pass that used
 // to assign tiers is retired. Overdue or imminent work is high; dated work is
@@ -56,6 +70,7 @@ function itemFor(
   chain: readonly Commitment[],
   zone: string,
   nowMs: number,
+  sunk: boolean,
 ): DesiredTask {
   const steps = chain
     .map((c) => c.assessment?.next_step?.trim())
@@ -73,7 +88,10 @@ function itemFor(
   const payload: TickTickTaskPayload = {
     title: lead.what,
     kind: steps.length > 0 ? "CHECKLIST" : "TEXT",
-    priority: priorityFor(due, nowMs),
+    // A sunk row carries no urgency by construction — priority is what pulls a
+    // row into the owner's day, and nothing outside a live matter may do that.
+    priority: sunk ? 0 : priorityFor(due, nowMs),
+    ...(sunk ? { project: POOL_LIST } : {}),
     ...(steps.length > 0
       ? { desc: note, items: steps.map((title, i) => ({ title, status: 0 as const, sortOrder: i })) }
       : { content: note }),
@@ -89,11 +107,18 @@ function itemFor(
   };
 }
 
-/** Every row the ledger owes the list right now. */
+/**
+ * Every row the ledger owes the list right now.
+ *
+ * `activeMatters` is the owner's live registry (io/matters.ts). It is required,
+ * not optional: a caller that forgets it would silently reopen the leak this
+ * gate exists to close.
+ */
 export function deriveLedgerTasks(
   personas: ReadonlyArray<LedgerPersona>,
   zone: string,
   nowMs: number,
+  activeMatters: ReadonlySet<string>,
 ): DesiredTask[] {
   const out: DesiredTask[] = [];
   for (const p of personas) {
@@ -109,19 +134,19 @@ export function deriveLedgerTasks(
       m.push(c);
       matters.set(c.matter_id, m);
     }
-    for (const chain of matters.values()) {
+    for (const [matterId, chain] of matters) {
       // The ACTIVE link is the one where the work sits with Leo. A chain whose
       // open links all sit with others is tracked but owes no row — exactly how
       // the owner adjudicated the antenna matter by hand.
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (!lead) continue;
-      out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs));
+      out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, !activeMatters.has(matterId)));
     }
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
       if (c.who !== "me" || !c.assessment?.needs_leo) continue;
-      out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs));
+      out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true));
     }
   }
   return out;

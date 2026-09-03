@@ -17,6 +17,7 @@ import { createTickTickWriter } from "../relay/io/ticktick-mcp.js";
 import { loadSyncMap, saveSyncMap, syncPathFor } from "../relay/io/ticktick-sync-store.js";
 import { syncToTickTick, cardRows } from "../relay/proc/ticktick-sync.js";
 import { deriveLedgerTasks } from "../relay/core/ledger-list.js";
+import { activeMatterIds, readMatters } from "../relay/io/matters.js";
 import { loadPersonas } from "../relay/io/personas.js";
 import { buildPersonaResolver } from "../relay/proc/draft.js";
 import { readPersonaV3File } from "../relay/io/persona-store.js";
@@ -55,7 +56,12 @@ const ledgerPersonas = readdirSync(personaDir)
   });
 const { resolve } = buildPersonaResolver(loadPersonas(personaDir));
 const rows = [
-  ...deriveLedgerTasks(ledgerPersonas, zone, nowMs).map((d) => ({ ...d, executable: [] })),
+  ...deriveLedgerTasks(
+    ledgerPersonas,
+    zone,
+    nowMs,
+    activeMatterIds(readMatters(join(process.cwd(), "config/matters.yaml"))),
+  ).map((d) => ({ ...d, executable: [] })),
   ...cardRows(state, zone, nowMs, (unit) =>
     unit.members.every((m) => {
       const h = m.context?.sender_handle;
