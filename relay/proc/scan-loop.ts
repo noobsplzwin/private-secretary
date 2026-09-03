@@ -889,6 +889,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // done; ticked items record done too when no executor is configured
       // (the pre-§1 behaviour — a tick means "I already did it").
       const done = new Set([...closed, ...(opts.execute ? [] : ticked)]);
+
+      // The MAP is saved on its own signal. `done` counts card-derived actions,
+      // and a ledger row has no action behind it — gating the save on `done`
+      // threw away every tombstone the owner earned by finishing ledger tasks.
+      // Measured on the real account before this fix: 141 tracked records, 0
+      // tombstones, 87 tasks already gone from TickTick. No tombstone is what
+      // mints twins, because a re-listed to-do then creates instead of reopens.
+      // `unitsClosed` is exactly how many records were tombstoned this pass, so
+      // it is the map-changed signal.
+      if (unitsClosed > 0) saveSyncMap(opts.statePath, map);
+
       if (done.size > 0 || executedNow.length > 0) {
         const byId = new Map(executedNow.map((a) => [a.id, a]));
         await commitUnderLock((fresh) => {
@@ -900,7 +911,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
               : a;
           });
         });
-        saveSyncMap(opts.statePath, map);
+      }
+      if (done.size > 0 || executedNow.length > 0 || unitsClosed > 0) {
         console.log(
           `[ticktick] read back ${done.size} finished, ${executedNow.length} executed-by-tick, ${unitsClosed} task(s) closed`,
         );

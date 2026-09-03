@@ -1143,6 +1143,47 @@ describe("the list is the ledger", () => {
   });
 });
 
+// REGRESSION 2026-09-03: the readback computed tombstones and then threw them
+// away. saveSyncMap sat inside `if (done.size > 0 || executedNow.length > 0)`,
+// and `done` is built only from CARD-derived action ids — a ledger row has no
+// action behind it. So the owner finishing ledger tasks produced tombstones in
+// memory and never on disk: measured on the real account, 141 tracked records,
+// 0 tombstones, 87 tasks already gone from TickTick. No tombstone is what mints
+// twins — the same to-do re-listed becomes a NEW task instead of a reopen.
+describe("readback tombstones a ledger row the owner finished", () => {
+  let dir: string;
+  let statePath: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "tombstone-"));
+    statePath = join(dir, "loop-state.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({ version: 2, marks: {}, actions: [], outcomes: [], sourceErrors: {}, tasks: {} }),
+    );
+    writeFileSync(
+      join(dir, "ticktick-sync.json"),
+      JSON.stringify({
+        ledger_zech_abc: { ticktickId: "tt-gone", projectId: "p", hash: "h", title: "签署高通 NDA" },
+      }),
+    );
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("writes the tombstone to disk even though no card action closed", async () => {
+    // The task is no longer in TickTick's active list — the owner ticked it.
+    await runScanTick({
+      statePath,
+      sources: [] as never[],
+      ticktickReader: { listActive: async () => [] },
+    });
+    const map = JSON.parse(readFileSync(join(dir, "ticktick-sync.json"), "utf8"));
+    expect(map.ledger_zech_abc.done).toBeTypeOf("number");
+    // The record SURVIVES: a tombstone is remembered, never deleted — that is
+    // what lets a re-listing reopen the original instead of minting a twin.
+    expect(map.ledger_zech_abc.ticktickId).toBe("tt-gone");
+  });
+});
+
 // TICK-TO-EXECUTE (specs/ticktick-migration.md §1): the owner ticking a
 // labelled invite/tool line IS the approval, and exactly two action types
 // execute. The no-double-execute property is the one that matters most: the
