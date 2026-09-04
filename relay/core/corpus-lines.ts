@@ -119,3 +119,41 @@ export function ageInDays(line: CorpusLine, nowMs: number): number {
   if (Number.isNaN(t)) return Infinity;
   return (nowMs - t) / 86_400_000;
 }
+
+/**
+ * How old a line may be and still MINT new work. Past it a conversation is
+ * history: it can close or re-assess something already tracked, but it cannot
+ * invent a fresh obligation. Two of the owner's verdicts on the first generated
+ * list were simply 「很久以前」 — trips already taken, resurfaced as to-dos.
+ */
+export const MINT_WINDOW_DAYS = 14;
+
+/**
+ * May this extraction mint a commitment? THE one implementation — production
+ * (proc/persona-update.ts) and the bench's S0 strategy both call it, because a
+ * gate the bench cannot see is a gate the bench cannot score. The 2026-09-04
+ * S0 re-run measured no change for exactly that reason: the gates existed only
+ * on the production orchestrator, which the bench never enters.
+ *
+ * Refuses only on a POSITIVE reading:
+ *   - a who=me promise sitting in THEIR line (the arrow is reversed)
+ *   - a dated line older than the mint window
+ *   - a who=me promise whose line hedges (「考虑一下」 is a softened no)
+ *
+ * Evidence resolving to no single line, or to a line with no speaker (a Gmail
+ * body line), passes: declining to act beats guessing, and guessing here
+ * deletes real commitments.
+ */
+export function mintable(
+  lines: readonly CorpusLine[],
+  c: { who?: string; evidence?: string },
+  nowMs: number,
+  windowDays: number = MINT_WINDOW_DAYS,
+): boolean {
+  const line = lineOf(lines, c.evidence ?? "");
+  if (!line) return true;
+  if (c.who === "me" && line.speaker === "them") return false;
+  if (line.speaker !== "unknown" && ageInDays(line, nowMs) > windowDays) return false;
+  if (c.who === "me" && isHedged(line.text)) return false;
+  return true;
+}

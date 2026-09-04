@@ -10,7 +10,7 @@ import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { evidenceGrounded } from "../core/quote-check.js";
-import { ageInDays, indexCorpus, isHedged, lineOf } from "../core/corpus-lines.js";
+import { indexCorpus, mintable } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
   type ExtractedCommitment,
@@ -40,15 +40,6 @@ export interface PersonaUpdateDeps {
   /** Dates the ASSESS verdicts. */
   now?: () => string;
 }
-
-/**
- * How old a line may be and still MINT new work. Past it, a conversation is
- * history: it can still close or re-assess something already tracked, but it
- * cannot invent a fresh obligation. Two of the owner's verdicts on the first
- * generated list were simply 「很久以前」 — trips already taken, resurfaced as
- * to-dos. 14 days is his own review cadence.
- */
-const MINT_WINDOW_DAYS = 14;
 
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
 
@@ -184,35 +175,13 @@ export async function extractCommitmentsOnce(opts: {
   const at = (opts.now ?? (() => new Date().toISOString()))();
   const seen = new Set(existing.map((c) => norm(c.what)));
 
-  // STRUCTURAL GATES (core/corpus-lines.ts). Grounding above proves the quote
-  // is real; these read what the quote's own LINE says and refuse the three
-  // shapes the owner struck out by hand:
-  //
-  //   who     — a promise in THEIR line is never Leo's to-do. This is the
-  //             "Ihor said 'let me share u the excel'" failure, extracted with
-  //             the arrow reversed.
-  //   when    — a line older than the window cannot mint NEW work. Two of his
-  //             verdicts were 「很久以前」 on trips already taken.
-  //   hedged  — 「考虑一下」 is a softened refusal in Chinese, and he ruled on
-  //             exactly that: 「这个根本不需要创建ticket，这就是考虑一下」.
-  //
-  // Each gate acts ONLY on a positive reading. A quote that resolves to no
-  // single line, or to a line with no speaker (a Gmail body line), passes
-  // through untouched — declining to act beats guessing, and guessing here
-  // deletes real commitments.
+  // STRUCTURAL GATES — core/corpus-lines.ts `mintable`, the ONE implementation
+  // the bench also runs, so what ships here is what the scorecard measures.
   const lines = indexCorpus(opts.corpus);
   const nowMs = Date.parse(at);
   let gated = 0;
-  const passesGates = (e: ExtractedCommitment): boolean => {
-    const line = lineOf(lines, e.evidence ?? "");
-    if (!line) return true; // unattributable — not ours to reject
-    if (e.who === "me" && line.speaker === "them") return false;
-    if (line.speaker !== "unknown" && ageInDays(line, nowMs) > MINT_WINDOW_DAYS) return false;
-    if (e.who === "me" && isHedged(line.text)) return false;
-    return true;
-  };
   const fresh = okExtracted.filter((e) => !seen.has(norm(e.what))).filter((e) => {
-    if (passesGates(e)) return true;
+    if (mintable(lines, e, nowMs)) return true;
     gated++;
     return false;
   });

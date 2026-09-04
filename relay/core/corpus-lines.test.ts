@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageInDays, closedLater, indexCorpus, isHedged, lineOf } from "./corpus-lines.js";
+import { ageInDays, closedLater, indexCorpus, isHedged, lineOf, mintable } from "./corpus-lines.js";
 
 const NOW = Date.parse("2026-08-23T12:00:00Z");
 const CORPUS = [
@@ -77,5 +77,42 @@ describe("ageInDays", () => {
     expect(ageInDays(lineOf(LINES, "老黄历")!, NOW)).toBeGreaterThan(80);
     expect(ageInDays(lineOf(LINES, "好的我今天发你")!, NOW)).toBeLessThan(4);
     expect(ageInDays(LINES[0]!, NOW)).toBe(Infinity);
+  });
+});
+
+// `mintable` is deliberately the ONE implementation: production's extraction
+// and the bench's S0 strategy both call it. When the gates lived only on the
+// production orchestrator, the 2026-09-04 bench re-run scored the ungated path
+// and reported that shipping them had changed nothing.
+describe("mintable", () => {
+  const NOW_MS = Date.parse("2026-08-23T12:00:00Z");
+  const m = (who: string, evidence: string) => mintable(LINES, { who, evidence }, NOW_MS);
+
+  it("refuses a who=me promise sitting in THEIR line", () => {
+    expect(m("me", "帮我把BOM发给温总")).toBe(false);
+  });
+
+  it("allows THEIR commitment recorded as theirs", () => {
+    expect(m("them", "帮我把BOM发给温总")).toBe(true);
+  });
+
+  it("refuses a line past the mint window, whoever spoke", () => {
+    expect(m("them", "老黄历:帮我订去年的展位")).toBe(false);
+  });
+
+  it("refuses a hedge in my own line", () => {
+    expect(m("me", "我看看周末有没有空弄官网")).toBe(false);
+  });
+
+  it("allows a fresh, unhedged promise in my own line", () => {
+    expect(m("me", "好的我今天发你")).toBe(true);
+  });
+
+  it("allows evidence that resolves to no single line", () => {
+    expect(m("me", "好的我今天发你了张工")).toBe(true);
+  });
+
+  it("allows a Gmail body line — unknown speaker is not a verdict", () => {
+    expect(m("me", "I will send the enclosure drawings tomorrow")).toBe(true);
   });
 });

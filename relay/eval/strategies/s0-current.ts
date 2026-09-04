@@ -17,6 +17,7 @@ import {
   parseExtractedCommitments,
 } from "../../proc/persona-update-prompt.js";
 import { evidenceGrounded } from "../../core/quote-check.js";
+import { indexCorpus, mintable } from "../../core/corpus-lines.js";
 import type { Commitment } from "../../core/persona-v3.js";
 import type { EvalInput, L2AStrategy, ProposedTodo } from "../l2a.js";
 
@@ -47,6 +48,14 @@ export function s0Current(json: JsonCaller): L2AStrategy {
         const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
           xs.filter((x) => x.evidence && evidenceGrounded(person.corpus, x.evidence));
 
+        // The SAME structural gates production runs (core/corpus-lines.ts).
+        // They used to live only on the production orchestrator, which this
+        // strategy does not enter — so the 2026-09-04 re-run scored the ungated
+        // path and reported no change from shipping them. A gate the bench
+        // cannot see is a gate the bench cannot score.
+        const lines = indexCorpus(person.corpus);
+        const nowMs = Date.parse(input.frozenAt);
+
         // Tracked open who=me the model judged needs_leo — the assess half.
         for (const a of grounded(parseExtractedAssessments(raw, existing.length))) {
           const target = existing[a.index]!;
@@ -64,6 +73,7 @@ export function s0Current(json: JsonCaller): L2AStrategy {
         // wait a round for assessment; steady-state they render, so they count.
         for (const c of grounded(parseExtractedCommitments(raw))) {
           if (c.who !== "me" || (c.status ?? "open") !== "open") continue;
+          if (!mintable(lines, c, nowMs)) continue;
           out.push({
             personaKey: person.personaKey,
             title: c.what,
