@@ -47,6 +47,8 @@ export interface MatchResult {
 
 const MATCH_THRESHOLD = 0.45;
 
+
+
 /**
  * Greedy best-first matching, constrained to the same persona. Match hints
  * (entity/name tokens appearing verbatim in the proposal title or evidence)
@@ -63,7 +65,7 @@ export function matchProposals(
   proposals: readonly ProposedTodo[],
   ground: readonly GroundTruthItem[],
 ): MatchResult {
-  const candidates: Array<{ p: number; g: number; score: number }> = [];
+  const candidates: Array<{ p: number; g: number; score: number; overlap: number }> = [];
   for (let p = 0; p < proposals.length; p++) {
     for (let g = 0; g < ground.length; g++) {
       const gt = ground[g]!;
@@ -73,13 +75,20 @@ export function matchProposals(
       const text = `${proposals[p]!.title} ${proposals[p]!.evidence.join(" ")}`;
       const hints = gt.matchHints ?? [];
       const hintHits = hints.filter((h) => text.toLowerCase().includes(h.toLowerCase())).length;
-      const hintCarries = hints.length > 0 && hintHits >= Math.min(2, hints.length);
       const score = overlapScore(proposals[p]!.title, gt.title);
+      const hintCarries = hints.length > 0 && hintHits >= Math.min(2, hints.length);
       const eff = hintCarries ? Math.max(score, MATCH_THRESHOLD) : score;
-      if (eff >= MATCH_THRESHOLD) candidates.push({ p, g, score: eff });
+      if (eff >= MATCH_THRESHOLD) candidates.push({ p, g, score: eff, overlap: score });
     }
   }
-  candidates.sort((a, b) => b.score - a.score);
+  // Overlap breaks ties. Every hint-carried pair scores exactly at threshold,
+  // so without this the winner is whichever came first in proposal order.
+  //
+  // 2026-09-04: 「约孙教授到港大见面…(周五待定,Leo周五可能在茂名)」 won 茂名 that
+  // way on one incidental parenthetical, and the real 「去茂名——已从周二改到
+  // 周六」 was left with nothing to pair with and counted as unknown. An anchor
+  // says two texts touch the same entity; overlap says which one is ABOUT it.
+  candidates.sort((a, b) => b.score - a.score || b.overlap - a.overlap);
 
   const usedP = new Set<number>();
   const usedG = new Set<number>();

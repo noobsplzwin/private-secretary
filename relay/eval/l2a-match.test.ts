@@ -52,6 +52,21 @@ describe("matchProposals", () => {
     expect(m.pairs).toHaveLength(1);
   });
 
+  // REGRESSION 2026-09-04: an incidental parenthetical mention of 茂名 in an
+  // otherwise unrelated proposal was scored a true positive for the 茂名 trip,
+  // and the greedy pass then left the REAL 茂名 proposal unmatched.
+  it("an incidental mention does not claim the item", () => {
+    const m = matchProposals(
+      [
+        p({ title: "约孙教授到港大见面,问芯片方案并商定朱桦来访实验室的时间(周五待定,Leo周五可能在茂名)", evidence: [] }),
+        p({ title: "去茂名——已从周二改到周六", evidence: [] }),
+      ],
+      [g({ id: "maoming", title: "8/28 与金小奇、诚哥去茂名", matchHints: ["茂名"] })],
+    );
+    expect(m.pairs).toHaveLength(1);
+    expect(m.pairs[0]!.proposalIdx).toBe(1); // the one actually about the trip
+  });
+
   it("a single-anchor item still matches on its one anchor", () => {
     const m = matchProposals(
       [p({ title: "Visit 茂名 — moved to Saturday", evidence: [] })],
