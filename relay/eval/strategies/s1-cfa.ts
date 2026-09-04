@@ -170,7 +170,11 @@ export function s1Cfa(json: JsonCaller): L2AStrategy {
     name: "s1-cfa",
     async propose(input: EvalInput): Promise<ProposedTodo[]> {
       const out: ProposedTodo[] = [];
+      // See the note in s0-current.ts: a run that prints nothing for 50 minutes
+      // cannot be told apart from a hung one.
+      let n = 0;
       for (const person of input.persons) {
+        console.log(`[s1] (${++n}/${input.persons.length}) ${person.personaKey}…`);
         let raw: unknown;
         try {
           raw = await json({
@@ -194,7 +198,9 @@ export function s1Cfa(json: JsonCaller): L2AStrategy {
                 ["me", "them", "other"].includes((x as Utterance).addressee),
             )
           : [];
-        out.push(...assembleProposals(person.personaKey, utterances, person.corpus, input.frozenAt));
+        const made = assembleProposals(person.personaKey, utterances, person.corpus, input.frozenAt);
+        console.log(`[s1]   → ${utterances.length} utterance(s) → ${made.length} proposal(s)`);
+        out.push(...made);
       }
       return out;
     },

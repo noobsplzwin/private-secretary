@@ -28,7 +28,13 @@ export function s0Current(json: JsonCaller): L2AStrategy {
     name: "s0-current",
     async propose(input: EvalInput): Promise<ProposedTodo[]> {
       const out: ProposedTodo[] = [];
+      // Per-person progress. A run is ~50 minutes of one LLM call after another
+      // with nothing on stdout, which is indistinguishable from a hang — asked
+      // and answered three times on 2026-09-04. A silent long job is a broken
+      // long job.
+      let n = 0;
       for (const person of input.persons) {
+        console.log(`[s0] (${++n}/${input.persons.length}) ${person.personaKey}…`);
         const existing = person.ledger as Commitment[];
         let raw: unknown;
         try {
@@ -69,6 +75,7 @@ export function s0Current(json: JsonCaller): L2AStrategy {
           });
         }
 
+        const before = out.length;
         // Freshly extracted who=me — the extraction half. In production these
         // wait a round for assessment; steady-state they render, so they count.
         for (const c of grounded(parseExtractedCommitments(raw))) {
@@ -82,6 +89,7 @@ export function s0Current(json: JsonCaller): L2AStrategy {
             evidence: c.evidence ? [c.evidence] : [],
           });
         }
+        console.log(`[s0]   → ${out.length - before} proposal(s)`);
       }
       return out;
     },
