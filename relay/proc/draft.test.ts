@@ -717,3 +717,30 @@ describe("system prompt is a stable cache prefix", () => {
     expect(a.userText).not.toContain("KNOWN PEOPLE");
   });
 });
+
+describe("a total wipeout is reported as one", () => {
+  // 2026-09-02 → 09-04: the subscription's OAuth session expired, every draft
+  // call died, and the recorded error read "陈古龙: claude -p exit 1: …" — one
+  // arbitrary contact. Indistinguishable from a single flake, so the outage ran
+  // for two days. The denominator is what tells the two apart.
+  it("reports the sender count alongside the failures", async () => {
+    const llm: LlmCaller = async () => {
+      throw new Error("Failed to authenticate: OAuth session expired");
+    };
+    const r = await draftActions(
+      [msg({ senderHandle: "UMICHAEL" }), msg({ id: "slack:C1:2.0", senderHandle: "UZECH" })],
+      { llm, resolvePersona: () => michael, knownPersonaKeys: [] },
+    );
+    expect(r.senders).toBe(2);
+    expect(r.errors).toHaveLength(2); // every sender down — not one flake
+  });
+
+  it("counts senders, not messages", async () => {
+    const llm: LlmCaller = async () => [];
+    const r = await draftActions(
+      [msg({ id: "slack:C1:1.0" }), msg({ id: "slack:C1:2.0" }), msg({ id: "slack:C1:3.0" })],
+      { llm, resolvePersona: () => michael, knownPersonaKeys: [] },
+    );
+    expect(r.senders).toBe(1); // three messages, one sender
+  });
+});

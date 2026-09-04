@@ -668,6 +668,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // held, so the cockpit stays responsive even through a long or hung draft.
   let draftedActions: ActionItem[] = [];
   let llmDraftError: string | undefined;
+  // Every sender failed — a systemic outage, not a per-sender fault.
+  let llmDraftOutage = false;
   // Senders whose draft call succeeded but produced ZERO cards — the silent
   // skip (cursor already advanced). Surfaced as llm:draft-empty in phase 3.
   let draftEmpty: string[] = [];
@@ -678,7 +680,19 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       draftedActions = r.actions;
       draftEmpty = r.empty;
       if (r.errors.length > 0) {
-        llmDraftError = r.errors.map((e) => `${e.sender}: ${e.error}`).join("; ");
+        // The DENOMINATOR is the whole point. "陈古龙: claude -p exit 1: …" is
+        // what an expired subscription session looked like for two days
+        // (2026-09-02 → 09-04) — one arbitrary contact, indistinguishable from
+        // a flake. "ALL 12/12 senders failed" is not mistakable for anything.
+        llmDraftOutage = r.errors.length === r.senders && r.senders > 0;
+        llmDraftError =
+          `${llmDraftOutage ? "ALL " : ""}${r.errors.length}/${r.senders} sender(s) failed: ` +
+          r.errors.map((e) => `${e.sender}: ${e.error}`).join("; ");
+        if (llmDraftOutage) {
+          // Loud, and on the way past: a brain that cannot think at all is not
+          // a per-sender fault to be swallowed by the isolation policy.
+          console.error(`[llm] OUTAGE — every one of ${r.senders} sender(s) failed: ${r.errors[0]!.error}`);
+        }
       }
     } catch (e) {
       llmDraftError = errString(e);
@@ -767,6 +781,18 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         fresh.sourceErrors["llm:draft"] = { message: llmDraftError, at: new Date(startedAtMs).toISOString() };
       } else {
         delete fresh.sourceErrors["llm:draft"];
+      }
+      // A separate key for the systemic case. `llm:draft` churns — one flaky
+      // contact overwrites it every tick — so an outage buried there reads as
+      // routine noise. This key appears ONLY when nothing could think, and any
+      // successful round clears it.
+      if (llmDraftOutage) {
+        fresh.sourceErrors["llm:draft-outage"] = {
+          message: `THE BRAIN IS DOWN — ${llmDraftError}`,
+          at: new Date(startedAtMs).toISOString(),
+        };
+      } else if (draftedActions.length > 0 || draftEmpty.length > 0) {
+        delete fresh.sourceErrors["llm:draft-outage"];
       }
       // Silent-empty drafts (LLM answered, zero cards) are the invisible
       // failure: the cursor advanced, so the message is gone unless someone

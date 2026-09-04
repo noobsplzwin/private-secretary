@@ -96,6 +96,11 @@ export interface DraftResult {
   // (they're in `errors`), nor senders whose suggestions were all dropped
   // by validation (those are in `dropped` — the model DID answer).
   empty: string[];
+  // How many senders this round covered — the DENOMINATOR for `errors`.
+  // Without it "3 senders failed" cannot be told apart from "everything is
+  // down", which is how an expired subscription session hid for two days
+  // (2026-09-02 → 09-04): the recorded error named one arbitrary contact.
+  senders: number;
 }
 
 // Per-sender LLM calls run concurrently up to this cap. Bounded so a big
@@ -406,7 +411,7 @@ export async function draftActions(
     if (r.empty) empty.push(r.sender);
   }
 
-  return { actions, errors, dropped, empty };
+  return { actions, errors, dropped, empty, senders: bySender.size };
 }
 
 // Build a resolvePersona function from a persona list. Indexes every

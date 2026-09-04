@@ -1143,6 +1143,72 @@ describe("the list is the ledger", () => {
   });
 });
 
+// REGRESSION 2026-09-02 → 09-04: an expired subscription OAuth session killed
+// every draft call for two days. The recorded error named one arbitrary
+// contact, so a total outage was indistinguishable from a single flake.
+describe("a brain that cannot think at all says so", () => {
+  let dir: string;
+  let statePath: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "outage-"));
+    statePath = join(dir, "loop-state.json");
+    writeFileSync(
+      statePath,
+      JSON.stringify({ version: 2, marks: {}, actions: [], outcomes: [], sourceErrors: {}, tasks: {} }),
+    );
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const twoSenders = {
+    C1: [
+      { ts: "100.0", user: "U2", text: `hi <@${SELF_SLACK}> can you send the BOM` },
+      { ts: "101.0", user: "U3", text: `<@${SELF_SLACK}> please confirm the order` },
+    ],
+  };
+
+  it("records llm:draft-outage with the ratio when every sender fails", async () => {
+    await runScanTick({
+      statePath,
+      sources: ["slack"],
+      slackClient: slackStub([{ id: "C1", is_im: true }], twoSenders),
+      draft: {
+        llm: async () => {
+          throw new Error("Failed to authenticate: OAuth session expired and could not be refreshed");
+        },
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+      } as never,
+    });
+    const st = JSON.parse(readFileSync(statePath, "utf8"));
+    const outage = st.sourceErrors["llm:draft-outage"];
+    expect(outage).toBeDefined();
+    expect(outage.message).toContain("THE BRAIN IS DOWN");
+    expect(outage.message).toContain("ALL 2/2");
+    expect(outage.message).toContain("OAuth session expired");
+  });
+
+  it("does NOT cry outage when only some senders fail", async () => {
+    let n = 0;
+    await runScanTick({
+      statePath,
+      sources: ["slack"],
+      slackClient: slackStub([{ id: "C1", is_im: true }], twoSenders),
+      draft: {
+        llm: async () => {
+          if (n++ === 0) throw new Error("one flake");
+          return [{ action_type: "task", reason: "r", confidence: 0.9, params: { title: "real work" }, headline: "real work" }];
+        },
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+      } as never,
+    });
+    const st = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(st.sourceErrors["llm:draft-outage"]).toBeUndefined();
+    expect(st.sourceErrors["llm:draft"].message).toContain("1/2");
+    expect(st.sourceErrors["llm:draft"].message).not.toContain("ALL");
+  });
+});
+
 // REGRESSION 2026-09-03: the readback computed tombstones and then threw them
 // away. saveSyncMap sat inside `if (done.size > 0 || executedNow.length > 0)`,
 // and `done` is built only from CARD-derived action ids — a ledger row has no
