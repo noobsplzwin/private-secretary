@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseDraftedActions } from "./llm-claude-cli.js";
+import { parseDraftedActions, claudeExitReason } from "./llm-claude-cli.js";
 
 // Wrap a model-result string in the `claude -p --output-format json` envelope.
 function envelope(result: string, is_error = false): string {
@@ -46,5 +46,30 @@ describe("parseDraftedActions", () => {
 
   it("throws when the CLI reports is_error", () => {
     expect(() => parseDraftedActions(envelope("Not logged in", true))).toThrow(/claude -p error/);
+  });
+});
+
+describe("claudeExitReason", () => {
+  // 2026-09-04: an expired subscription session hid for two days behind a
+  // 200-char prefix of the result envelope — which is all telemetry.
+  it("pulls the CLI's own reason out of the result envelope", () => {
+    const envelope = JSON.stringify({
+      is_error: true,
+      duration_api_ms: 0,
+      usage: { input_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+      terminal_reason: "api_error",
+      result: "Failed to authenticate: OAuth session expired and could not be refreshed",
+    });
+    expect(claudeExitReason(envelope, "")).toBe(
+      "Failed to authenticate: OAuth session expired and could not be refreshed",
+    );
+  });
+
+  it("falls back to stderr when stdout is not an envelope", () => {
+    expect(claudeExitReason("", "claude: command failed")).toBe("claude: command failed");
+  });
+
+  it("never returns an empty string", () => {
+    expect(claudeExitReason("", "")).toBe("(no output)");
   });
 });

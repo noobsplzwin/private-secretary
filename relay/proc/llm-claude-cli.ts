@@ -83,6 +83,29 @@ function extractJsonObject(text: string): unknown {
   }
 }
 
+/**
+ * The CLI's own reason for a non-zero exit. `claude -p --output-format json`
+ * prints a RESULT ENVELOPE on stdout even when it fails, and the useful line
+ * lives in its `result` field — roughly 700 chars in, past any short slice of
+ * the raw blob.
+ *
+ * 2026-09-04: this cost two days. The subscription's OAuth session expired, so
+ * every draft call died with "Failed to authenticate: OAuth session expired and
+ * could not be refreshed" — and the recorded error was a 200-char prefix of the
+ * envelope, which is pure telemetry (is_error, duration, a zeroed usage block)
+ * and says nothing. The daemon ticked, the heartbeat stayed green, and no
+ * persona was written for two days.
+ */
+export function claudeExitReason(stdout: string, stderr: string): string {
+  try {
+    const env = JSON.parse(stdout) as { result?: unknown };
+    if (typeof env.result === "string" && env.result.trim()) return env.result.trim();
+  } catch {
+    /* not an envelope — fall through to the raw streams */
+  }
+  return (stderr || stdout).slice(0, 300).trim() || "(no output)";
+}
+
 function runClaude(
   system: string,
   userText: string,
@@ -161,7 +184,7 @@ function runClaude(
       cleanup();
       if (code !== 0) {
         reject(
-          new Error(`claude -p exit ${code}: ${(err || out).slice(0, 200)}`),
+          new Error(`claude -p exit ${code}: ${claudeExitReason(out, err)}`),
         );
         return;
       }
