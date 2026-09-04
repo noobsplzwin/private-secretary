@@ -1,4 +1,7 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { parseDraftedActions, claudeExitReason } from "./llm-claude-cli.js";
 
 // Wrap a model-result string in the `claude -p --output-format json` envelope.
@@ -71,5 +74,66 @@ describe("claudeExitReason", () => {
 
   it("never returns an empty string", () => {
     expect(claudeExitReason("", "")).toBe("(no output)");
+  });
+});
+
+// 2026-09-04: the scan loop's llm:draft-empty message names llm-draft-raw.jsonl,
+// but only the DeepSeek path ever wrote it — on the claude -p path the file did
+// not exist, so "why did this sender draft nothing" had no evidence at all.
+describe("empty drafts leave evidence in the raw log", () => {
+  const withFakeClaude = async (
+    result: string,
+  ): Promise<{ records: Array<Record<string, unknown>>; actions: unknown[] }> => {
+    const dir = mkdtempSync(join(tmpdir(), "rawlog-"));
+    const bin = join(dir, "fake-claude.sh");
+    const logPath = join(dir, "llm-draft-raw.jsonl");
+    writeFileSync(
+      bin,
+      `#!/bin/sh\ncat > /dev/null\ncat <<'EOF'\n${JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result,
+      })}\nEOF\n`,
+      { mode: 0o755 },
+    );
+    vi.resetModules();
+    vi.stubEnv("CLAUDE_BIN", bin);
+    const { createClaudeCliLlmCaller } = await import("./llm-claude-cli.js");
+    const caller = createClaudeCliLlmCaller({ rawLogPath: logPath });
+    const actions = await caller({
+      system: "s",
+      userText: "u",
+      toolName: "t",
+      toolInputSchema: {},
+    });
+    const records = existsSync(logPath)
+      ? readFileSync(logPath, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l))
+      : [];
+    vi.unstubAllEnvs();
+    rmSync(dir, { recursive: true, force: true });
+    return { records, actions };
+  };
+
+  it("records an off-format answer as parse-failure, keeping what was said", async () => {
+    const { records, actions } = await withFakeClaude("Nothing actionable in this thread.");
+    expect(actions).toEqual([]);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.kind).toBe("parse-failure");
+    expect(records[0]!.raw).toBe("Nothing actionable in this thread.");
+  });
+
+  it("records a well-formed empty answer as empty-actions", async () => {
+    const { records } = await withFakeClaude('{"actions":[]}');
+    expect(records).toHaveLength(1);
+    expect(records[0]!.kind).toBe("empty-actions");
+  });
+
+  it("writes nothing when the model DID produce actions", async () => {
+    const { records, actions } = await withFakeClaude(
+      '{"actions":[{"action_type":"task","reason":"r","confidence":0.9,"params":{"title":"x"},"headline":"x"}]}',
+    );
+    expect(actions).toHaveLength(1);
+    expect(records).toEqual([]);
   });
 });

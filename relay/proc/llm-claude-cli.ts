@@ -19,6 +19,7 @@ import { copyFileSync, existsSync, mkdtempSync, rmSync } from "node:fs";
 import { extname, join } from "node:path";
 import type { DraftedAction } from "./draft-prompt.js";
 import type { LlmCaller } from "./draft.js";
+import { appendRawLlmRecord } from "../io/llm-raw-log.js";
 
 // Pinned to the full id, not the "sonnet" alias: an alias silently follows the
 // next Sonnet release, and this engine has been bitten enough by silent
@@ -37,6 +38,13 @@ const DISALLOWED_TOOLS =
 export interface ClaudeCliOptions {
   model?: string;
   timeoutMs?: number;
+  // When set, a draft response carrying no usable actions appends the raw model
+  // text here (io/llm-raw-log.ts). The silent empty is a PERMANENT skip — the
+  // cursor has already advanced — so this log is the only evidence of what the
+  // model actually said. 2026-09-04: only the DeepSeek path wrote it, so the
+  // scan loop's own llm:draft-empty message pointed at a file that never
+  // existed, and "why did Magi draft nothing" was unanswerable.
+  rawLogPath?: string;
 }
 
 // Pull the {actions:[...]} payload out of a `claude -p --output-format json`
@@ -215,7 +223,27 @@ export function createClaudeCliLlmCaller(opts: ClaudeCliOptions = {}): LlmCaller
         `this JSON schema:\n${schema}\n` +
         `No markdown fences, no prose before or after — output the JSON object and nothing else.`;
     const stdout = await runClaude(req.system + outputRule, req.userText, model, timeoutMs, req.imagePaths ?? []);
-    return parseDraftedActions(stdout);
+    const actions = parseDraftedActions(stdout);
+    if (actions.length === 0 && opts.rawLogPath) {
+      // Same discrimination as the DeepSeek path: "the model decided there is
+      // nothing to do" and "the model went off-format" need different fixes.
+      let raw = stdout;
+      let parsed: unknown = null;
+      try {
+        parsed = parseResultObject(stdout);
+        const envelope = JSON.parse(stdout) as { result?: unknown };
+        if (typeof envelope.result === "string") raw = envelope.result;
+      } catch {
+        /* keep the raw envelope — an unparseable one IS the evidence */
+      }
+      appendRawLlmRecord(opts.rawLogPath, {
+        at: new Date().toISOString(),
+        kind: parsed === null ? "parse-failure" : "empty-actions",
+        model,
+        raw,
+      });
+    }
+    return actions;
   };
 }
 

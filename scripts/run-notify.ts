@@ -233,7 +233,12 @@ async function buildDraft(): Promise<DraftDeps | undefined> {
               rawLogPath: join(dirname(statePath), "llm-draft-raw.jsonl"),
               model: draftModel,
             })
-          : createClaudeCliLlmCaller({ model: draftModel });
+          : createClaudeCliLlmCaller({
+              model: draftModel,
+              // Same evidence trail the deepseek path has kept all along — the
+              // scan loop's llm:draft-empty message names this file.
+              rawLogPath: join(dirname(statePath), "llm-draft-raw.jsonl"),
+            });
     const personas = loadPersonas(personaDir);
     const { resolve: resolvePersona, keys } = buildPersonaResolver(personas);
     // 3-layer RAG: project layer + Leo's decision profile, with his own durable
