@@ -321,3 +321,77 @@ describe("matter chains in extraction", () => {
     expect(ledger.map((c) => c.matter_id)).toEqual(["antenna", "antenna"]);
   });
 });
+
+// The structural gates (core/corpus-lines.ts) in front of extraction. Each one
+// encodes a verdict the owner gave by hand on the first generated list.
+describe("structural gates: who spoke, when, and hedges", () => {
+  const NOW = "2026-08-23T12:00:00Z";
+  const DATED = [
+    "=== wechat ===",
+    "[2026-08-22 10:00] them: Let me share u the excel with the box metrics",
+    "[2026-08-22 10:05] me: I'll send Cody the Rev5 docs today",
+    "[2026-08-22 10:10] me: 这个我考虑一下,先不急",
+    "[2026-06-01 08:00] me: I'll fly to San Francisco and meet Billy",
+    "=== gmail (leo@taiv.tv) ===",
+    "[2026-08-22] From Michael <m@x.com>:",
+    "I will review the countersigned copy and send it back.",
+  ].join("\n");
+
+  const run = async (commitments: unknown[]) => {
+    const dir = personaDirWith([]);
+    const res = await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        reply: { commitments, updates: [] },
+        fetchCorpus: async () => DATED,
+        personaDir: dir,
+        now: () => NOW,
+      }) as never,
+    );
+    const file = parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8"));
+    return { res, saved: (file.commitments ?? []) as Array<{ who: string; what: string }> };
+  };
+
+  it("refuses a who=me commitment whose evidence is THEIR line", async () => {
+    // "Let me share u the excel" is Ihor offering — the owner struck this one:
+    // 「方向反了」. The arrow is in the line prefix, not the model's answer.
+    const { saved } = await run([
+      {
+        who: "me",
+        what: "Share the box metrics excel with Ihor",
+        evidence: "Let me share u the excel with the box metrics",
+      },
+    ]);
+    expect(saved).toEqual([]);
+  });
+
+  it("refuses a hedge (「考虑一下」 is a softened no)", async () => {
+    const { saved } = await run([
+      { who: "me", what: "研究这件事", evidence: "这个我考虑一下,先不急" },
+    ]);
+    expect(saved).toEqual([]);
+  });
+
+  it("refuses a line older than the mint window", async () => {
+    const { saved } = await run([
+      { who: "me", what: "Fly to San Francisco and meet Billy", evidence: "I'll fly to San Francisco and meet Billy" },
+    ]);
+    expect(saved).toEqual([]);
+  });
+
+  it("keeps a fresh, unhedged commitment in the owner's own line", async () => {
+    const { saved } = await run([
+      { who: "me", what: "Send Cody the Rev5 hardware docs", evidence: "I'll send Cody the Rev5 docs today" },
+    ]);
+    expect(saved.map((c) => c.what)).toEqual(["Send Cody the Rev5 hardware docs"]);
+  });
+
+  it("passes through evidence that resolves to NO single line", async () => {
+    // Unattributable is not the same as wrong. Rejecting here would delete real
+    // commitments quoted from a Gmail body, which carries no speaker at all.
+    const { saved } = await run([
+      { who: "me", what: "Review the countersigned copy", evidence: "I will review the countersigned copy and send it back." },
+    ]);
+    expect(saved.map((c) => c.what)).toEqual(["Review the countersigned copy"]);
+  });
+});
