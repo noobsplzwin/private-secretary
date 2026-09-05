@@ -82,8 +82,18 @@ describe("deriveLedgerTasks", () => {
       ZONE,
       NOW,
     );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.payload.title).toBe("签署高通 NDA 并回传给李冰");
+    // REVISED 2026-09-06. The old rule was "a row exists only when needs_leo";
+    // dormant entries vanished, and the sync read vanishing as finished. Now
+    // every OPEN who=me entry has a row — the verdict decides the shelf, not
+    // whether it exists. These fixtures carry no matter_id, so the promotion
+    // gate puts all of them on the floor regardless.
+    expect(rows.map((r) => r.payload.title).sort()).toEqual(
+      ["handed off", "never assessed", "签署高通 NDA 并回传给李冰"].sort(),
+    );
+    expect(rows.every((r) => r.payload.project === POOL_LIST)).toBe(true);
+    // done stays out, and so does their commitment — only Leo's own open work.
+    expect(rows.some((r) => r.payload.title === "done thing")).toBe(false);
+    expect(rows.some((r) => r.payload.title === "their thing")).toBe(false);
   });
 
   it("renders the verdict's next_step as the checklist and the quote as the note", () => {
@@ -183,7 +193,13 @@ describe("deriveLedgerTasks", () => {
         ZONE,
         NOW,
       );
-      expect(rows).toEqual([]);
+      // REVISED 2026-09-06: the matter owes no WORKING row — Leo has nothing to
+      // do on it — but his own link is still an open commitment, and the owner
+      // was explicit that it stays one: 「不需要任何我做的事情，但是还是要算作一个
+      // commitment」. So it sits on the floor, not nowhere.
+      expect(rows).toHaveLength(1);
+      expect(rows[0]!.payload.project).toBe(POOL_LIST);
+      expect(rows[0]!.payload.title).toBe("找供应商采购天线");
     });
   });
 });
@@ -251,5 +267,52 @@ describe("they owe me, and the verdict says I am waiting", () => {
     ]);
     expect(rows).toHaveLength(1);
     expect(rows[0]!.payload.title).toBe("Send the invoice");
+  });
+});
+
+// 2026-09-06: a sync would have closed three live to-dos because their
+// verdicts said needs_leo=false. The owner's rule is the opposite:
+// 「系统删待办这个概念不存在。如果这件事情的承诺已经履行了，那就结束了，如果还是
+// 待办，但是优先级较低，那就往后排」. Only done/dropped ends a commitment;
+// everything still open has a floor, and the floor is the pool.
+describe("still open, just not now — the floor is the pool", () => {
+  it("sinks a who=me commitment the verdict says he need not act on", () => {
+    const [row] = derive([persona([c({ matter_id: "fcc", ...assessed(false, { blocked_on: "them" }) })])]);
+    expect(row).toBeDefined();
+    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
+  });
+
+  it("sinks one that has never been assessed at all", () => {
+    const [row] = derive([persona([c({ matter_id: "fcc" })])]);
+    expect(row!.payload.project).toBe(POOL_LIST);
+  });
+
+  it("a matter still shows at most ONCE when it sinks", () => {
+    const rows = derive([
+      persona([
+        c({ what: "link one", matter_id: "fcc" }),
+        c({ what: "link two", matter_id: "fcc", ...assessed(false, { blocked_on: "them" }) }),
+      ]),
+    ]);
+    expect(rows).toHaveLength(1);
+  });
+
+  it("a live link still wins its matter and stays off the floor", () => {
+    const rows = derive([
+      persona([
+        c({ what: "dormant", matter_id: "fcc" }),
+        c({ what: "live", matter_id: "fcc", ...assessed(true) }),
+      ]),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload.title).toBe("live");
+    expect(rows[0]!.payload.project).toBeUndefined();
+  });
+
+  it("done and dropped are the only exits — neither sinks", () => {
+    expect(
+      derive([persona([c({ what: "finished", status: "done" }), c({ what: "abandoned", status: "dropped" })])]),
+    ).toEqual([]);
   });
 });

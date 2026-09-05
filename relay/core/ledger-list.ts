@@ -172,7 +172,17 @@ export function deriveLedgerTasks(
       const late = chain.find(
         (c) => c.who === "them" && (overdue(c.due, nowMs) || c.assessment?.needs_leo),
       );
-      if (late) out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true));
+      if (late) {
+        out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true));
+        continue;
+      }
+      // Still open, just not now. The owner's rule is that only done or dropped
+      // ends a commitment — 「如果还是待办，但是优先级较低，那就往后排」 — so a
+      // matter with nothing live sinks to the floor instead of vanishing.
+      // Vanishing is what the sync reads as "finished", and on 2026-09-06 that
+      // was one push away from closing three live to-dos.
+      const dormant = chain.find((c) => c.who === "me");
+      if (dormant) out.push(itemFor(p.key, p.display_name, dormant, chain, zone, nowMs, true));
     }
 
     for (const c of open) {
@@ -181,7 +191,9 @@ export function deriveLedgerTasks(
         out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, true));
         continue;
       }
-      if (c.who !== "me" || !c.assessment?.needs_leo) continue;
+      if (c.who !== "me") continue;
+      // Always sunk: no matter_id at all, so the promotion gate applies whatever
+      // the verdict says. It reaches the floor either way — never nothing.
       out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true));
     }
   }

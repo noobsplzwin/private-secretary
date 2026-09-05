@@ -454,3 +454,60 @@ describe("verdicts land on what THEY owe too", () => {
     expect(saved[0]!.assessment).toBeUndefined();
   });
 });
+
+// 2026-09-06: the full backfill produced three verdicts reading
+// needs_leo=false WITH blocked_on=leo, on evidence that was the contact
+// venting about being busy ("This week is a bit crazy", "This xEV project is
+// killing me"). The derive step drops a row that needs nobody, so those three
+// live to-dos were one sync away from being silently closed.
+describe("a verdict that contradicts itself is not a verdict", () => {
+  const run = async (assessment: Record<string, unknown>) => {
+    const dir = personaDirWith([{ who: "me", what: "Send Cody the Rev5 docs", status: "open" }]);
+    const r = await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        reply: { commitments: [], updates: [], assessments: [assessment] },
+        fetchCorpus: async () => "them: This week is a bit crazy, daytime testing, night meeting",
+        personaDir: dir,
+      }) as never,
+    );
+    const saved = parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")).commitments as Array<{
+      assessment?: { needs_leo: boolean };
+    }>;
+    return { r, saved };
+  };
+
+  it("discards needs_leo=false while blocked_on=leo", async () => {
+    // If the work sits with Leo, it needs Leo. The two cannot both hold, and
+    // acting on it closes a real to-do.
+    const { r, saved } = await run({
+      index: 0,
+      needs_leo: false,
+      blocked_on: "leo",
+      evidence: "This week is a bit crazy, daytime testing, night meeting",
+    });
+    expect(saved[0]!.assessment).toBeUndefined();
+    expect(r.discarded).toBeGreaterThan(0);
+  });
+
+  it("keeps needs_leo=false when the work sits with someone else", async () => {
+    const { saved } = await run({
+      index: 0,
+      needs_leo: false,
+      blocked_on: "them",
+      evidence: "This week is a bit crazy, daytime testing, night meeting",
+    });
+    expect(saved[0]!.assessment?.needs_leo).toBe(false);
+  });
+
+  it("keeps needs_leo=true with blocked_on=leo — that pair is coherent", async () => {
+    const { saved } = await run({
+      index: 0,
+      needs_leo: true,
+      blocked_on: "leo",
+      next_step: "Send Cody the Rev5 capture-card docs",
+      evidence: "This week is a bit crazy, daytime testing, night meeting",
+    });
+    expect(saved[0]!.assessment?.needs_leo).toBe(true);
+  });
+});

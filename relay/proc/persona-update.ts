@@ -164,7 +164,17 @@ export async function extractCommitmentsOnce(opts: {
     xs.filter((x) => evidenceGrounded(opts.corpus, x.evidence ?? ""));
   const okExtracted = grounded(extracted);
   const okTransitions = grounded(transitions);
-  const okAssessments = grounded(assessments);
+  // COHERENCE, mechanically. "Leo does not need to act on this, and the work
+  // sits with Leo" cannot both be true, and the derive step drops a row that
+  // needs nobody — so a self-contradicting verdict silently CLOSES a live
+  // to-do. The 2026-09-06 backfill produced three, each quoting the contact
+  // complaining about being busy ("This week is a bit crazy", "This xEV
+  // project is killing me") as grounds for the owner being off the hook.
+  // A verdict like this is discarded whole: the commitment keeps whatever it
+  // had, which is the safe direction.
+  const okAssessments = grounded(assessments).filter(
+    (a) => !(a.needs_leo === false && a.blocked_on === "leo"),
+  );
   const discarded =
     extracted.length -
     okExtracted.length +
