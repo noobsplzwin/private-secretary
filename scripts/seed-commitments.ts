@@ -31,9 +31,14 @@ const personaDir = resolve(process.cwd(), "personas");
 // pass hit, and a seed that dies quietly leaves a contact invisible.
 const json = createClaudeCliJsonCaller({ timeoutMs: 480_000 });
 
-// --all-open: every persona holding an open who=me commitment. This is the
+// --all-open: every persona holding an open commitment, EITHER side. This is the
 // backfill the list switchover needs — unassessed counts as NO, so until each
 // of these gets a verdict the derived list renders nothing for them.
+//
+// 2026-09-05: this used to select who=me only, which was right when only
+// who=me could carry a verdict. Now that a commitment they owe can also need
+// Leo's time (the chase), a who=them-only ledger must be picked up too — those
+// are exactly the 107 entries that had never been judged.
 let keys: string[];
 if (allOpen) {
   keys = readdirSync(personaDir)
@@ -41,7 +46,7 @@ if (allOpen) {
     .flatMap((f) => {
       try {
         const p = readPersonaV3File(join(personaDir, f));
-        const open = (p.commitments ?? []).some((c) => c.who === "me" && c.status === "open");
+        const open = (p.commitments ?? []).some((c) => c.status === "open");
         return open ? [p.key] : [];
       } catch {
         return [];
