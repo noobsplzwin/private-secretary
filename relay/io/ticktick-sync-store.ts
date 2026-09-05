@@ -43,6 +43,15 @@ export function loadSyncMap(statePath: string): SyncMap {
       ticktickId: r.ticktickId,
       projectId: typeof r.projectId === "string" ? r.projectId : "",
       hash: r.hash,
+      // `title` and `done` MUST survive the round trip. The loader used to
+      // rebuild a record without them, so every tombstone written on a sync was
+      // discarded on the next read: the same tasks were re-completed forever,
+      // and the reopen-instead-of-create path — the entire reason tombstones
+      // exist — could never fire. That path is what stops a re-listed to-do from
+      // minting a twin, the failure that put one task in the calendar seven
+      // times. Add a field to SyncRecord and you must add it here too.
+      ...(typeof r.title === "string" ? { title: r.title } : {}),
+      ...(typeof r.done === "number" ? { done: r.done } : {}),
       ...(Array.isArray(r.items)
         ? {
             items: r.items.filter(
