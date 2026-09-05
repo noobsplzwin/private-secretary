@@ -239,7 +239,13 @@ describe("assess verdicts", () => {
     expect(ledger()[0]!.assessment).toBeUndefined();
   });
 
-  it("ignores a verdict aimed at work the CONTACT owes", async () => {
+  // REVISED 2026-09-05. This case used to assert the opposite — a verdict on
+  // work the CONTACT owes was thrown away. That rule left 107 open commitments,
+  // over half the ledger, permanently unjudged, and 「中汽研第一阶段的款还没付」
+  // with no route to the list at all. Chasing what someone owes Leo IS Leo's
+  // own time, so the verdict now lands; the prompt (WHO=THEM) carries the high
+  // bar for saying yes, and the quote gate below is unchanged for both sides.
+  it("records a verdict aimed at work the CONTACT owes", async () => {
     dir = personaDirWith([{ who: "them", what: "Send the manufacturing agreement", status: "open" }]);
     const r = await updatePersonaCommitments(
       [QUEUED],
@@ -248,8 +254,8 @@ describe("assess verdicts", () => {
         reply: reply({ index: 0, needs_leo: true, evidence: "agreement signed and returned" }),
       }),
     );
-    expect(r.assessed).toBe(0);
-    expect(ledger()[0]!.assessment).toBeUndefined();
+    expect(r.assessed).toBe(1);
+    expect(ledger()[0]!.assessment?.needs_leo).toBe(true);
   });
 
   it("drops next_step when the verdict says Leo is not needed", async () => {
@@ -393,5 +399,58 @@ describe("structural gates: who spoke, when, and hedges", () => {
       { who: "me", what: "Review the countersigned copy", evidence: "I will review the countersigned copy and send it back." },
     ]);
     expect(saved.map((c) => c.what)).toEqual(["Review the countersigned copy"]);
+  });
+});
+
+// 2026-09-05: assess ran only on who=me, so 107 of the ledger's open
+// commitments — over half of it — carried no verdict at all, and 「中汽研第一
+// 阶段的款还没付」 had no way to surface however the thread was read.
+describe("verdicts land on what THEY owe too", () => {
+  const withOpen = (commitments: unknown[]) => personaDirWith(commitments);
+
+  const run = async (commitments: unknown[], assessments: unknown[]) => {
+    const dir = withOpen(commitments);
+    await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        reply: { commitments: [], updates: [], assessments },
+        fetchCorpus: async () => "them: 款项我让财务安排承兑汇票 / me: 第一阶段的款还没付,麻烦催一下",
+        personaDir: dir,
+      }) as never,
+    );
+    return parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")).commitments as Array<{
+      who: string;
+      assessment?: { needs_leo: boolean; next_step?: string };
+    }>;
+  };
+
+  const THEIRS = [{ who: "them", what: "Arrange the 承兑汇票 payment with finance", status: "open" }];
+
+  it("records a needs_leo verdict on a commitment THEY owe", async () => {
+    const saved = await run(THEIRS, [
+      {
+        index: 0,
+        needs_leo: true,
+        blocked_on: "them",
+        next_step: "催中汽研第一阶段的款",
+        evidence: "第一阶段的款还没付,麻烦催一下",
+      },
+    ]);
+    expect(saved[0]!.assessment?.needs_leo).toBe(true);
+    expect(saved[0]!.assessment?.next_step).toBe("催中汽研第一阶段的款");
+  });
+
+  it("still records the quiet verdict, so a false one is visible rather than absent", async () => {
+    const saved = await run(THEIRS, [
+      { index: 0, needs_leo: false, blocked_on: "them", evidence: "款项我让财务安排承兑汇票" },
+    ]);
+    expect(saved[0]!.assessment?.needs_leo).toBe(false);
+  });
+
+  it("an ungrounded verdict is still discarded, whoever owes the commitment", async () => {
+    const saved = await run(THEIRS, [
+      { index: 0, needs_leo: true, evidence: "他们答应下周一定付款" }, // not in the corpus
+    ]);
+    expect(saved[0]!.assessment).toBeUndefined();
   });
 });

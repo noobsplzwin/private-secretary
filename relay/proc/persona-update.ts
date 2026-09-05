@@ -203,7 +203,12 @@ export async function extractCommitmentsOnce(opts: {
   let assessed = 0;
   for (const a of okAssessments) {
     const target = withStatus[a.index]!;
-    if (target.who !== "me" || target.status !== "open") continue;
+    // BOTH sides now. Restricting verdicts to who=me left 107 open commitments —
+    // over half the ledger — permanently unjudged, and 「中汽研第一阶段的款还没
+    // 付」 with no route to the list. What needs_leo MEANS is unchanged: does
+    // this need Leo's own time. On a commitment they owe, the answer is yes
+    // exactly when the chase is his (prompt: WHO=THEM).
+    if (target.status !== "open") continue;
     target.assessment = {
       needs_leo: a.needs_leo,
       ...(a.blocked_on ? { blocked_on: a.blocked_on } : {}),

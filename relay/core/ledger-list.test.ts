@@ -71,7 +71,10 @@ describe("deriveLedgerTasks", () => {
         persona([
           c({ ...assessed(true) }),
           c({ what: "done thing", status: "done", ...assessed(true) }),
-          c({ what: "their thing", who: "them", ...assessed(true) }),
+          // Theirs, and the verdict says Leo is NOT waiting — the ordinary case
+          // for a who=them entry. (A verdict that says he IS waiting mints a
+          // chase row; that rule has its own describe block below.)
+          c({ what: "their thing", who: "them", ...assessed(false, { blocked_on: "them" }) }),
           c({ what: "handed off", ...assessed(false, { blocked_on: "them" }) }),
           c({ what: "never assessed" }),
         ]),
@@ -169,7 +172,12 @@ describe("deriveLedgerTasks", () => {
         [
           persona([
             antenna({ what: "找供应商采购天线", ...assessed(false, { blocked_on: "them" }) }),
-            antenna({ what: "供应商发货给客户", who: "them", ...assessed(true) }),
+            // The owner's own adjudication of this exact case: 「不需要任何我做
+            // 的事情，但是还是要算作一个commitment」. The supplier getting on
+            // with it is not something he is waiting on, so the verdict is
+            // false and the matter owes no row — chasing is for what he is
+            // actually left waiting for.
+            antenna({ what: "供应商发货给客户", who: "them", ...assessed(false, { blocked_on: "them" }) }),
           ]),
         ],
         ZONE,
@@ -218,5 +226,30 @@ describe("they owe me, and they are late", () => {
 
   it("a done commitment of theirs is never chased", () => {
     expect(derive([persona([late({ status: "done" })])])).toEqual([]);
+  });
+});
+
+// The other half of the chase rule: 中汽研 carries no due date, so no date-based
+// rule can reach it. What reaches it is the assess verdict the pass can finally
+// give a who=them commitment (proc/persona-update.ts, 2026-09-05).
+describe("they owe me, and the verdict says I am waiting", () => {
+  const owed = (over: Partial<Commitment> = {}): Commitment =>
+    c({ who: "them", what: "Arrange the 承兑汇票 payment", matter_id: "fcc", ...over });
+
+  it("an assessed who=them commitment becomes a chase row, with no due date at all", () => {
+    const [row] = derive([persona([owed({ ...assessed(true) })])]);
+    expect(row!.payload.title).toBe("催: Arrange the 承兑汇票 payment");
+  });
+
+  it("needs_leo=false on their commitment stays silent", () => {
+    expect(derive([persona([owed({ ...assessed(false) })])])).toEqual([]);
+  });
+
+  it("my own live link still wins the matter", () => {
+    const rows = derive([
+      persona([owed({ ...assessed(true) }), c({ who: "me", what: "Send the invoice", matter_id: "fcc", ...assessed(true) })]),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload.title).toBe("Send the invoice");
   });
 });

@@ -95,7 +95,10 @@ function itemFor(
   // the list without opening the conversation. Source language is preserved
   // because the quote is verbatim by construction.
   const noteLines = [
-    chase ? `${displayName ?? personaKey} 欠这件事,${lead.due} 已过期。` : "",
+    chase
+      ? `${displayName ?? personaKey} 欠这件事` +
+        (overdue(lead.due, nowMs) ? `,${lead.due} 已过期。` : ",你在等它。")
+      : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
     displayName ? `— ${displayName}` : `— ${personaKey}`,
   ].filter(Boolean);
@@ -162,15 +165,19 @@ export function deriveLedgerTasks(
         out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, sunk));
         continue;
       }
-      // Nothing on my side is live — but if THEY are past a date they gave me,
-      // the waiting is mine and so is the next move.
-      const late = chain.find((c) => c.who === "them" && overdue(c.due, nowMs));
+      // Nothing on my side is live — but the waiting can still be mine, either
+      // because they are past a date they gave me, or because the assess pass
+      // judged that I am the one left waiting (中汽研's payment carries no date
+      // at all, which is why the verdict route has to exist beside the dates).
+      const late = chain.find(
+        (c) => c.who === "them" && (overdue(c.due, nowMs) || c.assessment?.needs_leo),
+      );
       if (late) out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true));
     }
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
-      if (c.who === "them" && overdue(c.due, nowMs)) {
+      if (c.who === "them" && (overdue(c.due, nowMs) || c.assessment?.needs_leo)) {
         out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, true));
         continue;
       }
