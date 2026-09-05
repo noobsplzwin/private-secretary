@@ -52,7 +52,7 @@ if (allOpen) {
         return [];
       }
     });
-  console.log(`--all-open: ${keys.length} persona(s) with open who=me commitments`);
+  console.log(`--all-open: ${keys.length} persona(s) with open commitments (either side)`);
 } else {
   keys = who!.split(",").map((s) => s.trim()).filter(Boolean);
 }
