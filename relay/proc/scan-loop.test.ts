@@ -1187,6 +1187,26 @@ describe("a brain that cannot think at all says so", () => {
     expect(outage.message).toContain("OAuth session expired");
   });
 
+  it("does NOT cry outage on a single sender — one failure is not an outage", async () => {
+    await runScanTick({
+      statePath,
+      sources: ["slack"],
+      slackClient: slackStub([{ id: "C1", is_im: true }], {
+        C1: [{ ts: "100.0", user: "U2", text: `hi <@${SELF_SLACK}> can you send the BOM` }],
+      }),
+      draft: {
+        llm: async () => {
+          throw new Error("claude -p timed out after 180000ms");
+        },
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+      } as never,
+    });
+    const st = JSON.parse(readFileSync(statePath, "utf8"));
+    expect(st.sourceErrors["llm:draft-outage"]).toBeUndefined();
+    expect(st.sourceErrors["llm:draft"].message).toContain("1/1"); // recorded, just not an alarm
+  });
+
   it("does NOT cry outage when only some senders fail", async () => {
     let n = 0;
     await runScanTick({

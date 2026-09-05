@@ -684,7 +684,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         // what an expired subscription session looked like for two days
         // (2026-09-02 → 09-04) — one arbitrary contact, indistinguishable from
         // a flake. "ALL 12/12 senders failed" is not mistakable for anything.
-        llmDraftOutage = r.errors.length === r.senders && r.senders > 0;
+        // A claim this loud needs more than one data point. 2026-09-05, the day
+        // after this shipped: a tick with a single sender timed out and the
+        // engine announced THE BRAIN IS DOWN. "All 1 of 1 failed" is not
+        // evidence of a systemic failure, it is one failure — and an alarm that
+        // cries wolf on a slow contact is an alarm the owner learns to ignore,
+        // which is the exact failure this was built to prevent.
+        llmDraftOutage = r.senders >= 2 && r.errors.length === r.senders;
         llmDraftError =
           `${llmDraftOutage ? "ALL " : ""}${r.errors.length}/${r.senders} sender(s) failed: ` +
           r.errors.map((e) => `${e.sender}: ${e.error}`).join("; ");
