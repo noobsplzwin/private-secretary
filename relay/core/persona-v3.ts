@@ -39,7 +39,12 @@ export const COMMITMENT_STATUSES: CommitmentStatus[] = ["open", "done", "overdue
 export interface CommitmentAssessment {
   /** Does this need LEO's own time now? The derive rule turns only these into items. */
   needs_leo: boolean;
-  /** Who the work sits with. `them`/`third-party` means no item, however much the thread looks like it wants chasing. */
+  /**
+   * Who the work sits with. `them`/`third-party` means no item of MINE — with
+   * one derived exception (core/ledger-list.ts): once they are past a date they
+   * gave me, the waiting is mine and chasing is my move. A thread that merely
+   * looks like it wants chasing still earns nothing; a missed deadline does.
+   */
   blocked_on?: "leo" | "them" | "third-party";
   /** One imperative line. Only meaningful when needs_leo. */
   next_step?: string;

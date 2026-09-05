@@ -1,0 +1,29 @@
+{
+  "strategy": "s1-cfa",
+  "frozenAt": "2026-08-24T05:08:06.420Z",
+  "proposals": 32,
+  "truePositives": 3,
+  "reproducedMistakes": {
+    "invented_detail": 1
+  },
+  "unknown": 28,
+  "misses": [
+    "r-ds-epic",
+    "r-maoming-trip",
+    "r-zqy-payment",
+    "r-shanghai-quectel"
+  ],
+  "inputMisses": [
+    "r-echo-lab",
+    "r-jingzhi-visit",
+    "r-credit-card"
+  ],
+  "hardMisses": [
+    "r-maoming-trip",
+    "r-zqy-payment"
+  ],
+  "precisionKnown": 0.75,
+  "recall": 0.42857142857142855,
+  "elapsedSeconds": 3883,
+  "groundTruthSize": 26
+}

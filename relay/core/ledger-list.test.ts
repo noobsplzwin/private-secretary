@@ -179,3 +179,44 @@ describe("deriveLedgerTasks", () => {
     });
   });
 });
+
+// 2026-09-04: the owner named 「中汽研第一阶段的款还没付」 as work he owns, and no
+// strategy on the bench could find it — because nothing in the engine turned
+// "they owe me and it is late" into an action of his. The type even said so:
+// blocked_on them meant "no item, however much the thread looks like it wants
+// chasing". A missed deadline is not a thread looking like it wants chasing.
+describe("they owe me, and they are late", () => {
+  const late = (over: Partial<Commitment> = {}): Commitment =>
+    c({ who: "them", what: "Deliver the RT-Thread proposal", due: "2026-08-01", matter_id: "fcc", ...over });
+
+  it("an overdue commitment of theirs becomes MY chase row", () => {
+    const [row] = derive([persona([late()])]);
+    expect(row!.payload.title).toContain("催");
+    expect(row!.payload.title).toContain("RT-Thread");
+    expect(row!.payload.priority).toBe(5); // past its date — overdue counts as urgent
+  });
+
+  it("a commitment of theirs that is NOT yet due stays silent", () => {
+    expect(derive([persona([late({ due: "2026-12-01" })])])).toEqual([]);
+  });
+
+  it("an undated commitment of theirs stays silent — lateness must be evidenced", () => {
+    expect(derive([persona([late({ due: undefined })])])).toEqual([]);
+  });
+
+  it("a free-text due is not a deadline and mints nothing", () => {
+    expect(derive([persona([late({ due: "end of weekend" })])])).toEqual([]);
+  });
+
+  it("my own live link wins the matter — no chasing myself", () => {
+    const rows = derive([
+      persona([late(), c({ who: "me", what: "Review their proposal", matter_id: "fcc", ...assessed(true) })]),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload.title).toBe("Review their proposal");
+  });
+
+  it("a done commitment of theirs is never chased", () => {
+    expect(derive([persona([late({ status: "done" })])])).toEqual([]);
+  });
+});

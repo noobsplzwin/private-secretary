@@ -63,6 +63,20 @@ function priorityFor(due: { dueDate: string } | null, nowMs: number): 0 | 3 | 5 
   return 0;
 }
 
+/**
+ * Is a commitment the OTHER side owes now provably late?
+ *
+ * Only a parseable date counts. 「end of weekend」 is a promise, not a
+ * deadline — 8 of the ledger's 27 dated who=them entries read like that, and
+ * treating them as due dates would invent lateness the conversation never
+ * stated.
+ */
+function overdue(due: string | undefined, nowMs: number): boolean {
+  if (!due) return false;
+  const t = Date.parse(due);
+  return !Number.isNaN(t) && t < nowMs;
+}
+
 function itemFor(
   personaKey: string,
   displayName: string | undefined,
@@ -71,6 +85,7 @@ function itemFor(
   zone: string,
   nowMs: number,
   sunk: boolean,
+  chase = false,
 ): DesiredTask {
   const steps = chain
     .map((c) => c.assessment?.next_step?.trim())
@@ -80,13 +95,16 @@ function itemFor(
   // the list without opening the conversation. Source language is preserved
   // because the quote is verbatim by construction.
   const noteLines = [
+    chase ? `${displayName ?? personaKey} 欠这件事,${lead.due} 已过期。` : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
     displayName ? `— ${displayName}` : `— ${personaKey}`,
   ].filter(Boolean);
   const note = noteLines.join("\n");
 
   const payload: TickTickTaskPayload = {
-    title: lead.what,
+    // The owner's action on someone else's missed deadline is to chase it. The
+    // row names that action, not their work — his to-do is the phone call.
+    title: chase ? `催: ${lead.what}` : lead.what,
     kind: steps.length > 0 ? "CHECKLIST" : "TEXT",
     // A sunk row carries no urgency by construction — priority is what pulls a
     // row into the owner's day, and nothing outside a live matter may do that.
@@ -102,7 +120,7 @@ function itemFor(
     // Keyed by persona + the commitment's own wording. A reworded `what` mints
     // a new key, and the sync's title-match adoption then updates the same
     // TickTick task in place instead of creating a twin.
-    unitKey: `ledger_${personaKey}_${stableHash(lead.what.trim())}`,
+    unitKey: `ledger_${personaKey}_${stableHash((chase ? "chase:" : "") + lead.what.trim())}`,
     payload,
   };
 }
@@ -138,13 +156,24 @@ export function deriveLedgerTasks(
       // The ACTIVE link is the one where the work sits with Leo. A chain whose
       // open links all sit with others is tracked but owes no row — exactly how
       // the owner adjudicated the antenna matter by hand.
+      const sunk = !activeMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
-      if (!lead) continue;
-      out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, !activeMatters.has(matterId)));
+      if (lead) {
+        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, sunk));
+        continue;
+      }
+      // Nothing on my side is live — but if THEY are past a date they gave me,
+      // the waiting is mine and so is the next move.
+      const late = chain.find((c) => c.who === "them" && overdue(c.due, nowMs));
+      if (late) out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true));
     }
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
+      if (c.who === "them" && overdue(c.due, nowMs)) {
+        out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, true));
+        continue;
+      }
       if (c.who !== "me" || !c.assessment?.needs_leo) continue;
       out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true));
     }
