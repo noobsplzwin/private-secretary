@@ -210,8 +210,10 @@ describe("deriveLedgerTasks", () => {
 // blocked_on them meant "no item, however much the thread looks like it wants
 // chasing". A missed deadline is not a thread looking like it wants chasing.
 describe("they owe me, and they are late", () => {
+  // Seven days before NOW: a real miss, and recent enough to still be worth
+  // chasing. (How recent is "recent" is pinned in its own block below.)
   const late = (over: Partial<Commitment> = {}): Commitment =>
-    c({ who: "them", what: "Deliver the RT-Thread proposal", due: "2026-08-01", matter_id: "fcc", ...over });
+    c({ who: "them", what: "Deliver the RT-Thread proposal", due: "2026-08-15", matter_id: "fcc", ...over });
 
   it("an overdue commitment of theirs becomes MY chase row", () => {
     const [row] = derive([persona([late()])]);
@@ -314,5 +316,49 @@ describe("still open, just not now — the floor is the pool", () => {
     expect(
       derive([persona([c({ what: "finished", status: "done" }), c({ what: "abandoned", status: "dropped" })])]),
     ).toEqual([]);
+  });
+});
+
+// 2026-09-06, from the owner's own screen: 「催: Prioritize the 4.5 board」 due
+// Jul 27, 「催: Manually sign the NDA」 due Aug 10, 「催: Prepare for Thursday's
+// OTA Plan meeting (Aug 27, 8–9am)」 — a meeting that had already happened.
+// 「质量有非常非常明显的下降，这些新生成的催，基本都是过期的或者过分生成的」.
+//
+// The mint window was applied to EXTRACTION and not to the chase, so a deadline
+// missed six weeks ago minted a fresh 催 today. A date that old is not someone
+// running late, it is history — the owner's word for it is 「很久以前」.
+describe("chasing has a memory, not an archive", () => {
+  const NOW_MS = Date.parse("2026-09-06T12:00:00Z");
+  const owed = (due: string): Commitment =>
+    c({ who: "them", what: "Prioritize the 4.5 board on the production line", due, matter_id: "fcc" });
+
+  it("chases a deadline missed inside the window", () => {
+    const [row] = derive([persona([owed("2026-09-01")])], ZONE, NOW_MS);
+    expect(row!.payload.title).toContain("催");
+  });
+
+  it("does NOT chase a deadline missed six weeks ago", () => {
+    const rows = derive([persona([owed("2026-07-27")])], ZONE, NOW_MS);
+    expect(rows.some((r) => r.payload.title.includes("催"))).toBe(false);
+  });
+
+  it("the stale one is not lost either — it sinks", () => {
+    // Still their commitment, still open. It just stops shouting.
+    const rows = derive([persona([owed("2026-07-27")])], ZONE, NOW_MS);
+    expect(rows.every((r) => r.payload.project === POOL_LIST || rows.length === 0)).toBe(true);
+  });
+
+  it("still chases on a verdict even when the date is ancient", () => {
+    // A verdict is the owner's own signal that he is waiting — 中汽研 has no
+    // usable date at all, and that route must survive the window.
+    const [row] = derive(
+      [persona([owed("2026-07-27")], "zech", "Zech")].map((p) => ({
+        ...p,
+        commitments: [{ ...p.commitments[0]!, ...assessed(true) }],
+      })),
+      ZONE,
+      NOW_MS,
+    );
+    expect(row!.payload.title).toContain("催");
   });
 });

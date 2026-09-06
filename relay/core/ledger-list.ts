@@ -34,6 +34,7 @@
 
 import { stableHash } from "./unit-key.js";
 import { dueFields } from "./ticktick-plan.js";
+import { MINT_WINDOW_DAYS } from "./corpus-lines.js";
 import type { TickTickTaskPayload } from "./ticktick.js";
 import type { Commitment } from "./persona-v3.js";
 import type { DesiredTask } from "./ticktick-sync.js";
@@ -64,17 +65,27 @@ function priorityFor(due: { dueDate: string } | null, nowMs: number): 0 | 3 | 5 
 }
 
 /**
- * Is a commitment the OTHER side owes now provably late?
+ * Did the OTHER side miss a deadline RECENTLY enough that chasing is the move?
  *
- * Only a parseable date counts. 「end of weekend」 is a promise, not a
- * deadline — 8 of the ledger's 27 dated who=them entries read like that, and
- * treating them as due dates would invent lateness the conversation never
- * stated.
+ * Two bounds, and the second one cost the owner a screen full of noise:
+ *
+ *   - only a parseable date counts. 「end of weekend」 is a promise, not a
+ *     deadline; 8 of the ledger's 27 dated who=them entries read like that, and
+ *     treating them as dates would invent lateness nobody stated.
+ *   - the miss must be INSIDE the mint window. 2026-09-06: a deadline from
+ *     Jul 27 minted a fresh 催 six weeks later, alongside a 催 to prepare for a
+ *     meeting that had already happened. 「基本都是过期的或者过分生成的」. A date
+ *     that old is not someone running late, it is history, and the owner's
+ *     word for history is 「很久以前」.
+ *
+ * A stale miss is not lost — it falls through to the floor like any other
+ * dormant commitment. It just stops shouting.
  */
-function overdue(due: string | undefined, nowMs: number): boolean {
+function recentlyOverdue(due: string | undefined, nowMs: number): boolean {
   if (!due) return false;
   const t = Date.parse(due);
-  return !Number.isNaN(t) && t < nowMs;
+  if (Number.isNaN(t)) return false;
+  return t < nowMs && nowMs - t <= MINT_WINDOW_DAYS * DAY_MS;
 }
 
 function itemFor(
@@ -97,7 +108,7 @@ function itemFor(
   const noteLines = [
     chase
       ? `${displayName ?? personaKey} 欠这件事` +
-        (overdue(lead.due, nowMs) ? `,${lead.due} 已过期。` : ",你在等它。")
+        (recentlyOverdue(lead.due, nowMs) ? `,${lead.due} 已过期。` : ",你在等它。")
       : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
     displayName ? `— ${displayName}` : `— ${personaKey}`,
@@ -170,7 +181,7 @@ export function deriveLedgerTasks(
       // judged that I am the one left waiting (中汽研's payment carries no date
       // at all, which is why the verdict route has to exist beside the dates).
       const late = chain.find(
-        (c) => c.who === "them" && (overdue(c.due, nowMs) || c.assessment?.needs_leo),
+        (c) => c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo),
       );
       if (late) {
         out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true));
@@ -187,7 +198,7 @@ export function deriveLedgerTasks(
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
-      if (c.who === "them" && (overdue(c.due, nowMs) || c.assessment?.needs_leo)) {
+      if (c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo)) {
         out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, true));
         continue;
       }
