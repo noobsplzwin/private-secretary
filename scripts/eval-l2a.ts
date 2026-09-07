@@ -11,6 +11,7 @@
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadGroundTruth } from "../relay/eval/l2a-ground.js";
+import { activeMatterIds, readMatters } from "../relay/io/matters.js";
 import { matchProposals, score } from "../relay/eval/l2a-match.js";
 import type { EvalInput, FrozenPerson, L2AStrategy } from "../relay/eval/l2a.js";
 import { s0Current } from "../relay/eval/strategies/s0-current.js";
@@ -37,7 +38,11 @@ if (persons.length === 0) {
 }
 
 const ground = loadGroundTruth(resolve(process.cwd(), "eval/ground-truth.yaml"));
-const input: EvalInput = { frozenAt: manifest.frozenAt, matters: [], persons };
+// The owner's LIVE matter ids. Empty here used to mean the promotion gate saw
+// no live matter and sank everything, which would score the bench against a
+// list production never produces.
+const matters = [...activeMatterIds(readMatters(resolve(process.cwd(), "config/matters.yaml")))];
+const input: EvalInput = { frozenAt: manifest.frozenAt, matters, persons };
 
 // ── strategy registry ──
 const strategies: Record<string, () => L2AStrategy> = {

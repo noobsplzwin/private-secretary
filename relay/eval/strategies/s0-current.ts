@@ -1,97 +1,121 @@
-// S0 — the CURRENT production theory, wrapped as a bench strategy. The control
-// group: every other theory has to beat this number or the rebuild isn't worth
-// it.
+// S0 — the CONTROL: production, run end to end.
 //
-// What S0 believes (as shipped): one LLM call per person does everything at
-// once — extract new commitments, judge status changes on tracked ones, and
-// judge needs_leo per open who=me commitment. The to-do list is then
-//   (tracked open who=me judged needs_leo) ∪ (freshly extracted open who=me).
-// The only mechanical defence is the quote gate (evidenceGrounded).
+// This strategy deliberately owns no logic of its own. It writes each frozen
+// ledger to a scratch persona file, calls the production extraction
+// (proc/persona-update.ts) against it, and then runs the production derive
+// (core/ledger-list.ts) over the result. What the scorecard measures is what
+// would land in TickTick.
 //
-// PURE: this reuses the production prompt builder and parsers verbatim but
-// writes nothing — no persona files, no state, no TickTick.
+// It used to re-implement the pipeline instead — same prompt, its own copy of
+// the assembly. That copy is why the bench could not see the gates: on
+// 2026-09-04 a run reported precision unchanged after shipping three of them,
+// because the strategy never entered the code they lived in. Then the promotion
+// gate, the chase rule and the two-sided assess all shipped equally unmeasured,
+// and the regression that followed — nine 催 rows minted off six-week-old
+// deadlines — was caught by the owner's eyes, not by a scorecard.
+//
+// So: no copies. If a rule ships in production and this strategy cannot see it,
+// the bench is decoration.
 
-import {
-  buildPersonaUpdateRequest,
-  parseExtractedAssessments,
-  parseExtractedCommitments,
-} from "../../proc/persona-update-prompt.js";
-import { evidenceGrounded } from "../../core/quote-check.js";
-import { indexCorpus, mintable } from "../../core/corpus-lines.js";
-import type { Commitment } from "../../core/persona-v3.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { stringify } from "yaml";
 import type { EvalInput, L2AStrategy, ProposedTodo } from "../l2a.js";
+import { extractCommitmentsOnce } from "../../proc/persona-update.js";
+import { deriveLedgerTasks } from "../../core/ledger-list.js";
+import { readPersonaV3File } from "../../io/persona-store.js";
 
-export type JsonCaller = (req: { system: string; userText: string; toolInputSchema: Record<string, unknown> }) => Promise<unknown>;
+export type JsonCaller = (req: {
+  system: string;
+  userText: string;
+  toolInputSchema: Record<string, unknown>;
+}) => Promise<unknown>;
+
+/** A scratch persona file holding one frozen person's ledger, nothing else. */
+function seed(dir: string, p: EvalInput["persons"][number]): string {
+  const file = join(dir, `${p.personaKey}.yaml`);
+  writeFileSync(
+    file,
+    stringify({
+      schema: "persona-v3",
+      key: p.personaKey,
+      display_name: p.displayName,
+      commitments: p.ledger,
+      provenance: { commitments: "inferred" },
+      evidence: { commitments: "frozen bench snapshot" },
+    }),
+  );
+  return file;
+}
+
+/** The 依据 line the derive writes into every row — the row's own provenance. */
+function evidenceOf(payload: { content?: string; desc?: string }): string[] {
+  const note = payload.content ?? payload.desc ?? "";
+  const m = note.match(/依据:\s*"([^"]+)"/);
+  return m?.[1] ? [m[1]] : [];
+}
 
 export function s0Current(json: JsonCaller): L2AStrategy {
   return {
     name: "s0-current",
     async propose(input: EvalInput): Promise<ProposedTodo[]> {
-      const out: ProposedTodo[] = [];
-      // Per-person progress. A run is ~50 minutes of one LLM call after another
-      // with nothing on stdout, which is indistinguishable from a hang — asked
-      // and answered three times on 2026-09-04. A silent long job is a broken
-      // long job.
-      let n = 0;
-      for (const person of input.persons) {
-        console.log(`[s0] (${++n}/${input.persons.length}) ${person.personaKey}…`);
-        const existing = person.ledger as Commitment[];
-        let raw: unknown;
-        try {
-          raw = await json(
-            buildPersonaUpdateRequest({
-              name: person.displayName,
-              existing,
-              thread: person.corpus,
-            }),
-          );
-        } catch (e) {
-          // A dead call is a loud zero for this person, never a silent skip.
-          console.error(`[s0] ${person.personaKey}: LLM failed — ${(e as Error).message.split("\n")[0]}`);
-          continue;
+      const dir = mkdtempSync(join(tmpdir(), "s0-bench-"));
+      try {
+        let n = 0;
+        for (const person of input.persons) {
+          console.log(`[s0] (${++n}/${input.persons.length}) ${person.personaKey}…`);
+          const file = seed(dir, person);
+          try {
+            // PRODUCTION. Every gate it applies — grounding, speaker, recency,
+            // hedges, verdict coherence — applies here by construction.
+            const r = await extractCommitmentsOnce({
+              file,
+              displayName: person.displayName,
+              corpus: person.corpus,
+              json,
+              now: () => input.frozenAt,
+            });
+            console.log(
+              r
+                ? `[s0]   → +${r.added} 新增, ${r.assessed} 裁决, ${r.discarded} 丢弃`
+                : `[s0]   → 无结果(解析失败或语料为空)`,
+            );
+          } catch (e) {
+            // A dead call is a loud zero for this person, never a silent skip.
+            console.error(`[s0] ${person.personaKey}: LLM failed — ${(e as Error).message.split("\n")[0]}`);
+          }
         }
 
-        const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
-          xs.filter((x) => x.evidence && evidenceGrounded(person.corpus, x.evidence));
+        // PRODUCTION derive, over the ledgers the pass just wrote. This is the
+        // step the bench was blind to: the promotion gate, the chase rule and
+        // the "still open, just not now" floor all live here.
+        const personas = input.persons.flatMap((p) => {
+          try {
+            const f = readPersonaV3File(join(dir, `${p.personaKey}.yaml`));
+            return [{ key: f.key, display_name: f.display_name, commitments: f.commitments ?? [] }];
+          } catch {
+            return [];
+          }
+        });
+        const live = new Set(input.matters);
+        const rows = deriveLedgerTasks(personas, "America/Winnipeg", Date.parse(input.frozenAt), live);
 
-        // The SAME structural gates production runs (core/corpus-lines.ts).
-        // They used to live only on the production orchestrator, which this
-        // strategy does not enter — so the 2026-09-04 re-run scored the ungated
-        // path and reported no change from shipping them. A gate the bench
-        // cannot see is a gate the bench cannot score.
-        const lines = indexCorpus(person.corpus);
-        const nowMs = Date.parse(input.frozenAt);
-
-        // Tracked open who=me the model judged needs_leo — the assess half.
-        for (const a of grounded(parseExtractedAssessments(raw, existing.length))) {
-          const target = existing[a.index]!;
-          if (target.who !== "me" || target.status !== "open" || !a.needs_leo) continue;
-          out.push({
-            personaKey: person.personaKey,
-            title: target.what,
-            ...(target.matter_id ? { matterId: target.matter_id } : {}),
-            ...(target.due ? { due: target.due } : {}),
-            evidence: [a.evidence],
-          });
-        }
-
-        const before = out.length;
-        // Freshly extracted who=me — the extraction half. In production these
-        // wait a round for assessment; steady-state they render, so they count.
-        for (const c of grounded(parseExtractedCommitments(raw))) {
-          if (c.who !== "me" || (c.status ?? "open") !== "open") continue;
-          if (!mintable(lines, c, nowMs)) continue;
-          out.push({
-            personaKey: person.personaKey,
-            title: c.what,
-            ...(c.matter_id ? { matterId: c.matter_id } : {}),
-            ...(c.due ? { due: c.due } : {}),
-            evidence: c.evidence ? [c.evidence] : [],
-          });
-        }
-        console.log(`[s0]   → ${out.length - before} proposal(s)`);
+        // Only the WORKING list is a proposal. A sunk row is the floor — still
+        // tracked, deliberately not being asked of him today — and counting the
+        // pool would score the bench on work the owner was never shown.
+        return rows.filter((r) => !r.payload.project).map((row) => {
+          const key = row.unitKey.replace(/^ledger_/, "").replace(/_[0-9a-f]+$/, "");
+          return {
+            personaKey: key,
+            title: row.payload.title,
+            ...(row.payload.dueDate ? { due: row.payload.dueDate } : {}),
+            evidence: evidenceOf(row.payload),
+          };
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
       }
-      return out;
     },
   };
 }

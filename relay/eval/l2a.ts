@@ -28,7 +28,11 @@ export interface FrozenPerson {
 
 export interface EvalInput {
   frozenAt: string;
-  /** The owner's matter registry at freeze time — id + label lines. */
+  /**
+   * The owner's LIVE matter ids. A commitment outside them cannot claim a slot
+   * on the working list (core/ledger-list.ts's promotion gate), so a strategy
+   * that renders the real list needs them.
+   */
   matters: string[];
   persons: FrozenPerson[];
 }
