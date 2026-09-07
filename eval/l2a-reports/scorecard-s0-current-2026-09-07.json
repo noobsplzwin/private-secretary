@@ -1,0 +1,34 @@
+{
+  "strategy": "s0-current",
+  "frozenAt": "2026-08-24T05:08:06.420Z",
+  "proposals": 3,
+  "truePositives": 0,
+  "reproducedMistakes": {
+    "stale": 1,
+    "not_mine": 1
+  },
+  "unknown": 1,
+  "misses": [
+    "r-ds-epic",
+    "r-3500-order",
+    "r-maoming-trip",
+    "r-zqy-payment",
+    "r-wife-interview",
+    "r-leapmotor-board",
+    "r-shanghai-quectel"
+  ],
+  "inputMisses": [
+    "r-echo-lab",
+    "r-jingzhi-visit",
+    "r-credit-card"
+  ],
+  "hardMisses": [
+    "r-3500-order",
+    "r-maoming-trip",
+    "r-zqy-payment"
+  ],
+  "precisionKnown": 0,
+  "recall": 0,
+  "elapsedSeconds": 2451,
+  "groundTruthSize": 26
+}

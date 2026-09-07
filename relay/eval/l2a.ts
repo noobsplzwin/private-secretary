@@ -16,13 +16,26 @@ export interface FrozenPerson {
   displayName: string;
   /** The cross-source corpus text, exactly as the production reader renders it. */
   corpus: string;
-  /** The person's ledger commitments at freeze time (v1 schema, verbatim). */
+  /**
+   * The person's ledger commitments at freeze time, verbatim — INCLUDING the
+   * assessment. The verdict is what promotes a commitment onto the working
+   * list, and a freeze that drops it hands the strategy a ledger with no
+   * memory: the 2026-09-07 run scored 0% because 28 needs_leo verdicts that
+   * existed on the day were simply not in the snapshot.
+   */
   ledger: Array<{
     who: "me" | "them";
     what: string;
     status: string;
     due?: string;
     matter_id?: string;
+    assessment?: {
+      needs_leo: boolean;
+      blocked_on?: "leo" | "them" | "third-party";
+      next_step?: string;
+      evidence: string;
+      at: string;
+    };
   }>;
 }
 

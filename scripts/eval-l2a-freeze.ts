@@ -53,6 +53,10 @@ for (const key of keys) {
     status: c.status,
     ...(c.due ? { due: c.due } : {}),
     ...(c.matter_id ? { matter_id: c.matter_id } : {}),
+    // The VERDICT rides along. It is what promotes a commitment onto the
+    // working list, so a snapshot without it is a ledger with no memory —
+    // dropping it scored the 2026-09-07 run at 0% on 28 verdicts that existed.
+    ...(c.assessment ? { assessment: c.assessment } : {}),
   }));
   writeFileSync(
     `${outDir}/${key}.json`,
