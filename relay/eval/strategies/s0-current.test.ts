@@ -106,6 +106,45 @@ describe("S0 renders the list production would render", () => {
     expect(props[0]!.evidence).toEqual(["I'll send Cody the Rev5 docs today"]);
   });
 
+  // The property the 2026-09-07 run lacked: work FOUND this round must still be
+  // renderable. A fresh commitment has no verdict, and needs_leo is what
+  // promotes — so one pass proposes nothing it just discovered, and that run
+  // missed all seven real items while proposing only stale ledger rows.
+  it("assesses in a second pass what the first pass extracted", async () => {
+    let call = 0;
+    const props = await s0Current(async () => {
+      call++;
+      return call === 1
+        ? {
+            commitments: [
+              {
+                who: "me",
+                what: "Send Cody the Rev5 docs",
+                status: "open",
+                matter_id: "fcc",
+                evidence: "I'll send Cody the Rev5 docs today",
+              },
+            ],
+            updates: [],
+            assessments: [],
+          }
+        : {
+            commitments: [],
+            updates: [],
+            assessments: [
+              {
+                index: 0,
+                needs_leo: true,
+                next_step: "Send Cody the Rev5 capture-card docs",
+                evidence: "I'll send Cody the Rev5 docs today",
+              },
+            ],
+          };
+    }).propose(input());
+    expect(call).toBe(2);
+    expect(props.map((p) => p.title)).toEqual(["Send Cody the Rev5 docs"]);
+  });
+
   it("an LLM failure costs that person, not the run", async () => {
     const props = await s0Current(async () => {
       throw new Error("claude -p timed out");

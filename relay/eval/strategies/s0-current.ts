@@ -56,6 +56,19 @@ function evidenceOf(payload: { content?: string; desc?: string }): string[] {
   return m?.[1] ? [m[1]] : [];
 }
 
+/**
+ * How many extraction passes each person gets before the derive.
+ *
+ * TWO, because that is what production reaches. A commitment extracted this
+ * round carries no verdict yet — needs_leo is what promotes it — so a
+ * single-pass bench renders none of the work it just found, and the
+ * 2026-09-07 run missed all seven real items for exactly that reason while
+ * the only rows it proposed were old ledger entries carrying old verdicts.
+ * The second pass assesses what the first one wrote, which is what a
+ * contact's next tick does in production.
+ */
+const ROUNDS = 2;
+
 export function s0Current(json: JsonCaller): L2AStrategy {
   return {
     name: "s0-current",
@@ -66,24 +79,27 @@ export function s0Current(json: JsonCaller): L2AStrategy {
         for (const person of input.persons) {
           console.log(`[s0] (${++n}/${input.persons.length}) ${person.personaKey}…`);
           const file = seed(dir, person);
-          try {
-            // PRODUCTION. Every gate it applies — grounding, speaker, recency,
-            // hedges, verdict coherence — applies here by construction.
-            const r = await extractCommitmentsOnce({
-              file,
-              displayName: person.displayName,
-              corpus: person.corpus,
-              json,
-              now: () => input.frozenAt,
-            });
-            console.log(
-              r
-                ? `[s0]   → +${r.added} 新增, ${r.assessed} 裁决, ${r.discarded} 丢弃`
-                : `[s0]   → 无结果(解析失败或语料为空)`,
-            );
-          } catch (e) {
-            // A dead call is a loud zero for this person, never a silent skip.
-            console.error(`[s0] ${person.personaKey}: LLM failed — ${(e as Error).message.split("\n")[0]}`);
+          for (let round = 1; round <= ROUNDS; round++) {
+            try {
+              // PRODUCTION. Every gate it applies — grounding, speaker, recency,
+              // hedges, verdict coherence — applies here by construction.
+              const r = await extractCommitmentsOnce({
+                file,
+                displayName: person.displayName,
+                corpus: person.corpus,
+                json,
+                now: () => input.frozenAt,
+              });
+              console.log(
+                r
+                  ? `[s0]   round ${round}: +${r.added} 新增, ${r.assessed} 裁决, ${r.discarded} 丢弃`
+                  : `[s0]   round ${round}: 无结果(解析失败或语料为空)`,
+              );
+            } catch (e) {
+              // A dead call is a loud zero for this person, never a silent skip.
+              console.error(`[s0] ${person.personaKey}: LLM failed — ${(e as Error).message.split("\n")[0]}`);
+              break;
+            }
           }
         }
 
