@@ -37,7 +37,7 @@ import { readPersonaV3File } from "../relay/io/persona-store.js";
 import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
 import { loadProjects, loadLeoProfile } from "../relay/io/projects.js";
-import { activeMatterIds, readMatters } from "../relay/io/matters.js";
+import { activeMatterIds, closedMatterIds, readMatters } from "../relay/io/matters.js";
 import { renderProjectCatalog } from "../relay/core/project.js";
 import { createAnthropicLlmCaller, createAnthropicJsonCaller } from "../relay/proc/llm-anthropic.js";
 import { createClaudeCliLlmCaller, createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
@@ -713,6 +713,14 @@ console.log(
     }
   };
 
+  const closedMatters = (): ReadonlySet<string> => {
+    try {
+      return closedMatterIds(readMatters(resolve(process.cwd(), "config/matters.yaml")));
+    } catch {
+      return new Set();
+    }
+  };
+
   const ledgerPersonas = (): Array<{ key: string; display_name?: string; commitments?: Commitment[] }> => {
     const out: Array<{ key: string; display_name?: string; commitments?: Commitment[] }> = [];
     for (const f of readdirSync(personaDir)) {
@@ -749,6 +757,7 @@ console.log(
           ...(executeDeps ? { execute: executeDeps } : {}),
           ledgerPersonas,
           activeMatters,
+          closedMatters,
           resolvePersonaKey,
           maxDraftCandidates: maxDraft,
         });

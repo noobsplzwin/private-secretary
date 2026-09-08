@@ -110,10 +110,11 @@ export interface ScanLoopOptions {
   /** Tick-to-execute (invites/tool items). Absent → a ticked line records done only. */
   execute?: Omit<ExecuteDeps, "persistClaim">;
   ledgerPersonas?: () => ReadonlyArray<{ key: string; display_name?: string; commitments?: Commitment[] }>;
-  /** The owner's live matter ids (io/matters.ts). Absent = nothing is promoted:
-   * every ledger row sinks to the pool, which is loud and reversible, unlike
-   * silently promoting work the owner never claimed. */
+  /** The owner's live matter ids (io/matters.ts). Absent is survivable now that
+   * the verdict promotes: an unfiled row still reaches him. */
   activeMatters?: () => ReadonlySet<string>;
+  /** The matters he CLOSED — work inside one sinks whatever the verdict says. */
+  closedMatters?: () => ReadonlySet<string>;
   /** Owner's IANA zone for TickTick due dates / time labels. */
   ownerTimeZone?: string;
   // When provided, a persona-update pass runs after planning: extracts NEW
@@ -978,7 +979,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // commitments the assess pass judged needs_leo. Cards contribute only what
       // the ledger cannot: executable invite/tool lines, and persona-less work.
       const ledger = opts.ledgerPersonas
-        ? deriveLedgerTasks(opts.ledgerPersonas(), zone, nowMs, opts.activeMatters?.() ?? new Set())
+        ? deriveLedgerTasks(
+            opts.ledgerPersonas(),
+            zone,
+            nowMs,
+            opts.activeMatters?.() ?? new Set(),
+            opts.closedMatters?.() ?? new Set(),
+          )
         : [];
       const personaLess = (unit: TaskUnit): boolean =>
         opts.resolvePersonaKey

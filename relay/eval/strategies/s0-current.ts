@@ -115,7 +115,13 @@ export function s0Current(json: JsonCaller): L2AStrategy {
           }
         });
         const live = new Set(input.matters);
-        const rows = deriveLedgerTasks(personas, "America/Winnipeg", Date.parse(input.frozenAt), live);
+        const rows = deriveLedgerTasks(
+          personas,
+          "America/Winnipeg",
+          Date.parse(input.frozenAt),
+          live,
+          new Set(input.closedMatters ?? []),
+        );
 
         // Only the WORKING list is a proposal. A sunk row is the floor — still
         // tracked, deliberately not being asked of him today — and counting the

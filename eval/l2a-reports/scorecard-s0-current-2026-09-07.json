@@ -1,12 +1,11 @@
 {
   "strategy": "s0-current",
   "frozenAt": "2026-08-24T05:08:06.420Z",
-  "proposals": 5,
+  "proposals": 4,
   "truePositives": 0,
   "reproducedMistakes": {
     "stale": 2,
-    "not_mine": 1,
-    "invented_detail": 1
+    "not_mine": 1
   },
   "unknown": 1,
   "misses": [
@@ -30,6 +29,6 @@
   ],
   "precisionKnown": 0,
   "recall": 0,
-  "elapsedSeconds": 2752,
+  "elapsedSeconds": 5022,
   "groundTruthSize": 26
 }

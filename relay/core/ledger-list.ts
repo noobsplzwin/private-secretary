@@ -22,15 +22,24 @@
 // the work sits with Leo. A matter whose only open links sit with others
 // produces nothing, however many entries it has.
 //
-// PROMOTION GATE (owner, 2026-09-03): a matter is the owner's own answer to
-// "what am I actually working on", so belonging to a LIVE one is what earns a
-// row its place on the working list. A commitment with no matter, or one whose
-// matter the owner has closed, still gets a row — it sinks to the 待办池 list
-// at no priority. It is never dropped: 系统删待办这个概念不存在。
+// WHAT EARNS A ROW ITS PLACE (owner, 2026-09-07: 「verdict说了算」):
 //
-// This is the gate the 2026-08-24 clearance did by hand. Ten days later the
-// ledger had minted 59 fresh matter-less rows, because a one-off cleanup is
-// not a gate. Prompt rules die; code gates live.
+//   the VERDICT promotes. needs_leo means he must act, and that reaches the
+//   working list whether or not the work has been filed under a matter.
+//   Everything else sinks to 待办池 at no priority, never dropped —
+//   系统删待办这个概念不存在。
+//
+//   the one exception is a matter the OWNER CLOSED. That is him saying the work
+//   is over, and his ruling outranks a model verdict. An UNREGISTERED matter id
+//   is not this case — the extraction prompt lets the model coin one for a
+//   fresh chain, which is filing in progress.
+//
+// This replaces the 2026-09-03 rule, which required a live matter to promote.
+// That rule buried genuinely new work: 10 commitments judged needs_leo sat in
+// the pool solely for mapping to no registered matter — 「订 500 个电源适配器」,
+// 「联系谢尔福德谈股份分配」 — and the bench missed all seven items the owner
+// had named himself, because new work has no matter by definition. A matter is
+// how work is FILED; a verdict is how it is DECIDED.
 
 import { stableHash } from "./unit-key.js";
 import { dueFields } from "./ticktick-plan.js";
@@ -151,6 +160,8 @@ export function deriveLedgerTasks(
   zone: string,
   nowMs: number,
   activeMatters: ReadonlySet<string>,
+  /** Matters the owner CLOSED. Work inside one sinks whatever the verdict says. */
+  closedMatters: ReadonlySet<string> = new Set(),
 ): DesiredTask[] {
   const out: DesiredTask[] = [];
   for (const p of personas) {
@@ -170,12 +181,13 @@ export function deriveLedgerTasks(
       // The ACTIVE link is the one where the work sits with Leo. A chain whose
       // open links all sit with others is tracked but owes no row — exactly how
       // the owner adjudicated the antenna matter by hand.
-      const sunk = !activeMatters.has(matterId);
+      const closed = closedMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (lead) {
-        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, sunk));
+        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed));
         continue;
       }
+      const sunk = closed || !activeMatters.has(matterId);
       // Nothing on my side is live — but the waiting can still be mine, either
       // because they are past a date they gave me, or because the assess pass
       // judged that I am the one left waiting (中汽研's payment carries no date
@@ -203,9 +215,8 @@ export function deriveLedgerTasks(
         continue;
       }
       if (c.who !== "me") continue;
-      // Always sunk: no matter_id at all, so the promotion gate applies whatever
-      // the verdict says. It reaches the floor either way — never nothing.
-      out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true));
+      // No matter_id at all — unfiled, not closed. The verdict decides.
+      out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, !c.assessment?.needs_leo));
     }
   }
   return out;

@@ -47,6 +47,12 @@ export interface EvalInput {
    * that renders the real list needs them.
    */
   matters: string[];
+  /**
+   * The matters he CLOSED. Work inside one sinks whatever the verdict says —
+   * his ruling outranks a model verdict — so a strategy rendering the real
+   * list needs these separately from "simply unfiled".
+   */
+  closedMatters?: string[];
   persons: FrozenPerson[];
 }
 

@@ -27,7 +27,7 @@ describe("S0 renders the list production would render", () => {
   // The contrast pair: identical input, only the matter differs. Live → the row
   // is proposed (see 依据 test below); dead → the promotion gate sinks it and
   // nothing is proposed. A strategy that skipped the derive would propose both.
-  const assessedRow = (matterId: string) =>
+  const assessedRow = (matterId: string, closed: string[] = []) =>
     s0Current(async () => ({
       commitments: [],
       updates: [],
@@ -41,6 +41,7 @@ describe("S0 renders the list production would render", () => {
       ],
     })).propose(
       input({
+        closedMatters: closed,
         persons: [
           person({
             ledger: [{ who: "me", what: "Send Cody the Rev5 docs", status: "open", matter_id: matterId }],
@@ -53,8 +54,15 @@ describe("S0 renders the list production would render", () => {
     expect((await assessedRow("fcc")).map((p) => p.title)).toEqual(["Send Cody the Rev5 docs"]);
   });
 
-  it("proposes nothing when the same row's matter is not live", async () => {
-    expect(await assessedRow("a-matter-the-owner-closed")).toEqual([]);
+  // REVISED 2026-09-07 by owner ruling 「verdict说了算」: an unregistered id is
+  // unfiled work and still promotes. Only a matter he CLOSED sinks a judged row.
+  it("proposes nothing when the owner has closed that matter", async () => {
+    expect(await assessedRow("retired-matter", ["retired-matter"])).toEqual([]);
+  });
+
+  it("still proposes when the matter id is merely unregistered", async () => {
+    const props = await assessedRow("an-id-the-model-coined");
+    expect(props.map((p) => p.title)).toEqual(["Send Cody the Rev5 docs"]);
   });
 
   it("a fresh commitment with no verdict is not working-list work", async () => {

@@ -23,7 +23,8 @@ const derive = (
   zone = ZONE,
   now = NOW,
   live: ReadonlySet<string> = LIVE,
-) => deriveLedgerTasks(personas, zone, now, live);
+  closed: ReadonlySet<string> = new Set(),
+) => deriveLedgerTasks(personas, zone, now, live, closed);
 
 const persona = (commitments: Commitment[], key = "zech", display_name = "Zech Noiseux") => ({
   key,
@@ -31,17 +32,29 @@ const persona = (commitments: Commitment[], key = "zech", display_name = "Zech N
   commitments,
 });
 
-describe("the promotion gate — a matter is what earns a row its slot", () => {
+// REVISED 2026-09-07 by owner ruling 「verdict说了算」. This block used to
+// assert that only a LIVE matter promotes; that rule buried new work, so what
+// it now pins is the half that survived — the FLOOR. See "the verdict promotes,
+// the matter only files" below for the replacement rule.
+describe("the floor: what a row falls to when nothing promotes it", () => {
   // 2026-08-24 clearance swept 163 matter-less rows by hand; ten days later the
   // ledger had minted 59 more. A cleanup is not a gate.
-  it("sinks a matter-less commitment to the pool at no priority", () => {
-    const [row] = derive([persona([c({ due: "2026-08-23", ...assessed(true) })])]);
+  it("sinks a matter-less commitment with NO verdict, deadline or not", () => {
+    // The date does not promote it — only a verdict does. Undecided work waits
+    // on the floor rather than claiming his day.
+    const [row] = derive([persona([c({ due: "2026-08-23" })])]);
     expect(row!.payload.project).toBe(POOL_LIST);
-    expect(row!.payload.priority).toBe(0); // imminent, but nothing outside a live matter may claim the day
+    expect(row!.payload.priority).toBe(0);
   });
 
-  it("sinks a commitment whose matter the owner has closed", () => {
-    const [row] = derive([persona([c({ matter_id: "maoming-trip", ...assessed(true) })])]);
+  it("sinks a commitment whose matter the owner has closed, verdict and all", () => {
+    const [row] = derive(
+      [persona([c({ matter_id: "maoming-trip", ...assessed(true) })])],
+      ZONE,
+      NOW,
+      LIVE,
+      new Set(["maoming-trip"]),
+    );
     expect(row!.payload.project).toBe(POOL_LIST);
   });
 
@@ -58,9 +71,13 @@ describe("the promotion gate — a matter is what earns a row its slot", () => {
     expect(sunk[0]!.unitKey).toBe(live[0]!.unitKey); // same work, same identity, different shelf
   });
 
-  it("an empty registry sinks everything rather than promoting silently", () => {
+  it("an unreadable registry no longer silences judged work", () => {
+    // REVISED with the ruling. This used to sink everything, so a wiring
+    // mistake was loud. Under 「verdict说了算」 a missing registry cannot bury
+    // work he must do — the failure direction moved from losing rows to
+    // showing an unfiled one, which is the safer of the two.
     const [row] = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])], ZONE, NOW, new Set());
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.project).toBeUndefined();
   });
 });
 
@@ -90,7 +107,10 @@ describe("deriveLedgerTasks", () => {
     expect(rows.map((r) => r.payload.title).sort()).toEqual(
       ["handed off", "never assessed", "签署高通 NDA 并回传给李冰"].sort(),
     );
-    expect(rows.every((r) => r.payload.project === POOL_LIST)).toBe(true);
+    // REVISED with the ruling: the judged one promotes even unfiled; the rest
+    // are undecided and stay on the floor.
+    const promoted = rows.filter((r) => !r.payload.project).map((r) => r.payload.title);
+    expect(promoted).toEqual(["签署高通 NDA 并回传给李冰"]);
     // done stays out, and so does their commitment — only Leo's own open work.
     expect(rows.some((r) => r.payload.title === "done thing")).toBe(false);
     expect(rows.some((r) => r.payload.title === "their thing")).toBe(false);
@@ -360,5 +380,56 @@ describe("chasing has a memory, not an archive", () => {
       NOW_MS,
     );
     expect(row!.payload.title).toContain("催");
+  });
+});
+
+// OWNER RULING 2026-09-07: 「verdict说了算」. The promotion gate was buried
+// genuinely new work — 10 commitments the pass had judged needs_leo sat in the
+// pool solely because they mapped to no registered matter, among them 「订 500
+// 个电源适配器」 and 「联系谢尔福德谈股份分配」. New work has no matter by
+// definition, which is why the bench missed all seven items he named himself.
+//
+// A matter is how work is FILED. A verdict is how it is DECIDED. Filing does
+// not outrank deciding — with one exception, below.
+describe("the verdict promotes, the matter only files", () => {
+  it("promotes needs_leo work that maps to no matter at all", () => {
+    const [row] = derive([persona([c({ ...assessed(true) })])]);
+    expect(row!.payload.project).toBeUndefined();
+  });
+
+  it("still promotes needs_leo work inside a live matter", () => {
+    const [row] = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])]);
+    expect(row!.payload.project).toBeUndefined();
+  });
+
+  it("keeps sinking a matter the OWNER closed, verdict or not", () => {
+    // His own ruling outranks a model verdict: a closed matter is him saying
+    // the work is over. That is the one case where filing wins.
+    const [row] = derive(
+      [persona([c({ matter_id: "retired", ...assessed(true) })])],
+      ZONE,
+      NOW,
+      LIVE,
+      new Set(["retired"]),
+    );
+    expect(row!.payload.project).toBe(POOL_LIST);
+  });
+
+  it("an unregistered matter id is unfiled, not closed", () => {
+    // The extraction prompt lets the model coin a new kebab-case id for a fresh
+    // chain. That is filing in progress, not a decision that the work is done.
+    const [row] = derive(
+      [persona([c({ matter_id: "some-id-the-model-coined", ...assessed(true) })])],
+      ZONE,
+      NOW,
+      LIVE,
+      new Set(["retired"]),
+    );
+    expect(row!.payload.project).toBeUndefined();
+  });
+
+  it("no verdict still means the floor, matter or not", () => {
+    expect(derive([persona([c({ matter_id: "fcc" })])])[0]!.payload.project).toBe(POOL_LIST);
+    expect(derive([persona([c({})])])[0]!.payload.project).toBe(POOL_LIST);
   });
 });

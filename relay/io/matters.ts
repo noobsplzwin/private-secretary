@@ -34,3 +34,13 @@ export function readMatters(path: string): Matter[] {
 export function activeMatterIds(matters: readonly Matter[]): Set<string> {
   return new Set(matters.filter((m) => m.status !== "closed").map((m) => m.id));
 }
+
+/**
+ * The ids the owner CLOSED. Distinct from "not in the live set": an id the
+ * registry has never heard of is unfiled work (the extraction prompt lets the
+ * model coin one), while a closed id is him saying that work is over — and his
+ * ruling outranks a model verdict (core/ledger-list.ts).
+ */
+export function closedMatterIds(matters: readonly Matter[]): Set<string> {
+  return new Set(matters.filter((m) => m.status === "closed").map((m) => m.id));
+}
