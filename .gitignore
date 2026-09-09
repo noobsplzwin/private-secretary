@@ -12,6 +12,8 @@ eval/replay-corpus/
 # Aggregate scorecards (eval/l2a-reports/scorecard-*.json) hold counts only
 # and ARE committed.
 eval/ground-truth.yaml
+# Ticket cases quote real Slack threads + business facts. NEVER commit.
+eval/ticket-cases.yaml
 eval/l2a-corpus/
 eval/l2a-reports/detail-*
 eval/l2a-reports/proposals-*

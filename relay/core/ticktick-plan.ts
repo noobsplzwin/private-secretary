@@ -267,11 +267,47 @@ export function deadlineFor(unit: TaskUnit): string | null {
   return dated[0] ?? null;
 }
 
+/**
+ * The DRAFTED TICKET, laid out for review.
+ *
+ * Ticking is the approval, so whatever the row does not show, the owner
+ * approves blind. The checklist line names the destination and assignee but has
+ * no room for the body, and the body is where both of 2026-09-09's real tickets
+ * went wrong: one needed its description halved, the other went out assigned to
+ * the wrong engineer. 「让我review一下你准备创建的ticket」.
+ *
+ * So the line stays one line and the ticket itself goes in the note.
+ */
+function ticketBlock(unit: TaskUnit): string {
+  const out: string[] = [];
+  for (const m of unit.members) {
+    if (m.action_type !== "tool" || m.status === "executed" || m.status === "rejected") continue;
+    const p = (m.params ?? {}) as Record<string, unknown>;
+    const str = (k: string): string => (typeof p[k] === "string" ? (p[k] as string).trim() : "");
+    const summary = str("summary");
+    const description = str("description");
+    if (!summary && !description) continue;
+    out.push(
+      [
+        `🎫 ${str("tool") || "ticket"}${str("project") ? ` · ${str("project")}` : ""}`,
+        summary ? `标题: ${summary}` : "",
+        // Absent is stated, never left blank: a silent gap reads as "assigned".
+        `指派: ${str("assignee") || "未指派 (unassigned)"}`,
+        description ? `\n${description}` : "",
+      ]
+        .filter((l) => l !== "")
+        .join("\n"),
+    );
+  }
+  return out.join("\n\n");
+}
+
 function describe(unit: TaskUnit): string {
   // The ranking pass that wrote a "why now" + entities is retired; a card row's
-  // note is whatever its members carry (summaries ride the checklist lines).
-  void unit;
-  return "";
+  // note is otherwise whatever its members carry (summaries ride the checklist
+  // lines) — except a drafted ticket, which must be readable before it is
+  // ticked.
+  return ticketBlock(unit);
 }
 
 export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {

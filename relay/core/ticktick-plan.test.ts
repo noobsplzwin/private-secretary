@@ -94,6 +94,13 @@ describe("isExecutableAction", () => {
   });
 });
 
+// Notes live in `content` for a TEXT task and `desc` for a CHECKLIST one.
+// A TEXT task carries its note in `content`, a CHECKLIST one in `desc`, and the
+// builder always sends BOTH (the inactive one as ""), so `??` would stop at the
+// empty string. Take whichever actually has text.
+const noteOf = (p: { content?: string; desc?: string }): string =>
+  [p.content, p.desc].find((v) => typeof v === "string" && v !== "") ?? "";
+
 describe("buildTaskPayload — the task IS the unit", () => {
   it("makes one task with its steps as a checklist", () => {
     const built = buildTaskPayload(
@@ -411,5 +418,69 @@ describe("unverified names surface in the notes", () => {
   it("says nothing when every name checked out", () => {
     const note = buildTaskPayload(unit(), ZONE).payload.desc ?? buildTaskPayload(unit(), ZONE).payload.content ?? "";
     expect(note).not.toContain("姓名未核实");
+  });
+});
+
+// OWNER 2026-09-09: 「你是应该在ticktick创建一个一键创建ticket的待办，让我review
+// 一下你准备创建的ticket」. The tick IS the approval, so whatever the row does
+// not show, he approves blind.
+//
+// Both of that day's real tickets went wrong in exactly the part the row hides:
+// TAIV-7049 needed its description cut in half, TAIV-7050 went out assigned to
+// the wrong engineer. Neither is visible in 「🎫 创建：jira · Taiv Firmware · …」.
+//
+// The module header argues the body is omitted because a wrong body is cheap to
+// fix. Cheap to fix is not the test. The test is whether he can review it.
+describe("a tickable ticket must be reviewable before it is ticked", () => {
+  const ticket = (over: Record<string, unknown> = {}) =>
+    unit({
+      title: "File ticket: Memfault offline log collection",
+      members: [
+        member({
+          id: "j1",
+          action_type: "tool",
+          params: {
+            tool: "jira",
+            project: "TAIV",
+            summary: "Investigate offline log collection on the box",
+            assignee: "ihor@taiv.tv",
+            description:
+              "Screen health is the top priority and we are short on logs.\n\n" +
+              "Save periodically to /data: logcat filtered, tombstones, tcpdump, dumpsys.\n\n" +
+              "Hard constraint: must not burn through eMMC.",
+            ...over,
+          },
+        }),
+      ],
+    });
+
+  it("shows the drafted body in the note, not only the destination", () => {
+    const note = noteOf(buildTaskPayload(ticket(), ZONE).payload);
+    expect(note).toContain("tcpdump");
+    expect(note).toContain("eMMC");
+  });
+
+  it("shows the assignee in the note too, not only on the tick line", () => {
+    // TAIV-7050 shipped to the wrong person. The name must be readable where
+    // the body is read, not only in a one-line label that scrolls.
+    expect(noteOf(buildTaskPayload(ticket(), ZONE).payload)).toContain("ihor@taiv.tv");
+  });
+
+  it("names the destination project in the note", () => {
+    expect(noteOf(buildTaskPayload(ticket(), ZONE).payload)).toContain("TAIV");
+  });
+
+  it("says so when the drafter resolved no assignee", () => {
+    // ASK-not-GUESS is already enforced upstream; the row must not let an
+    // unassigned ticket look assigned by saying nothing at all.
+    const note = noteOf(buildTaskPayload(ticket({ assignee: undefined }), ZONE).payload);
+    expect(note).toMatch(/未指派|unassigned/i);
+  });
+
+  it("keeps the tick line itself one line", () => {
+    // The line stays scannable; the body lives in the note.
+    const line = buildTaskPayload(ticket(), ZONE).payload.items![0]!.title;
+    expect(line).not.toContain("\n");
+    expect(line).toContain("TAIV");
   });
 });
