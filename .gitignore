@@ -72,3 +72,7 @@ config/owner-voice.md
 # Clash 配置备忘：含真实节点 IP / 密码 / obfs-password。
 # 本地参考用，两个远程都是公开的 —— NEVER commit.
 docs/clash-verge-setup/
+# The ZIP of the same thing. The directory rule above did NOT cover it, and a
+# `git add -A` on 2026-09-03 committed it — caught before any push, but both
+# remotes are PUBLIC so this file must never be tracked.
+docs/clash-verge-setup.zip

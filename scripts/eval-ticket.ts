@@ -23,9 +23,13 @@ import { loadPersonas } from "../relay/io/personas.js";
 import { buildPersonaResolver } from "../relay/proc/draft.js";
 import type { InboundMessage } from "../relay/core/types.js";
 
+// `--case <id>` runs one scenario. A bench you cannot bisect is a bench you
+// cannot debug: the 2026-09-09 run had one real result and one timeout, and
+// re-running both to chase the timeout costs the good one again.
+const only = process.argv.includes("--case") ? process.argv[process.argv.indexOf("--case") + 1] : undefined;
 const cases = (
   parse(readFileSync(resolve(process.cwd(), "eval/ticket-cases.yaml"), "utf8")) as { cases: TicketCase[] }
-).cases;
+).cases.filter((c) => !only || c.id === only);
 
 const personas = loadPersonas(resolve(process.cwd(), "personas"));
 const { resolve: resolvePersona, keys } = buildPersonaResolver(personas);
@@ -59,6 +63,7 @@ function messagesFor(c: TicketCase): InboundMessage[] {
 let passed = 0;
 for (const c of cases) {
   console.log(`\n[ticket] ${c.id} …`);
+  const startedAt = Date.now();
   let drafted: DraftedTicket[] = [];
   try {
     const r = await draftActions(messagesFor(c), {
@@ -72,9 +77,9 @@ for (const c of cases) {
       .filter((a) => a.action_type === "tool")
       .map((a) => a.params as DraftedTicket);
     if (r.errors.length > 0) console.error(`  LLM: ${r.errors[0]!.error.split("\n")[0]}`);
-    console.log(`  → ${r.actions.length} action(s), ${drafted.length} tool`);
+    console.log(`  → ${r.actions.length} action(s), ${drafted.length} tool, ${Math.round((Date.now() - startedAt) / 1000)}s`);
   } catch (e) {
-    console.error(`  FAILED — ${(e as Error).message.split("\n")[0]}`);
+    console.error(`  FAILED after ${Math.round((Date.now() - startedAt) / 1000)}s — ${(e as Error).message.split("\n")[0]}`);
   }
 
   const v = scoreTicket(c, drafted);
