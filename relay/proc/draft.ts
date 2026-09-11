@@ -280,8 +280,14 @@ export async function draftActions(
       // human-facing. One-click reply drafting is a shelved feature
       // (specs/person-first-consolidation.md §3.5) — the executors and the
       // owner-voice skill stay for when it lands.
-      if (s.action_type === "reply" || s.action_type === "relay" || s.action_type === "forward") {
-        senderErrors.push(`dropped ${s.action_type}: message drafting is retired — emit a task instead`);
+      // Read WIDE on purpose: the model's answer is untrusted input, so this
+      // gate must still catch a type the schema forbids. Narrowing the union
+      // made TypeScript call these comparisons dead — they are not; they are
+      // the only thing standing between an off-schema answer and a drafted
+      // human-facing message.
+      const claimed: string = s.action_type;
+      if (claimed === "reply" || claimed === "relay" || claimed === "forward") {
+        senderErrors.push(`dropped ${claimed}: message drafting is retired — emit a task instead`);
         continue;
       }
       const target = s.target ?? {};

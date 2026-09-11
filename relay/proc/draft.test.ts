@@ -352,8 +352,11 @@ describe("draftActions orchestrator", () => {
   it("drops reply, relay and forward alike", async () => {
     const llm: LlmCaller = async () => [
       { action_type: "reply", reason: "r", confidence: 0.9, draft: "hi" } as DraftedAction,
-      { action_type: "relay", target: { platform: "wechat", personaKey: "x" }, reason: "r", confidence: 0.9, draft: "转发" } as DraftedAction,
-      { action_type: "forward", target: { platform: "gmail", personaKey: "x" }, reason: "r", confidence: 0.9, draft: "fwd" } as DraftedAction,
+      // Through `unknown`: the schema no longer offers these, so this is
+      // deliberately simulating a model that answered OFF-schema, which is
+      // exactly what the gate exists for.
+      { action_type: "relay", target: { platform: "wechat", personaKey: "x" }, reason: "r", confidence: 0.9, draft: "转发" } as unknown as DraftedAction,
+      { action_type: "forward", target: { platform: "gmail", personaKey: "x" }, reason: "r", confidence: 0.9, draft: "fwd" } as unknown as DraftedAction,
       { action_type: "task", reason: "r", confidence: 0.9, params: { title: "回复 Michael 供电规格" } } as DraftedAction,
     ];
     const r = await draftActions([msg()], deps(llm));

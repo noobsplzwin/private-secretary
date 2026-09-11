@@ -20,7 +20,12 @@ import type { Persona } from "../core/types.js";
 // orchestrator validates each against the full ActionItem schema and
 // fills id / created_at / status / source_message_id / context.
 export interface DraftedAction {
-  action_type: "reply" | "relay" | "forward" | "calendar" | "task" | "ignore";
+  // Must match the SCHEMA enum below, which is what the model is actually
+  // allowed to answer. This drifted: it still listed relay and forward, retired
+  // from production on 2026-08-14, while omitting `tool` — the one type that
+  // opens a ticket. An exhaustive check over this union would have silently
+  // missed every ticket.
+  action_type: "reply" | "calendar" | "task" | "ignore" | "tool";
   target?: {
     personaKey?: string | null;
     platform?: "slack" | "gmail" | "wechat" | "jira" | "notion" | null;
