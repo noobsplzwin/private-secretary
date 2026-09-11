@@ -6,7 +6,7 @@ const ihorCase = (over: Partial<TicketCase> = {}): TicketCase => ({
   id: "memfault-offline-logs",
   personaKey: "ihor-kachura",
   corpus: "(frozen thread)",
-  assignee: "ihor@taiv.tv",
+  assignee: { name: "Ihor Kachura", alsoAccept: ["ihor@taiv.tv"] },
   mustCarry: [
     { label: "存哪些日志", anyOf: ["logcat"] },
     { label: "tcpdump", anyOf: ["tcpdump"] },
@@ -52,8 +52,16 @@ describe("scoreTicket", () => {
 
   it("counts a wrong assignee as worse than none", () => {
     // TAIV-7050 shipped to Zack instead of Ihor.
-    expect(scoreTicket(ihorCase(), [{ ...good, assignee: "z.louttit@taiv.tv" }]).assignee).toBe("wrong");
+    expect(scoreTicket(ihorCase(), [{ ...good, assignee: "Zack Louttit" }]).assignee).toBe("wrong");
     expect(scoreTicket(ihorCase(), [{ ...good, assignee: undefined }]).assignee).toBe("absent");
+  });
+
+  it("accepts the DISPLAY NAME, which is what the field holds", () => {
+    // params.assignee is free text matched on exact Jira display name
+    // (core/jira-assignee.ts). Demanding the email scored a correct answer
+    // wrong on 2026-09-10.
+    expect(scoreTicket(ihorCase(), [{ ...good, assignee: "Ihor Kachura" }]).assignee).toBe("right");
+    expect(scoreTicket(ihorCase(), [{ ...good, assignee: "ihor@taiv.tv" }]).assignee).toBe("right");
   });
 
   it("flags strategy padding the owner strikes out", () => {

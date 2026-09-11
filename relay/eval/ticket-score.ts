@@ -22,8 +22,17 @@ export interface TicketCase {
   personaKey: string;
   /** Frozen conversation, the production corpus rendering. */
   corpus: string;
-  /** Resolved address of who the thread names as the owner of the work. */
-  assignee: string;
+  /**
+   * Who the thread names as the owner of the work.
+   *
+   * `name` is the JIRA DISPLAY NAME, because that is what the field actually
+   * holds: params.assignee is free text matched against real Jira accounts by
+   * exact display name (core/jira-assignee.ts). An address is accepted too via
+   * `alsoAccept` — the point is to catch a DIFFERENT PERSON, not a different
+   * spelling. Requiring the email scored 「Ihor Kachura」 as wrong on
+   * 2026-09-10 and nearly sent me rewriting the prompt over it.
+   */
+  assignee: { name: string; alsoAccept?: string[] };
   /**
    * Facts that exist only in the chat. A ticket missing one sends the assignee
    * back to Slack, which is the failure this bench measures.
@@ -79,9 +88,10 @@ export function scoreTicket(c: TicketCase, drafted: readonly DraftedTicket[]): T
 
   // An assignee the thread never named is worse than none: ASK-not-GUESS holds
   // here exactly as it does for recipients.
+  const accepted = [c.assignee.name, ...(c.assignee.alsoAccept ?? [])];
   const assignee: TicketVerdict["assignee"] = !ticket?.assignee
     ? "absent"
-    : fold(ticket.assignee).includes(fold(c.assignee))
+    : accepted.some((a) => fold(ticket.assignee!).includes(fold(a)))
       ? "right"
       : "wrong";
 

@@ -32,6 +32,7 @@ import { detectMentions } from "../core/mentions.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
 import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
+import { displayNameForKey } from "../core/jira-assignee.js";
 import { hasVerbatim } from "../core/quote-check.js";
 
 // The injected LLM call: takes the assembled request, returns the parsed
@@ -330,6 +331,17 @@ export async function draftActions(
           aliases: rosterAliases(deps.personas),
         });
         if (unverified.length > 0) baseParams.unverified_names = unverified;
+      }
+      // A persona KEY where Jira wants a display name. The drafter wrote
+      // `ihor-kachura` on 2026-09-11 — the identifier it sees all through its
+      // own context — and resolveJiraAssignee matches human accounts by display
+      // name, so that ticket would have shipped unassigned with nothing saying
+      // why. Converted HERE, at creation, for the same reason attendees are:
+      // everything downstream, the executor and the row the owner reviews,
+      // should hold the name a person recognises. Exact key match only; an
+      // unknown name passes through and ASK-not-GUESS still decides.
+      if (typeof baseParams.assignee === "string" && deps.personas) {
+        baseParams.assignee = displayNameForKey(baseParams.assignee, deps.personas);
       }
       // time_quote has demanded a verbatim quote since it shipped, and nothing
       // ever checked one — an unchecked quote is decoration. Fail CLOSED: a

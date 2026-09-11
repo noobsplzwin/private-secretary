@@ -744,3 +744,54 @@ describe("a total wipeout is reported as one", () => {
     expect(r.senders).toBe(1); // three messages, one sender
   });
 });
+
+// 2026-09-11, from the ticket bench: the drafter set assignee to
+// `ihor-kachura`. That is the persona key it reads all through its own
+// context, and it is the one string resolveJiraAssignee cannot resolve — Jira
+// matches humans by display name, so the ticket ships unassigned and nothing
+// reports why. Converted at creation, like attendees.
+describe("a persona key as assignee becomes the name Jira matches on", () => {
+  const ihor: Persona = {
+    key: "ihor-kachura",
+    displayName: "Ihor Kachura",
+    relationship: "firmware lead",
+    handles: { slack: "U_IHOR" },
+    language: "en",
+    register: "casual",
+    toneNotes: "direct",
+    context: "firmware",
+  };
+
+  const draftWith = async (assignee: string) => {
+    const llm: LlmCaller = async () => [
+      {
+        action_type: "tool",
+        reason: "r",
+        confidence: 0.9,
+        headline: "log collection",
+        params: { tool: "jira", project: "TAIV", summary: "Offline log collection", description: "d", assignee },
+      } as DraftedAction,
+    ];
+    const r = await draftActions([msg({ senderHandle: "U_IHOR" })], {
+      llm,
+      resolvePersona: () => ihor,
+      knownPersonaKeys: ["ihor-kachura"],
+      personas: [ihor],
+    });
+    return (r.actions[0]!.params as { assignee?: string }).assignee;
+  };
+
+  it("converts the key", async () => {
+    expect(await draftWith("ihor-kachura")).toBe("Ihor Kachura");
+  });
+
+  it("leaves a real display name alone", async () => {
+    expect(await draftWith("Ihor Kachura")).toBe("Ihor Kachura");
+  });
+
+  it("passes an unknown name through rather than bending it to a key", async () => {
+    // No fuzzy matching on people. 「Ihor」 alone stays as written and the
+    // resolver refuses it downstream — that is the Echo mis-binding lesson.
+    expect(await draftWith("Ihor")).toBe("Ihor");
+  });
+});

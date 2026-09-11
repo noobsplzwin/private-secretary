@@ -27,6 +27,12 @@ import type { InboundMessage } from "../relay/core/types.js";
 // cannot debug: the 2026-09-09 run had one real result and one timeout, and
 // re-running both to chase the timeout costs the good one again.
 const only = process.argv.includes("--case") ? process.argv[process.argv.indexOf("--case") + 1] : undefined;
+// The routing decision flips run to run on identical input (2026-09-11: the
+// same case ticketed once and did not the next time), so one run measures
+// nothing. --repeat N reports how often it holds.
+const repeat = process.argv.includes("--repeat")
+  ? Math.max(1, Number(process.argv[process.argv.indexOf("--repeat") + 1]))
+  : 1;
 const cases = (
   parse(readFileSync(resolve(process.cwd(), "eval/ticket-cases.yaml"), "utf8")) as { cases: TicketCase[] }
 ).cases.filter((c) => !only || c.id === only);
@@ -61,8 +67,9 @@ function messagesFor(c: TicketCase): InboundMessage[] {
 }
 
 let passed = 0;
-for (const c of cases) {
-  console.log(`\n[ticket] ${c.id} …`);
+const runs: Array<{ id: string; ticketed: boolean; pass: boolean }> = [];
+for (const c of cases) for (let attempt = 1; attempt <= repeat; attempt++) {
+  console.log(`\n[ticket] ${c.id}${repeat > 1 ? ` (${attempt}/${repeat})` : ""} …`);
   const startedAt = Date.now();
   let drafted: DraftedTicket[] = [];
   try {
@@ -73,6 +80,13 @@ for (const c of cases) {
       toolKeys: ["jira", "ticktick"],
       personas,
     });
+    // Print every action type. Printing only the tool ones hid WHAT it chose
+    // instead on the run that declined to ticket — the same blind spot twice.
+    for (const a of r.actions) {
+      const p = a.params as Record<string, unknown>;
+      const label = [p.summary, p.title].find((v) => typeof v === "string") ?? "";
+      console.log(`  · ${a.action_type}: ${String(label).slice(0, 90)}`);
+    }
     drafted = r.actions
       .filter((a) => a.action_type === "tool")
       .map((a) => a.params as DraftedTicket);
@@ -82,7 +96,17 @@ for (const c of cases) {
     console.error(`  FAILED after ${Math.round((Date.now() - startedAt) / 1000)}s — ${(e as Error).message.split("\n")[0]}`);
   }
 
+  // Print what it actually produced. Inferring from a scorecard is how a
+  // scorer bug (demanding an email where the field holds a display name) got
+  // mistaken for a brain bug on 2026-09-10.
+  for (const d of drafted) {
+    console.log(`  ── ${d.tool} · ${d.project ?? "(no project)"} · assignee=${d.assignee ?? "(none)"}`);
+    console.log(`     ${d.summary ?? "(no summary)"}`);
+    for (const line of (d.description ?? "").split("\n")) console.log(`     | ${line}`);
+  }
+
   const v = scoreTicket(c, drafted);
+  runs.push({ id: c.id, ticketed: v.ticketed, pass: v.pass });
   if (v.pass) passed++;
   console.log(`  开票 ${v.ticketed ? "✅" : "❌"} | assignee ${v.assignee} | 正文 ${v.chars} 字${v.tooLong ? " ❌超长" : ""}`);
   console.log(`  带到的 context ${v.carried.length}/${v.carried.length + v.missing.length}`);
@@ -90,4 +114,10 @@ for (const c of cases) {
   if (v.padded.length) console.log(`  ❌ 冗余: ${v.padded.join("、")}`);
   console.log(`  ${v.pass ? "✅ PASS" : "❌ FAIL"}`);
 }
-console.log(`\n════ ${passed}/${cases.length} 通过 ════`);
+console.log(`\n════ ${passed}/${runs.length} 通过 ════`);
+if (repeat > 1) {
+  for (const id of new Set(runs.map((r) => r.id))) {
+    const mine = runs.filter((r) => r.id === id);
+    console.log(`  ${id}: 开票 ${mine.filter((r) => r.ticketed).length}/${mine.length} 次`);
+  }
+}
