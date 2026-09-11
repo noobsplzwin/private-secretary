@@ -87,9 +87,13 @@ for (const c of cases) for (let attempt = 1; attempt <= repeat; attempt++) {
       const label = [p.summary, p.title].find((v) => typeof v === "string") ?? "";
       console.log(`  · ${a.action_type}: ${String(label).slice(0, 90)}`);
     }
-    drafted = r.actions
-      .filter((a) => a.action_type === "tool")
-      .map((a) => a.params as DraftedTicket);
+    // ALL actions reach the scorer: a fact routed onto a task of Leo's is
+    // placed, not dropped, and scoring only the ticket called two correctly
+    // routed tasks "missing facts" on 2026-09-11.
+    drafted = r.actions.map((a) => ({
+      actionType: a.action_type,
+      ...(a.params as DraftedTicket),
+    }));
     if (r.errors.length > 0) console.error(`  LLM: ${r.errors[0]!.error.split("\n")[0]}`);
     console.log(`  → ${r.actions.length} action(s), ${drafted.length} tool, ${Math.round((Date.now() - startedAt) / 1000)}s`);
   } catch (e) {
@@ -99,7 +103,7 @@ for (const c of cases) for (let attempt = 1; attempt <= repeat; attempt++) {
   // Print what it actually produced. Inferring from a scorecard is how a
   // scorer bug (demanding an email where the field holds a display name) got
   // mistaken for a brain bug on 2026-09-10.
-  for (const d of drafted) {
+  for (const d of drafted.filter((x) => (x.tool ?? "").toLowerCase() === "jira")) {
     console.log(`  ── ${d.tool} · ${d.project ?? "(no project)"} · assignee=${d.assignee ?? "(none)"}`);
     console.log(`     ${d.summary ?? "(no summary)"}`);
     for (const line of (d.description ?? "").split("\n")) console.log(`     | ${line}`);
@@ -109,7 +113,8 @@ for (const c of cases) for (let attempt = 1; attempt <= repeat; attempt++) {
   runs.push({ id: c.id, ticketed: v.ticketed, pass: v.pass });
   if (v.pass) passed++;
   console.log(`  开票 ${v.ticketed ? "✅" : "❌"} | assignee ${v.assignee} | 正文 ${v.chars} 字${v.tooLong ? " ❌超长" : ""}`);
-  console.log(`  带到的 context ${v.carried.length}/${v.carried.length + v.missing.length}`);
+  const total = v.carried.length + v.carriedElsewhere.length + v.missing.length;
+  console.log(`  票内 context ${v.carried.length}/${total}${v.carriedElsewhere.length ? ` (另有 ${v.carriedElsewhere.length} 条分流到你的待办: ${v.carriedElsewhere.join("、")})` : ""}`);
   if (v.missing.length) console.log(`  ❌ 缺: ${v.missing.join("、")}`);
   if (v.padded.length) console.log(`  ❌ 冗余: ${v.padded.join("、")}`);
   console.log(`  ${v.pass ? "✅ PASS" : "❌ FAIL"}`);

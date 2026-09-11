@@ -37,18 +37,39 @@ export interface TicketCase {
    * Facts that exist only in the chat. A ticket missing one sends the assignee
    * back to Slack, which is the failure this bench measures.
    */
-  mustCarry: Array<{ label: string; anyOf: string[] }>;
+  mustCarry: Array<{
+    label: string;
+    anyOf: string[];
+    /**
+     * Where the fact may legitimately live.
+     *
+     * "ticket" (the default) means the ASSIGNEE needs it, so a ticket without
+     * it sends them back to Slack. "anywhere" means it may land on a card of
+     * Leo's instead — rotating his own API key, checking with Cody before
+     * anyone starts — because those are his actions, not the assignee's.
+     *
+     * 2026-09-11: the Jordan thread produced a ticket AND two tasks of Leo's,
+     * and scoring only the ticket called the two tasks missing facts. They were
+     * not missing, they were ROUTED. Deleting them from the rubric instead
+     * would just be lowering the bar to flatter the score.
+     */
+    where?: "ticket" | "anywhere";
+  }>;
   /** Framing the owner struck out. Present = the ticket is padded. */
   mustOmit?: Array<{ label: string; anyOf: string[] }>;
   /** His reviewed tickets land near 1,800 characters. */
   maxChars?: number;
 }
 
-/** What the brain produced, narrowed to what scoring needs. */
+/** One drafted card, narrowed to what scoring needs. */
 export interface DraftedTicket {
+  /** The action type, so a Leo task can be told from a ticket. */
+  actionType?: string;
   tool?: string;
   project?: string;
   summary?: string;
+  /** A task card's own wording. */
+  title?: string;
   description?: string;
   assignee?: string;
 }
@@ -59,7 +80,10 @@ export interface TicketVerdict {
   ticketed: boolean;
   /** right = the thread's named owner; wrong = someone else; absent = refused to guess. */
   assignee: "right" | "wrong" | "absent";
+  /** Found in the ticket itself — what the assignee can read. */
   carried: string[];
+  /** Found on a card of Leo's instead. Routed, not lost. */
+  carriedElsewhere: string[];
   missing: string[];
   padded: string[];
   chars: number;
@@ -80,9 +104,21 @@ export function scoreTicket(c: TicketCase, drafted: readonly DraftedTicket[]): T
   const ticket = drafted.find((d) => (d.tool ?? "").toLowerCase() === "jira");
   const body = [ticket?.summary, ticket?.description].filter(Boolean).join("\n");
 
+  // Everything the thread produced, so a fact on a task of Leo's is scored as
+  // placed rather than dropped.
+  const everything = drafted
+    .flatMap((d) => [d.summary, d.description, d.title])
+    .filter((v): v is string => typeof v === "string")
+    .join("\n");
+
   const carried: string[] = [];
+  const carriedElsewhere: string[] = [];
   const missing: string[] = [];
-  for (const f of c.mustCarry) (present(body, f.anyOf) ? carried : missing).push(f.label);
+  for (const f of c.mustCarry) {
+    if (present(body, f.anyOf)) carried.push(f.label);
+    else if (f.where === "anywhere" && present(everything, f.anyOf)) carriedElsewhere.push(f.label);
+    else missing.push(f.label);
+  }
 
   const padded = (c.mustOmit ?? []).filter((f) => present(body, f.anyOf)).map((f) => f.label);
 
@@ -103,6 +139,7 @@ export function scoreTicket(c: TicketCase, drafted: readonly DraftedTicket[]): T
     ticketed: !!ticket,
     assignee,
     carried,
+    carriedElsewhere,
     missing,
     padded,
     chars,

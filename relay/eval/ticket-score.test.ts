@@ -87,3 +87,44 @@ describe("scoreTicket", () => {
     expect(v.missing).toEqual([]);
   });
 });
+
+// 2026-09-11: the Jordan thread produced a ticket AND two tasks of Leo's
+// (rotate the API key, check with Cody). Scoring only the ticket called those
+// facts missing. They were routed, not dropped.
+describe("a fact routed onto Leo's own card is placed, not lost", () => {
+  const withRouting = (): TicketCase =>
+    ihorCase({
+      mustCarry: [
+        { label: "tcpdump", anyOf: ["tcpdump"] },
+        { label: "先和 Cody 对齐", anyOf: ["cody"], where: "anywhere" },
+      ],
+    });
+
+  it("counts an anywhere-fact found on a task, separately from the ticket", () => {
+    const v = scoreTicket(withRouting(), [
+      good,
+      { actionType: "task", title: "Check with Cody on the triage overlap" },
+    ]);
+    expect(v.carried).toEqual(["tcpdump"]);
+    expect(v.carriedElsewhere).toEqual(["先和 Cody 对齐"]);
+    expect(v.missing).toEqual([]);
+    expect(v.pass).toBe(true);
+  });
+
+  it("still fails when an anywhere-fact appears nowhere at all", () => {
+    const v = scoreTicket(withRouting(), [good]);
+    expect(v.missing).toEqual(["先和 Cody 对齐"]);
+    expect(v.pass).toBe(false);
+  });
+
+  it("a ticket-fact on a task of Leo's is still missing from the ticket", () => {
+    // The assignee reads the ticket. Routing does not help them.
+    const v = scoreTicket(withRouting(), [
+      { ...good, description: "Save logs under /data." },
+      // Cody rides along so the only variable under test is tcpdump.
+      { actionType: "task", title: "remember tcpdump, and check with Cody" },
+    ]);
+    expect(v.missing).toEqual(["tcpdump"]);
+    expect(v.carriedElsewhere).toEqual(["先和 Cody 对齐"]);
+  });
+});

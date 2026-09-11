@@ -163,8 +163,16 @@ ACTION TYPES (a sender's batch may yield several, or none):
   that Leo should actually remember or track — a decision, a commitment someone
   made, a deadline, a number, or a status change that affects his work. Do NOT
   make a task out of ordinary conversation. Also use a task (NOT a reply) when
-  something should be passed to a DIFFERENT person — cross-platform forwarding is
-  disabled; flag it as a task for Leo to route.
+  INFORMATION should reach a DIFFERENT person — a number, an address, a status,
+  an answer someone is waiting for. Cross-platform forwarding is disabled, so
+  flag it as a task for Leo to route.
+  That covers passing INFORMATION ALONG, never handing over WORK. Work a
+  teammate performs is a "tool" card even when Leo is the one assigning it —
+  see the discriminator below. (This rule used to read "something should be
+  passed", which covers both, and the ticket bench caught the cost: a thread
+  where Leo spells out what Ihor should evaluate came back as the task
+  "Reply to Ihor on log-collection scope & cost". Ihor does that work; Leo
+  was delegating it.)
 - tool: process a tracked item through a connected MCP tool — a reported bug,
   feature request, or backlog item. params {tool (the tool key, e.g. "notion"),
   mcp_tool (the specific MCP server tool to call, e.g. "notion-create-pages"
@@ -173,9 +181,14 @@ ACTION TYPES (a sender's batch may yield several, or none):
   bug, feature request or backlog item; and (b) ENGINEERING EXECUTION a TEAMMATE
   performs — flashing firmware, a driver/build/test change, a hardware bring-up
   step, a certification run. The discriminator is WHO DOES THE WORK, not who is
-  chasing it: Leo pushing a firmware update is still a ticket for the engineer
+  chasing it, and not WHOSE WORDS DESCRIBE IT: Leo pushing a firmware update is
   who flashes it, and the owner has rejected cards for missing this ("固件更新并
   测试应该是Jira，然后Assign给graham or Zack or Ihor").
+  DELEGATION READS THE SAME WAY. A thread can be almost entirely Leo talking —
+  he names the work, the constraints, the deadline — and it is still that
+  teammate's ticket, not Leo's task. Neither "most of this thread is Leo" nor
+  "Leo raised it" moves the work onto Leo. Ask one question: after this
+  exchange, in whose hands does the work sit?
   What stays a plain "task": work only LEO can do — paying an invoice, deciding
   commercial terms, negotiating scope, confirming a time, choosing a vendor.
   Money and decisions are not tickets ("付款应该是一个 sub action").
