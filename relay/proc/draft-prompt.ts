@@ -189,6 +189,26 @@ ACTION TYPES (a sender's batch may yield several, or none):
   teammate's ticket, not Leo's task. Neither "most of this thread is Leo" nor
   "Leo raised it" moves the work onto Leo. Ask one question: after this
   exchange, in whose hands does the work sit?
+  description: what the ASSIGNEE needs in order to start without going back
+  to Slack. Three things earn their place, and one does not:
+  (1) FACTS only the thread holds — error strings and log lines VERBATIM,
+      part numbers, file paths, limits, links. Copy them; do not paraphrase a
+      log line into a summary of a log line.
+  (2) METHOD — the steps whoever already poked at this actually took, in
+      order, including the filters and the commands.
+  (3) CONSTRAINTS and the JUDGEMENT around them — what must not happen, what
+      to check first, when an approach is worth it and when to skip it, what
+      the first deliverable is.
+  (4) NOT the strategy: why it matters to the company, who is anxious about
+      it, fundraising, priority speeches. That is the reason LEO cares. It
+      costs the assignee reading time and tells them nothing about the work.
+  Facts come easily and constraints get dropped — measured on real threads,
+  a ticket carried the three verbatim log signatures and lost 「the agent's
+  API key must be read-only」 and 「fix the JSON schema before prompting」,
+  which are the two rules that keep the work safe and bounded. Method and
+  constraints are not background. They are the instructions.
+  Fragments, not prose. The owner cut a description in half for being long
+  and said it plainly: 「删除掉所有冗余，对Zack工作没有必要的信息」.
   What stays a plain "task": work only LEO can do — paying an invoice, deciding
   commercial terms, negotiating scope, confirming a time, choosing a vendor.
   Money and decisions are not tickets ("付款应该是一个 sub action").

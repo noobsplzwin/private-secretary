@@ -798,3 +798,33 @@ describe("a persona key as assignee becomes the name Jira matches on", () => {
     expect(await draftWith("Ihor")).toBe("Ihor");
   });
 });
+
+// 2026-09-11, six bench runs: facts survived and constraints did not. A ticket
+// carried the three verbatim log signatures but dropped "the agent's API key
+// must be read-only" and "fix the JSON schema before prompting" — the two rules
+// that keep that work safe and bounded — while 「影响融资」 made it in twice.
+describe("description guidance: constraints are instructions, strategy is not", () => {
+  const system = () =>
+    buildDraftRequest({ persona: michael, messages: [msg()], knownPersonaKeys: [] }).system;
+
+  it("names the reader and the bar: start without going back to Slack", () => {
+    expect(system()).toMatch(/what the ASSIGNEE needs/);
+    expect(system()).toMatch(/without going back\s+to Slack/);
+  });
+
+  it("asks for log lines VERBATIM rather than summarised", () => {
+    expect(system()).toContain("VERBATIM");
+    expect(system()).toMatch(/do not paraphrase a\s+log line/);
+  });
+
+  it("makes method and constraints first-class, not background", () => {
+    expect(system()).toMatch(/METHOD/);
+    expect(system()).toMatch(/CONSTRAINTS/);
+    expect(system()).toMatch(/They are the instructions/);
+  });
+
+  it("excludes the strategy framing the owner strikes out", () => {
+    expect(system()).toMatch(/NOT the strategy/);
+    expect(system()).toMatch(/fundraising/);
+  });
+});
