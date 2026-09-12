@@ -32,7 +32,7 @@ import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { ActionItem } from "../core/action-item.js";
 import {
-  cardsRetiredBySilence,
+  staleSuggestedCards,
   isCalendarRedundant,
   isSupersedeExempt,
   redundantPendingCalendarIds,
@@ -786,14 +786,24 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         // cards are doomed next tick anyway, and a copied id is idempotent.
         fresh.actions.push(...inheritSupersededTaskIds(toCommit, superseded));
       }
-      // The OTHER exit (core/action-item.ts): a sender whose fresh draft was
-      // confirmed EMPTY retires their stale cards. Supersede above only ever
-      // fires when a draft produced cards, so a card whose question the thread
-      // went on to answer had no way out — see cardsRetiredBySilence. Labelled
+      // The OTHER exit (core/action-item.ts): a suggested card the owner has not
+      // touched in SILENT_RETIRE_DAYS ages out. Supersede above only ever fires
+      // when a fresh draft for that sender produced cards, so a card on a thread
+      // that simply went quiet had no way out at all. Runs unconditionally —
+      // gating it on this tick's draft activity was the bug: the cards that need
+      // ageing out are precisely the ones whose sender stopped talking. Labelled
       // before dropping, exactly like supersede: a dropped card never reaches a
       // terminal status, so the label is the only record it ever existed.
-      if (draftEmpty.length > 0) {
-        const retired = cardsRetiredBySilence(fresh.actions, draftEmpty, Date.now());
+      {
+        // Never age out a card this very tick just minted: the drafter has just
+        // judged it relevant, so retiring it in the same breath is incoherent
+        // whatever timestamp it carries. Caught by scan-loop's own tests, which
+        // inject a fixed clock into drafting — the fresh card was born looking
+        // three months old and swept before it was ever rendered.
+        const justDrafted = new Set(draftedActions.map((a) => a.id));
+        const retired = staleSuggestedCards(fresh.actions, Date.now()).filter(
+          (a) => !justDrafted.has(a.id),
+        );
         if (retired.length > 0) {
           let ok = true;
           try {

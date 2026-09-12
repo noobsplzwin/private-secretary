@@ -261,30 +261,24 @@ export function isSupersedeExempt(a: ActionItem): boolean {
 // chase card lived. Measured on the owner's list 2026-09-12 — 39 card rows, 22
 // confirm/reply shaped, 21 of which he adjudicated already-resolved.
 //
-// An empty draft is NOT a parse failure here. draft.ts retries a zero-card
-// answer once and records the sender empty only when BOTH calls agree; a throw
-// returns error + empty:false. So this acts on a double-checked "nothing to do".
-//
-// Age-gated anyway, because "answered" is still an inference from silence, and
-// a young card is the one most likely to be live. Seven days: long enough that
-// a card the owner has simply not looked at yet is safe, short enough to catch
-// the 1-2 day old confirmations he called stale.
+// Seven days: long enough that a card the owner simply has not got to yet is
+// safe, short enough that the list stops accumulating. Nothing is lost silently
+// — every retired card is labelled first (scan-loop), same as a supersede.
 export const SILENT_RETIRE_DAYS = 7;
 
-export function cardsRetiredBySilence(
-  actions: readonly ActionItem[],
-  emptySenders: readonly string[],
-  nowMs: number,
-): ActionItem[] {
-  if (emptySenders.length === 0) return [];
-  const silent = new Set(emptySenders);
+// AGE ALONE. This first shipped also requiring the card's sender to have
+// re-drafted empty this tick, and that extra condition made it useless for the
+// exact cards it was built for: a dead thread never triggers a draft at all, so
+// it can never produce the "empty" signal, so its card never aged out. The
+// owner's list still showed 25 suggested cards over a week old the round after
+// it landed. The signal that a card is dead is that the OWNER never touched it,
+// not that the contact stopped talking.
+export function staleSuggestedCards(actions: readonly ActionItem[], nowMs: number): ActionItem[] {
   const cutoff = nowMs - SILENT_RETIRE_DAYS * 86_400_000;
   return actions.filter((a) => {
     // A user-touched card is never "suggested", so it stays — same rule
     // supersede uses. A pending calendar with a real start is a commitment.
     if (a.status !== "suggested" || isSupersedeExempt(a)) return false;
-    const handle = a.context?.sender_handle;
-    if (!handle || !silent.has(handle)) return false;
     const born = Date.parse(a.created_at);
     return Number.isFinite(born) && born < cutoff;
   });

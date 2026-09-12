@@ -264,7 +264,18 @@ export function deadlineFor(unit: TaskUnit): string | null {
     .filter((m) => m.action_type === "calendar" && typeof m.params.start === "string")
     .map((m) => m.params.start as string)
     .sort();
-  return dated[0] ?? null;
+  if (dated[0]) return dated[0];
+  // A task card's own stated deadline. Until this existed the ONLY source of a
+  // date was a calendar member, so every card row that was not a meeting landed
+  // undated — "Approve SR&ED report by end of day" among them, with the
+  // deadline sitting in its own title. dueFields still validates the shape, so
+  // a prose `due` is dropped here exactly as it is for a commitment.
+  const due = unit.members
+    .filter((m) => m.action_type === "task" && typeof m.params.due === "string")
+    .map((m) => (m.params.due as string).trim())
+    .filter((d) => d !== "")
+    .sort();
+  return due[0] ?? null;
 }
 
 /**

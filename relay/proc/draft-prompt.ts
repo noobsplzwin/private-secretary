@@ -78,7 +78,7 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           params: {
             type: "object",
             description:
-              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP); brief = {brief:true,title}",
+              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP); brief = {brief:true,title}",
           },
           draft: { type: "string", description: "the message text for a reply" },
           headline: {
@@ -158,7 +158,16 @@ ACTION TYPES (a sender's batch may yield several, or none):
   address) and put a Google Maps search link in description, e.g.
   "https://www.google.com/maps/search/?api=1&query=湘湖地铁站" — so the card carries
   a tappable map. ALWAYS requires Leo's one-click approval before it's created.
-- task: track a to-do Leo OWNS or must follow up on. params {title}. Emit a
+- task: track a to-do Leo OWNS or must follow up on. params {title, due?}.
+  due: ISO **YYYY-MM-DD** (or YYYY-MM-DDTHH:MM), or leave it out. Nothing else
+  is a date — prose in this field is dropped downstream, so it looks like a
+  deadline and behaves like nothing. Resolve 「周一」/「by Friday」/「end of day」
+  against the MESSAGE'S OWN timestamp + the CURRENT TIME anchor, never against
+  your own idea of today. A deadline you cannot pin to a real date is not a due:
+  leave it out and let the title carry it.
+  This field is why 「Approve SR&ED report by end of day」 sat undated in the
+  owner's list — the params had nowhere to put the deadline that was written
+  right there in the title. Emit a
   brief task (params {brief:true, title:"<one-line summary>"}) ONLY for an FYI
   that Leo should actually remember or track — a decision, a commitment someone
   made, a deadline, a number, or a status change that affects his work. Do NOT

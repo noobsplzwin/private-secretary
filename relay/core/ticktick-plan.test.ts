@@ -237,6 +237,35 @@ describe("due dates are never invented", () => {
     });
     expect(deadlineFor(u)).toBe("2026-08-20T09:00:00-05:00");
   });
+
+  // REGRESSION: a task card had nowhere to put a deadline — `task needs {title}`
+  // was the whole schema, and deadlineFor read ONLY calendar members. So every
+  // card row that was not a meeting reached the list undated, including
+  // "Approve SR&ED report by end of day", whose deadline was in its own title.
+  it("uses a task card's own due when no calendar member carries a date", () => {
+    const u = unit({
+      members: [member({ id: "t1", action_type: "task", params: { title: "Approve SR&ED report", due: "2026-09-12" } })],
+    });
+    expect(deadlineFor(u)).toBe("2026-09-12");
+    expect(buildTaskPayload(u, ZONE).payload).toHaveProperty("dueDate");
+  });
+
+  it("prefers a dated calendar member over a task due", () => {
+    const u = unit({
+      members: [
+        member({ id: "t1", action_type: "task", params: { title: "x", due: "2026-09-30" } }),
+        member({ id: "c1", action_type: "calendar", params: { start: "2026-08-20T09:00:00-05:00", attendees: [] } }),
+      ],
+    });
+    expect(deadlineFor(u)).toBe("2026-08-20T09:00:00-05:00");
+  });
+
+  it("drops a prose due exactly as it drops a prose commitment due", () => {
+    const u = unit({
+      members: [member({ id: "t1", action_type: "task", params: { title: "x", due: "end of day" } })],
+    });
+    expect(buildTaskPayload(u, ZONE).payload).not.toHaveProperty("dueDate");
+  });
 });
 
 describe("stale fields and dropped steps", () => {
