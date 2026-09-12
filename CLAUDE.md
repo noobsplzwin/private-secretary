@@ -47,9 +47,10 @@ The layout is discoverable from the tree; what is NOT discoverable:
 ## Git
 
 Format, type/scope vocabulary and push order: the `git-workflow` skill.
-Duplicated here on purpose, because skills load on demand and this one is not
-amendable once pushed: **never add a `Co-authored-by: Claude` or any other AI
-attribution trailer.**
+Duplicated here on purpose, because skills load on demand: **end every commit
+message with `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`.** This
+reverses the earlier rule, which banned any AI attribution trailer — owner's
+call, 2026-09-12.
 
 ## Hard constraints
 
