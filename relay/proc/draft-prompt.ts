@@ -78,7 +78,7 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           params: {
             type: "object",
             description:
-              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP); brief = {brief:true,title}",
+              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
           },
           draft: { type: "string", description: "the message text for a reply" },
           headline: {
@@ -167,11 +167,16 @@ ACTION TYPES (a sender's batch may yield several, or none):
   leave it out and let the title carry it.
   This field is why 「Approve SR&ED report by end of day」 sat undated in the
   owner's list — the params had nowhere to put the deadline that was written
-  right there in the title. Emit a
-  brief task (params {brief:true, title:"<one-line summary>"}) ONLY for an FYI
-  that Leo should actually remember or track — a decision, a commitment someone
-  made, a deadline, a number, or a status change that affects his work. Do NOT
-  make a task out of ordinary conversation. Also use a task (NOT a reply) when
+  right there in the title.
+  A FACT IS NOT A TO-DO. There is no "note to self" card. This list holds only
+  things Leo DOES, each of which he can tick when he has done it; a row that can
+  never be ticked is noise by construction. This rule used to license an FYI
+  card for "a decision, a number, or a status change that affects his work", and
+  the owner's list filled with rows like 「上海办公室没有焊枪/热吹风实验室（Neil
+  已确认）」 and 「Brendan 已让 Casey 取消本周 embedded sync」 — every one true,
+  useful, and impossible to complete. He retired the affordance 2026-09-12: a
+  fact that matters belongs in the contact's ledger, never in his to-do list.
+  Do NOT make a task out of ordinary conversation. Also use a task (NOT a reply) when
   INFORMATION should reach a DIFFERENT person — a number, an address, a status,
   an answer someone is waiting for. Cross-platform forwarding is disabled, so
   flag it as a task for Leo to route.

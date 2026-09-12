@@ -220,6 +220,31 @@ describe("buildTaskPayload — executable lines", () => {
   });
 });
 
+describe("a fact is not a to-do (brief FYI cards)", () => {
+  // REGRESSION: the drafter could emit params.brief FYI notes and they rendered
+  // as undone rows nobody could ever tick — "\u4e0a\u6d77\u529e\u516c\u5ba4\u6ca1\u6709\u710a\u67aa/\u70ed\u5439\u98ce\u5b9e\u9a8c\u5ba4\uff08Neil \u5df2\u786e\u8ba4\uff09".
+  // The affordance is out of the prompt; this gate is what makes it stick.
+  const personaLess = () => true;
+  const now = Date.parse("2026-09-12T00:00:00Z");
+
+  it("does not render a unit whose every live member is a note", () => {
+    const u = unit({
+      members: [member({ id: "b1", action_type: "task", params: { title: "Neil confirmed no lab", brief: true } })],
+    });
+    expect(shouldRenderCardUnit(u, personaLess, now)).toBe(false);
+  });
+
+  it("still renders a unit where a note rides along with real work", () => {
+    const u = unit({
+      members: [
+        member({ id: "b1", action_type: "task", params: { title: "Neil confirmed no lab", brief: true } }),
+        member({ id: "t1", action_type: "task", params: { title: "Order a hot-air station" } }),
+      ],
+    });
+    expect(shouldRenderCardUnit(u, personaLess, now)).toBe(true);
+  });
+});
+
 describe("due dates are never invented", () => {
   it("has no due date when the task has no real deadline", () => {
     const built = buildTaskPayload(unit(), ZONE);

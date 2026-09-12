@@ -84,6 +84,14 @@ export function shouldRenderCardUnit(
 ): boolean {
   const live = unit.members.filter((m) => m.status !== "executed" && m.status !== "rejected");
   if (live.length === 0) return false;
+  // A FACT IS NOT A TO-DO. `brief` cards were FYI notes — "上海办公室没有焊枪
+  // /热吹风实验室（Neil 已确认）", "Brendan 已让 Casey 取消本周 embedded sync" —
+  // true, useful, and impossible to tick, so they accumulated forever. The
+  // affordance is gone from the drafter's prompt (owner, 2026-09-12); this gate
+  // is what makes that stick, both for the cards already sitting in state and
+  // against a model that emits one anyway. A unit is only dropped when EVERY
+  // live member is a note — a note riding along with real work keeps the row.
+  if (live.every((m) => m.params?.brief === true)) return false;
   // An EVENT that already happened is over. Only when every live member is such
   // an event — a unit that also carries a task or a reply still has work in it.
   if (live.every((m) => isPastEvent(m, nowMs))) return false;
