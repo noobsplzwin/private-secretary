@@ -18,7 +18,7 @@
 // state after changing prompt or mapping logic. run-secretary.ts --once passes
 // `draft` ALONE: it produces cards that are never grouped, tiered, or synced.
 
-import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { describeIdentity, loadIdentity } from "../relay/io/identity.js";
 import { loadSettings } from "../relay/io/settings.js";
@@ -657,6 +657,19 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
       personaFor: (key) => byKey.get(key) ?? null,
       fetchCorpus: (persona) => fetchCorpusFor(persona, resolvePersona),
       personaDir,
+      // Every thrown-away verdict, on disk. The console only ever said HOW MANY
+      // were discarded, and on 2026-09-12 that number was 47 against 6 accepted
+      // with no sample to look at — so the reason the owner's list has 39
+      // never-judged commitments could not be diagnosed at all. Mirrors
+      // llm-draft-raw.jsonl, which exists for exactly this reason on the other
+      // pass. Non-fatal: losing the log must never sink a scan.
+      onDiscard: (rec) => {
+        try {
+          appendFileSync(`${dirname(statePath)}/persona-discard.jsonl`, `${JSON.stringify(rec)}\n`);
+        } catch {
+          /* diagnostics are never worth failing a tick over */
+        }
+      },
     };
   } catch (e) {
     console.log(`[notify] persona update DISABLED — ${(e as Error).message.split("\n")[0]}`);

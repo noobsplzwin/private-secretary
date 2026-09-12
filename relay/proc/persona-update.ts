@@ -39,6 +39,15 @@ export interface PersonaUpdateDeps {
   personaDir: string;
   /** Dates the ASSESS verdicts. */
   now?: () => string;
+  /** Where a discarded extraction/verdict is recorded. See extractCommitmentsOnce. */
+  onDiscard?: (rec: {
+    at: string;
+    persona: string;
+    kind: "commitment" | "transition" | "assessment";
+    reason: "ungrounded" | "incoherent";
+    evidence: string;
+    index?: number;
+  }) => void;
 }
 
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -94,6 +103,7 @@ export async function updatePersonaCommitments(
       corpus,
       json: deps.json,
       ...(deps.now ? { now: deps.now } : {}),
+      ...(deps.onDiscard ? { onDiscard: deps.onDiscard } : {}),
     });
     if (!r) continue;
     discarded += r.discarded;
@@ -127,6 +137,22 @@ export async function extractCommitmentsOnce(opts: {
   json: PersonaUpdateJsonCaller;
   /** Dates each verdict, so a stale needs_leo cannot keep an item alive. */
   now?: () => string;
+  /**
+   * Where a DISCARDED verdict goes. The draft path learned this the hard way
+   * and keeps llm-draft-raw.jsonl; this pass — the one the whole list is
+   * derived from — kept nothing, and on 2026-09-12 the console showed six
+   * verdicts accepted against forty-seven discarded with no way to see even one
+   * of them. A discard rate is a number; a discarded quote is a diagnosis.
+   * Absent = no logging (tests, one-off scripts).
+   */
+  onDiscard?: (rec: {
+    at: string;
+    persona: string;
+    kind: "commitment" | "transition" | "assessment";
+    reason: "ungrounded" | "incoherent";
+    evidence: string;
+    index?: number;
+  }) => void;
 }): Promise<{ added: number; statusChanged: number; discarded: number; assessed: number } | null> {
   let existing: Commitment[];
   try {
@@ -160,10 +186,26 @@ export async function extractCommitmentsOnce(opts: {
   // one that cannot is invented, and an invented "done" silently closes real
   // work (the reverse of the append-only bug). The discard count is reported
   // upward: a high rate is itself a finding about how much the model creates.
-  const grounded = <T extends { evidence?: string }>(xs: T[]): T[] =>
-    xs.filter((x) => evidenceGrounded(opts.corpus, x.evidence ?? ""));
-  const okExtracted = grounded(extracted);
-  const okTransitions = grounded(transitions);
+  const nowIso = (opts.now ?? (() => new Date().toISOString()))();
+  const note = (
+    kind: "commitment" | "transition" | "assessment",
+    reason: "ungrounded" | "incoherent",
+    evidence: string,
+    index?: number,
+  ): void =>
+    opts.onDiscard?.({ at: nowIso, persona: opts.file, kind, reason, evidence, ...(index !== undefined ? { index } : {}) });
+
+  const grounded = <T extends { evidence?: string; index?: number }>(
+    xs: T[],
+    kind: "commitment" | "transition" | "assessment",
+  ): T[] =>
+    xs.filter((x) => {
+      if (evidenceGrounded(opts.corpus, x.evidence ?? "")) return true;
+      note(kind, "ungrounded", x.evidence ?? "", x.index);
+      return false;
+    });
+  const okExtracted = grounded(extracted, "commitment");
+  const okTransitions = grounded(transitions, "transition");
   // COHERENCE, mechanically. "Leo does not need to act on this, and the work
   // sits with Leo" cannot both be true, and the derive step drops a row that
   // needs nobody — so a self-contradicting verdict silently CLOSES a live
@@ -172,9 +214,11 @@ export async function extractCommitmentsOnce(opts: {
   // project is killing me") as grounds for the owner being off the hook.
   // A verdict like this is discarded whole: the commitment keeps whatever it
   // had, which is the safe direction.
-  const okAssessments = grounded(assessments).filter(
-    (a) => !(a.needs_leo === false && a.blocked_on === "leo"),
-  );
+  const okAssessments = grounded(assessments, "assessment").filter((a) => {
+    if (!(a.needs_leo === false && a.blocked_on === "leo")) return true;
+    note("assessment", "incoherent", a.evidence ?? "", a.index);
+    return false;
+  });
   const discarded =
     extracted.length -
     okExtracted.length +
@@ -182,7 +226,7 @@ export async function extractCommitmentsOnce(opts: {
     (assessments.length - okAssessments.length) +
     parseDropped;
 
-  const at = (opts.now ?? (() => new Date().toISOString()))();
+  const at = nowIso;
   const seen = new Set(existing.map((c) => norm(c.what)));
 
   // STRUCTURAL GATES — core/corpus-lines.ts `mintable`, the ONE implementation
