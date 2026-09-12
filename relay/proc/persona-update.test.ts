@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify, parse } from "yaml";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
+import { buildPersonaUpdateRequest } from "./persona-update-prompt.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { Persona } from "../core/types.js";
 
@@ -509,5 +510,31 @@ describe("a verdict that contradicts itself is not a verdict", () => {
       evidence: "This week is a bit crazy, daytime testing, night meeting",
     });
     expect(saved[0]!.assessment?.needs_leo).toBe(true);
+  });
+});
+
+// 2026-09-12, from the owner's screen: 69 items under "No Date". The cause was
+// not deadlines going uncaptured — it was `due` being filled with prose. 32 of
+// 91 open commitments carried a due and only 8 parsed; the rest read
+// 「end of weekend」 or 「before the Shenzhen trip」. Downstream that is the same
+// as no due (core/ticktick-plan.ts drops it), so the field looked like a
+// deadline and behaved like nothing.
+describe("due is an ISO date or it is nothing", () => {
+  it("asks for ISO in the schema, and says so in the rules", () => {
+    const req = buildPersonaUpdateRequest({ name: "Ihor", existing: [], thread: "x" });
+    expect(req.system).toContain("YYYY-MM-DD");
+    // Resolve relative dates against the line that states them, never against
+    // the model's own idea of today — the same anchor rule the calendar uses.
+    expect(req.system).toMatch(/DATE ON THE LINE/);
+    const due = (
+      (req.toolInputSchema as { properties: { commitments: { items: { properties: { due: { description: string } } } } } })
+        .properties.commitments.items.properties.due
+    );
+    expect(due.description).toContain("YYYY-MM-DD");
+  });
+
+  it("keeps prose out of the field by telling it to omit instead", () => {
+    const req = buildPersonaUpdateRequest({ name: "Ihor", existing: [], thread: "x" });
+    expect(req.system).toMatch(/leave the field out/);
   });
 });
