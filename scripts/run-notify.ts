@@ -33,6 +33,7 @@ import { dirname, join, resolve } from "node:path";
 import { runScanTick, type ScanLoopResult } from "../relay/proc/scan-loop.js";
 import { notify } from "../relay/proc/notify.js";
 import { loadPersonas } from "../relay/io/personas.js";
+import { loadGroupBook, saveGroupBook } from "../relay/io/wechat-group-store.js";
 import { readPersonaV3File } from "../relay/io/persona-store.js";
 import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
@@ -764,6 +765,10 @@ console.log(
           sources: noDraft ? [] : [source],
           draft,
           personaUpdate,
+          wechatGroups: {
+            load: () => loadGroupBook(statePath),
+            save: (b) => saveGroupBook(statePath, b),
+          },
           ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
           ...(ticktickReader ? { ticktickReader } : {}),

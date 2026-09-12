@@ -30,6 +30,7 @@ import { evaluateTrigger, isAutomatedSender } from "../core/trigger-filter.js";
 import { acquireLock, loadState, releaseLock, saveState, type LoopState } from "../io/state.js";
 import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
+import type { GroupBook } from "../core/wechat-groups.js";
 import type { ActionItem } from "../core/action-item.js";
 import {
   SILENT_RETIRE_DAYS,
@@ -138,6 +139,13 @@ export interface ScanLoopOptions {
   sources?: Array<"slack" | "gmail" | "wechat">;
   // WeChat (injectable for tests): get_recent_sessions text + per-contact
   // get_chat_history text. Prod defaults to wechatSessions / wechatHistory.
+  /**
+   * WeChat GROUP coverage. Absent = groups stay dropped (the pre-2026-09-12
+   * behaviour). The book persists which groups are work and how far each has
+   * been read; see core/wechat-groups.ts for why it is persisted rather than
+   * recomputed.
+   */
+  wechatGroups?: { load: () => GroupBook; save: (b: GroupBook) => void };
   wechatFetchSessions?: () => Promise<string>;
   wechatFetchHistory?: (name: string, limit: number) => Promise<string>;
   // get_contacts text, for filtering out 公众号/服务号. Defaults to a cached
@@ -499,7 +507,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     // Trigger on unread sessions (get_recent_sessions), pull the actual
     // incoming messages with direction + full context (get_chat_history).
     if (sources.includes("wechat")) try {
-      const { scanWechatInbox, parseOfficialAccountNames } = await import("../sources/wechat-direct.js");
+      const { scanWechatInbox, scanWechatGroups, parseOfficialAccountNames } = await import("../sources/wechat-direct.js");
       const { wechatSessions, wechatHistory, wechatRaw } = await import("../io/wechat-cli.js");
       // 公众号/服务号 set (gh_ accounts) to drop. get_contacts is heavy, so cache
       // it — the set barely changes. Stale-on-error: never block the scan on it.
@@ -517,13 +525,33 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           officialNames = officialAcctCache?.names; // keep the last good set if any
         }
       }
+      const fetchHistory =
+        opts.wechatFetchHistory ?? ((name: string, limit: number) => wechatHistory(name, { limit }));
       const r = await scanWechatInbox({
         fetchSessions: opts.wechatFetchSessions ?? (() => wechatSessions({ limit: 30 })),
-        fetchHistory:
-          opts.wechatFetchHistory ?? ((name, limit) => wechatHistory(name, { limit })),
+        fetchHistory,
         officialNames,
         nowMs: startedAtMs,
       });
+      // GROUPS (2026-09-12). 1:1 above is unread-driven; a group cannot be,
+      // because the owner reads his working groups the moment they buzz. The
+      // group pass runs off a per-group cursor instead, over an allowlist he
+      // confirms plus an auto-admit for small groups — core/wechat-groups.ts.
+      if (opts.wechatGroups) {
+        try {
+          const g = await scanWechatGroups({
+            sessions: r.sessions,
+            book: opts.wechatGroups.load(),
+            fetchHistory,
+            now: () => new Date(startedAtMs).toISOString(),
+          });
+          opts.wechatGroups.save(g.book);
+          r.inbound.push(...g.inbound);
+        } catch (e) {
+          // A group-pass failure must never cost the 1:1 scan its tick.
+          console.log(`[wechat] group pass failed — ${(e as Error).message.split("\n")[0]}`);
+        }
+      }
       // The unread set is the full current state each tick; persisted marks
       // dedup at the id level so a restart / re-poll re-surfaces ONLY genuinely
       // new incoming messages (never swallows, never re-cards a handled one).

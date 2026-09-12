@@ -4,6 +4,7 @@ import {
   parseChatHistory,
   parseOfficialAccountNames,
   scanWechatInbox,
+  scanWechatGroups,
 } from "./wechat-direct.js";
 
 const NOW = new Date("2026-06-14T22:00:00").getTime();
@@ -155,5 +156,90 @@ describe("scanWechatInbox", () => {
     expect(inbound[0]!.attachments).toEqual([
       { id: "99", kind: "image", name: "wechat-image local_id=99" },
     ]);
+  });
+});
+
+describe("groups (2026-09-12: a legal thread lived in a 2-person group, unseen)", () => {
+  const H = (lines: Array<[string, string, string]>): string =>
+    ["群 的消息记录: [群聊]", "", ...lines.map(([t, who, text]) => `[${t}] ${who}: ${text}`)].join("\n");
+
+  const sessions = [{ name: "台州帮", isGroup: true, unread: 0, tsMs: Date.parse("2026-09-12T17:40:00") }];
+
+  it("reads an allowed group the owner has already read (unread is 0)", async () => {
+    const r = await scanWechatGroups({
+      sessions,
+      book: { "台州帮": { decision: "allow", by: "owner", at: "x", lastSeenMs: 0 } },
+      fetchHistory: async () =>
+        H([["2026-09-12 17:39", "金小奇 芯联集成", "郭律那边合同怎么走"]]),
+      now: () => "2026-09-12T10:00:00Z",
+    });
+    expect(r.inbound).toHaveLength(1);
+    expect(r.inbound[0]!.text).toContain("金小奇 芯联集成: 郭律那边合同怎么走");
+    expect(r.inbound[0]!.isDirectMessage).toBe(false);
+  });
+
+  it("binds the message to the GROUP, never guessing which persona a speaker is", () => {
+    // Exact-match-or-nothing is the one rule this codebase does not bend.
+    return scanWechatGroups({
+      sessions,
+      book: { "台州帮": { decision: "allow", by: "owner", at: "x" } },
+      fetchHistory: async () => H([["2026-09-12 17:39", "金小奇 芯联集成", "在的"]]),
+      now: () => "x",
+    }).then((r) => expect(r.inbound[0]!.senderHandle).toBe("台州帮"));
+  });
+
+  it("advances the cursor past Leo's own messages without carding them", async () => {
+    const hist = H([
+      ["2026-09-12 17:39", "me", "我自己说的"],
+      ["2026-09-12 17:40", "me", "还是我"],
+    ]);
+    const r = await scanWechatGroups({
+      sessions,
+      book: { "台州帮": { decision: "allow", by: "owner", at: "x", lastSeenMs: 0 } },
+      fetchHistory: async () => hist,
+      now: () => "x",
+    });
+    expect(r.inbound).toEqual([]);
+    expect(r.book["台州帮"]!.lastSeenMs).toBe(Date.parse("2026-09-12T17:40:00"));
+  });
+
+  it("does not re-read messages it already turned into inbound", async () => {
+    const hist = H([["2026-09-12 17:39", "金小奇 芯联集成", "一条"]]);
+    const first = await scanWechatGroups({
+      sessions,
+      book: { "台州帮": { decision: "allow", by: "owner", at: "x" } },
+      fetchHistory: async () => hist,
+      now: () => "x",
+    });
+    expect(first.inbound).toHaveLength(1);
+    const second = await scanWechatGroups({
+      sessions,
+      book: first.book,
+      fetchHistory: async () => hist,
+      now: () => "x",
+    });
+    expect(second.inbound).toEqual([]);
+  });
+
+  it("classifies an unknown group and reads it on the NEXT pass, not this one", async () => {
+    const hist = H([["2026-09-12 17:39", "甲", "a"], ["2026-09-12 17:39", "乙", "b"]]);
+    const r = await scanWechatGroups({
+      sessions,
+      book: {},
+      fetchHistory: async () => hist,
+      now: () => "2026-09-12T10:00:00Z",
+    });
+    expect(r.inbound).toEqual([]);
+    expect(r.book["台州帮"]).toMatchObject({ decision: "allow", by: "auto", speakers: 2 });
+  });
+
+  it("leaves a group unclassified when its history cannot be read, so it retries", async () => {
+    const r = await scanWechatGroups({
+      sessions,
+      book: {},
+      fetchHistory: async () => { throw new Error("db locked"); },
+      now: () => "x",
+    });
+    expect(r.book["台州帮"]).toBeUndefined();
   });
 });

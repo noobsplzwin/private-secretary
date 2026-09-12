@@ -24,6 +24,13 @@
 // follow-up; decoding without a vision path would be wasted work.
 
 import type { Attachment, InboundMessage } from "../core/types.js";
+import {
+  ADMIT_SAMPLE_SIZE,
+  classifyGroup,
+  countSpeakers,
+  planGroupScan,
+  type GroupBook,
+} from "../core/wechat-groups.js";
 
 // Family contacts to exclude (personal, not for the work queue).
 export const WECHAT_FAMILY = ["乐乐", "郑建明"];
@@ -203,4 +210,135 @@ export async function scanWechatInbox(
     });
   }
   return { inbound, sessions };
+}
+
+// ─── groups ───────────────────────────────────────────────────────────
+//
+// Groups were dropped wholesale until 2026-09-12, when a legal-counsel
+// introduction the owner needed turned out to live in a two-person group and to
+// have never entered the system at all. Which groups count and when one has
+// something new are decided in core/wechat-groups.ts; this is the I/O around it.
+
+/** One line of a GROUP history: the speaker is a person, not the group. */
+export interface GroupMsg {
+  tsMs: number;
+  /** Verbatim speaker label. "me" is Leo. Never resolved to a persona here. */
+  speaker: string;
+  text: string;
+  imageLocalIds: number[];
+}
+
+const OWN_LABEL = "me";
+
+/**
+ * Parse a group's get_chat_history. parseChatHistory above CANNOT do this: it
+ * decides direction by `sender === contactName`, and in a group that position
+ * holds the speaker, so every line would read as Leo's own and the speaker
+ * label would be thrown away with it.
+ */
+export function parseGroupHistory(text: string): GroupMsg[] {
+  if (!text) return [];
+  const out: GroupMsg[] = [];
+  for (const raw of text.split("\n")) {
+    const m = HIST_RE.exec(raw.trim());
+    if (!m) continue;
+    const [, y, mo, dd, hh, mm, rest] = m;
+    const sep = rest!.indexOf(": ");
+    if (sep <= 0) continue; // no speaker label — a continuation line, not a message
+    const speaker = rest!.slice(0, sep).trim();
+    const body = rest!.slice(sep + 2).trim();
+    const imageLocalIds: number[] = [];
+    const img = /\[图片\].*?local_id=(\d+)/.exec(body);
+    if (img) imageLocalIds.push(Number(img[1]));
+    out.push({
+      tsMs: new Date(Number(y), Number(mo) - 1, Number(dd), Number(hh), Number(mm), 0, 0).getTime(),
+      speaker,
+      text: body,
+      imageLocalIds,
+    });
+  }
+  return out;
+}
+
+export interface WechatGroupScanOptions {
+  sessions: readonly RecentSession[];
+  book: GroupBook;
+  fetchHistory: (name: string, limit: number) => Promise<string>;
+  historyCap?: number;
+  now: () => string;
+}
+
+/**
+ * One InboundMessage per ALLOWED group that has messages past its cursor.
+ *
+ * senderHandle is the GROUP, never a speaker. Binding a group line to a person
+ * would mean matching a display name against persona handles, and the one rule
+ * this codebase will not bend is that people are bound on an exact match or not
+ * at all (the Echo / Echo Lian incident). The speakers stay in the text where
+ * the model can read them and no code pretends to know who they are; a group
+ * resolves to no persona, so its work reaches the owner through the card path.
+ */
+export async function scanWechatGroups(
+  opts: WechatGroupScanOptions,
+): Promise<{ inbound: InboundMessage[]; book: GroupBook }> {
+  const cap = opts.historyCap ?? 40;
+  const book: GroupBook = { ...opts.book };
+  const plan = planGroupScan(opts.sessions, book);
+  const at = opts.now();
+
+  // Classify first, act next tick. A group admitted here has no cursor yet, so
+  // the next pass reads it from the top of its window — one tick later costs
+  // nothing and keeps this pass's two jobs from entangling.
+  for (const name of plan.classify) {
+    try {
+      book[name] = classifyGroup(countSpeakers(await opts.fetchHistory(name, ADMIT_SAMPLE_SIZE)), at);
+    } catch {
+      // Unreadable this tick: leave it unclassified so it is retried, rather
+      // than denying it permanently on one failed call.
+    }
+  }
+
+  const inbound: InboundMessage[] = [];
+  for (const name of plan.fetch) {
+    const entry = book[name]!;
+    let msgs: GroupMsg[];
+    try {
+      msgs = parseGroupHistory(await opts.fetchHistory(name, cap));
+    } catch {
+      continue; // one unreadable group must not sink the rest
+    }
+    if (msgs.length === 0) continue;
+    const newest = msgs[msgs.length - 1]!.tsMs;
+    const cursor = entry.lastSeenMs ?? 0;
+    const unseen = msgs.filter((m) => m.tsMs > cursor && m.speaker !== OWN_LABEL);
+    // The cursor advances over Leo's OWN messages too — they are seen, just not
+    // work for him — otherwise a group where he speaks last re-reads every tick.
+    book[name] = { ...entry, lastSeenMs: Math.max(cursor, newest) };
+    if (unseen.length === 0) continue;
+    const combined = unseen.map((m) => `${m.speaker}: ${m.text}`).filter((l) => l.trim() !== "").join("\n");
+    if (!combined) continue;
+    const latest = unseen[unseen.length - 1]!;
+    const attachments: Attachment[] = unseen
+      .flatMap((m) => m.imageLocalIds)
+      .map((id) => ({ id: String(id), kind: "image", name: `wechat-image local_id=${id}` }));
+    inbound.push({
+      id: `wechat:${name}:${latest.tsMs}`,
+      platform: "wechat",
+      senderHandle: name,
+      timestampMs: latest.tsMs,
+      text: combined,
+      source: `wechat:${name}`,
+      // A group is not a DM, and saying otherwise would tell the trigger filter
+      // that every line is addressed to Leo personally.
+      isDirectMessage: false,
+      mentionsUser: /@LEO|@Leo|@郑惠哲/.test(combined),
+      isReplyInUserThread: false,
+      recipientsIncludeUser: true,
+      threadAnsweredByUserAfter: false,
+      userIsLastSenderInChannel: msgs[msgs.length - 1]!.speaker === OWN_LABEL,
+      threadContext: msgs.map((m) => `${m.speaker === OWN_LABEL ? "我" : m.speaker}: ${m.text}`).join("\n"),
+      ...(attachments.length ? { attachments } : {}),
+    });
+  }
+  return { inbound, book };
 }
