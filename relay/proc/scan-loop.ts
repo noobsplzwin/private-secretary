@@ -32,6 +32,7 @@ import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { ActionItem } from "../core/action-item.js";
 import {
+  SILENT_RETIRE_DAYS,
   staleSuggestedCards,
   isCalendarRedundant,
   isSupersedeExempt,
@@ -725,7 +726,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // commit (which may not run) and logged after it resolves.
   let supersededCount = 0;
   let supersedeExemptCount = 0;
-  let silentRetiredCount = 0;
+  let staleRetiredCount = 0;
   if (!opts.dryRun && (draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)) {
     const committed = await commitUnderLock((fresh) => {
       if (draftedActions.length > 0) {
@@ -817,7 +818,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           if (ok) {
             const doomed = new Set(retired.map((a) => a.id));
             fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
-            silentRetiredCount = retired.length;
+            staleRetiredCount = retired.length;
           }
         }
       }
@@ -860,11 +861,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     if (committed) {
       draftedCount = draftedActions.length;
       shadowWritten = willWrite;
-      if (silentRetiredCount > 0) {
+      if (staleRetiredCount > 0) {
         logActivity(
           "supersede",
-          `retired ${silentRetiredCount} stale card(s) whose sender drafted nothing`,
-          { phase: "draft-commit", silentRetired: silentRetiredCount },
+          `retired ${staleRetiredCount} card(s) untouched for ${SILENT_RETIRE_DAYS}+ days`,
+          { phase: "draft-commit", staleRetired: staleRetiredCount },
         );
       }
       if (supersededCount > 0 || supersedeExemptCount > 0) {
