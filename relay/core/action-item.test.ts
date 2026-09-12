@@ -4,6 +4,7 @@ import {
   addComment,
   readComments,
   approveAction,
+  cardsRetiredBySilence,
   isCalendarRedundant,
   redundantPendingCalendarIds,
   hasReceipt,
@@ -699,5 +700,41 @@ describe("initialStatus", () => {
     for (const t of ["reply", "relay", "forward", "calendar", "task", "tool"] as const) {
       expect(initialStatus(t)).toBe("suggested");
     }
+  });
+});
+
+describe("cardsRetiredBySilence (a card whose question the thread answered)", () => {
+  const card = (over: Partial<ActionItem> = {}) =>
+    item({
+      action_type: "task",
+      params: { title: "回复 Cathy 确认这两天是否在上海" },
+      context: { sender_handle: "cathy" },
+      created_at: "2026-09-01T00:00:00Z",
+      ...over,
+    });
+  const now = Date.parse("2026-09-12T00:00:00Z");
+
+  it("retires a stale card for a sender whose fresh draft came back empty", () => {
+    expect(cardsRetiredBySilence([card()], ["cathy"], now).map((a) => a.id)).toEqual(["a1"]);
+  });
+
+  it("keeps a card whose sender was not silent", () => {
+    expect(cardsRetiredBySilence([card()], ["someone-else"], now)).toEqual([]);
+    expect(cardsRetiredBySilence([card()], [], now)).toEqual([]);
+  });
+
+  it("keeps a card younger than the window — 'answered' is only inferred from silence", () => {
+    const young = card({ created_at: "2026-09-10T00:00:00Z" });
+    expect(cardsRetiredBySilence([young], ["cathy"], now)).toEqual([]);
+  });
+
+  it("keeps a card the owner has touched, and a pending calendar with a real start", () => {
+    expect(cardsRetiredBySilence([card({ status: "approved" })], ["cathy"], now)).toEqual([]);
+    const meeting = card({ action_type: "calendar", params: { start: "2026-09-20T10:00:00+08:00" } });
+    expect(cardsRetiredBySilence([meeting], ["cathy"], now)).toEqual([]);
+  });
+
+  it("keeps a card with no sender handle rather than guessing whose it is", () => {
+    expect(cardsRetiredBySilence([card({ context: {} })], ["cathy"], now)).toEqual([]);
   });
 });

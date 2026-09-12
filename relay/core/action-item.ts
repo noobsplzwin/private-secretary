@@ -251,6 +251,45 @@ export function isSupersedeExempt(a: ActionItem): boolean {
   );
 }
 
+// A card's ONLY exit is supersede, and supersede fires only inside
+// `if (draftedActions.length > 0)` — a fresh draft for that sender must produce
+// cards. But once a thread ANSWERS the question a card was minted for, the
+// CORRECT draft is an empty actions array; the prompt says so in as many words
+// ("If someone is just discussing, clarifying, acknowledging ... return an empty
+// actions array"). Empty never reached supersede, so the mechanism ran backwards:
+// the more cleanly a conversation resolved something, the more permanently its
+// chase card lived. Measured on the owner's list 2026-09-12 — 39 card rows, 22
+// confirm/reply shaped, 21 of which he adjudicated already-resolved.
+//
+// An empty draft is NOT a parse failure here. draft.ts retries a zero-card
+// answer once and records the sender empty only when BOTH calls agree; a throw
+// returns error + empty:false. So this acts on a double-checked "nothing to do".
+//
+// Age-gated anyway, because "answered" is still an inference from silence, and
+// a young card is the one most likely to be live. Seven days: long enough that
+// a card the owner has simply not looked at yet is safe, short enough to catch
+// the 1-2 day old confirmations he called stale.
+export const SILENT_RETIRE_DAYS = 7;
+
+export function cardsRetiredBySilence(
+  actions: readonly ActionItem[],
+  emptySenders: readonly string[],
+  nowMs: number,
+): ActionItem[] {
+  if (emptySenders.length === 0) return [];
+  const silent = new Set(emptySenders);
+  const cutoff = nowMs - SILENT_RETIRE_DAYS * 86_400_000;
+  return actions.filter((a) => {
+    // A user-touched card is never "suggested", so it stays — same rule
+    // supersede uses. A pending calendar with a real start is a commitment.
+    if (a.status !== "suggested" || isSupersedeExempt(a)) return false;
+    const handle = a.context?.sender_handle;
+    if (!handle || !silent.has(handle)) return false;
+    const born = Date.parse(a.created_at);
+    return Number.isFinite(born) && born < cutoff;
+  });
+}
+
 // Already-booked check (draft-commit + refresh-commit in scan-loop). A fresh
 // suggested calendar whose task_id OR exact start matches an EXECUTED calendar
 // is a duplicate waiting to double-book — the event already exists. Refresh

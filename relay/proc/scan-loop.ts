@@ -32,6 +32,7 @@ import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { ActionItem } from "../core/action-item.js";
 import {
+  cardsRetiredBySilence,
   isCalendarRedundant,
   isSupersedeExempt,
   redundantPendingCalendarIds,
@@ -724,6 +725,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // commit (which may not run) and logged after it resolves.
   let supersededCount = 0;
   let supersedeExemptCount = 0;
+  let silentRetiredCount = 0;
   if (!opts.dryRun && (draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)) {
     const committed = await commitUnderLock((fresh) => {
       if (draftedActions.length > 0) {
@@ -784,6 +786,31 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         // cards are doomed next tick anyway, and a copied id is idempotent.
         fresh.actions.push(...inheritSupersededTaskIds(toCommit, superseded));
       }
+      // The OTHER exit (core/action-item.ts): a sender whose fresh draft was
+      // confirmed EMPTY retires their stale cards. Supersede above only ever
+      // fires when a draft produced cards, so a card whose question the thread
+      // went on to answer had no way out — see cardsRetiredBySilence. Labelled
+      // before dropping, exactly like supersede: a dropped card never reaches a
+      // terminal status, so the label is the only record it ever existed.
+      if (draftEmpty.length > 0) {
+        const retired = cardsRetiredBySilence(fresh.actions, draftEmpty, Date.now());
+        if (retired.length > 0) {
+          let ok = true;
+          try {
+            appendLabels(
+              labelsPathFor(opts.statePath),
+              retired.map((a) => buildLabel({ action: a, decision: "superseded" })),
+            );
+          } catch {
+            ok = false;
+          }
+          if (ok) {
+            const doomed = new Set(retired.map((a) => a.id));
+            fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
+            silentRetiredCount = retired.length;
+          }
+        }
+      }
       if (llmDraftError !== undefined) {
         fresh.sourceErrors["llm:draft"] = { message: llmDraftError, at: new Date(startedAtMs).toISOString() };
       } else {
@@ -823,6 +850,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     if (committed) {
       draftedCount = draftedActions.length;
       shadowWritten = willWrite;
+      if (silentRetiredCount > 0) {
+        logActivity(
+          "supersede",
+          `retired ${silentRetiredCount} stale card(s) whose sender drafted nothing`,
+          { phase: "draft-commit", silentRetired: silentRetiredCount },
+        );
+      }
       if (supersededCount > 0 || supersedeExemptCount > 0) {
         logActivity(
           "supersede",
