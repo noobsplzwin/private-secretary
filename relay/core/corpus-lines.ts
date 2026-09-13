@@ -157,3 +157,65 @@ export function mintable(
   if (c.who === "me" && isHedged(line.text)) return false;
   return true;
 }
+
+// The assess pass reads a contact's whole recent corpus, and for a chatty
+// contact that is enormous: measured 2026-09-13, michael-dobosz came to 385k
+// characters and wechat-sandro-pinto to 427k. Both timed out at the 180s
+// `claude -p` ceiling — two of five contacts, and the two with the MOST open
+// commitments, so the pass silently produced nothing for exactly the people
+// whose verdicts the owner's list depends on most. 88k succeeded; the ceiling
+// sits somewhere between.
+//
+// Trimming is only safe now. A corpus is `=== slack DM ===` / `=== gmail (…) ===`
+// / `=== wechat ===` slices joined together, so cutting the tail off the WHOLE
+// string would delete entire sources rather than old messages — each section is
+// capped separately, keeping its most recent lines. And until the `unseen`
+// verdict existed, a commitment falling outside the window had no honest
+// outcome: the model would have had to invent a quote or be discarded. Now it
+// gets "this conversation does not mention it", which is exactly true of a
+// trimmed window.
+export const MAX_CORPUS_CHARS = 150_000;
+
+const SECTION_HEAD = /^=== .+ ===$/;
+
+/**
+ * Cap a multi-source corpus, keeping the NEWEST lines of every source.
+ *
+ * Returns the corpus unchanged when it already fits. The elision is marked in
+ * the text, so the model can see it is reading a window rather than assume the
+ * silence is the whole story.
+ */
+export function capCorpus(corpus: string, maxChars: number = MAX_CORPUS_CHARS): string {
+  if (corpus.length <= maxChars) return corpus;
+
+  // Split into sections on their own header lines. Text before the first header
+  // (there normally is none) is one unnamed section so nothing is dropped.
+  const lines = corpus.split("\n");
+  const sections: string[][] = [[]];
+  for (const line of lines) {
+    if (SECTION_HEAD.test(line.trim())) sections.push([line]);
+    else sections[sections.length - 1]!.push(line);
+  }
+  const live = sections.filter((s) => s.join("\n").trim() !== "");
+  if (live.length === 0) return corpus.slice(-maxChars);
+
+  const budget = Math.floor(maxChars / live.length);
+  const out = live.map((section) => {
+    const head = SECTION_HEAD.test((section[0] ?? "").trim()) ? section[0]! : "";
+    const body = head ? section.slice(1) : section;
+    const joined = body.join("\n");
+    if (joined.length <= budget) return section.join("\n");
+    // Keep whole lines from the END — the newest messages are what a verdict
+    // about "right now" rests on.
+    const kept: string[] = [];
+    let used = 0;
+    for (let i = body.length - 1; i >= 0; i--) {
+      const line = body[i]!;
+      if (used + line.length + 1 > budget) break;
+      kept.unshift(line);
+      used += line.length + 1;
+    }
+    return [head, "…(earlier messages omitted)", ...kept].filter((s) => s !== "").join("\n");
+  });
+  return out.join("\n\n");
+}

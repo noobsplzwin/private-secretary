@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageInDays, closedLater, indexCorpus, isHedged, lineOf, mintable } from "./corpus-lines.js";
+import { ageInDays, capCorpus, closedLater, indexCorpus, isHedged, lineOf, mintable } from "./corpus-lines.js";
 
 const NOW = Date.parse("2026-08-23T12:00:00Z");
 const CORPUS = [
@@ -114,5 +114,51 @@ describe("mintable", () => {
 
   it("allows a Gmail body line — unknown speaker is not a verdict", () => {
     expect(m("me", "I will send the enclosure drawings tomorrow")).toBe(true);
+  });
+});
+
+describe("capCorpus (a 385k corpus timed out the assess pass entirely)", () => {
+  const section = (name: string, n: number, tag: string) =>
+    [`=== ${name} ===`, ...Array.from({ length: n }, (_, i) => `[2026-09-${String((i % 28) + 1).padStart(2, "0")}] ${tag}${i}: hello`)].join("\n");
+
+  it("returns a corpus that already fits, untouched", () => {
+    const small = section("wechat", 3, "a");
+    expect(capCorpus(small, 10_000)).toBe(small);
+  });
+
+  // The corpus is slices joined together, so slicing the whole STRING would
+  // delete whole sources instead of old messages — the Slack half of a
+  // Slack+WeChat contact would simply vanish.
+  it("keeps every source alive rather than dropping the earliest ones", () => {
+    const corpus = [section("slack DM", 400, "s"), section("wechat", 400, "w")].join("\n\n");
+    const capped = capCorpus(corpus, 4_000);
+    expect(capped).toContain("=== slack DM ===");
+    expect(capped).toContain("=== wechat ===");
+    expect(capped.length).toBeLessThanOrEqual(corpus.length);
+  });
+
+  it("keeps the NEWEST lines of each source, not the oldest", () => {
+    const capped = capCorpus(section("wechat", 400, "w"), 2_000);
+    expect(capped).toContain("w399");
+    expect(capped).not.toContain("w0:");
+  });
+
+  it("marks the elision so silence is not mistaken for the whole story", () => {
+    expect(capCorpus(section("wechat", 400, "w"), 2_000)).toContain("…(earlier messages omitted)");
+  });
+
+  it("never splits a line in half", () => {
+    const capped = capCorpus(section("wechat", 400, "w"), 2_000);
+    for (const line of capped.split("\n")) {
+      if (line.startsWith("===") || line.startsWith("…") || line === "") continue;
+      expect(line).toMatch(/^\[2026-09-\d\d\] w\d+: hello$/);
+    }
+  });
+
+  it("degrades to a plain tail when there are no section headers at all", () => {
+    const plain = Array.from({ length: 500 }, (_, i) => `line ${i}`).join("\n");
+    const capped = capCorpus(plain, 1_000);
+    expect(capped.length).toBeLessThanOrEqual(1_000 + 40);
+    expect(capped).toContain("line 499");
   });
 });

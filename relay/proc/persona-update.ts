@@ -10,7 +10,7 @@ import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { evidenceGrounded } from "../core/quote-check.js";
-import { indexCorpus, mintable } from "../core/corpus-lines.js";
+import { capCorpus, indexCorpus, mintable } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
   type ExtractedCommitment,
@@ -165,9 +165,15 @@ export async function extractCommitmentsOnce(opts: {
   let transitions;
   let assessments;
   let parseDropped = 0;
+  // A chatty contact's corpus is enormous and the call simply never returns:
+  // measured 2026-09-13, 385k and 427k characters both hit the 180s `claude -p`
+  // ceiling, and those were the two contacts with the MOST open commitments.
+  // Capped HERE rather than in the corpus builders because there are several of
+  // them (the daemon's, the audit script's) and one timeout ceiling.
+  const corpus = capCorpus(opts.corpus);
   try {
     const raw = await opts.json(
-      buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: opts.corpus }),
+      buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: corpus }),
     );
     extracted = parseExtractedCommitments(raw);
     transitions = parseExtractedUpdates(raw, existing.length);
@@ -205,7 +211,7 @@ export async function extractCommitmentsOnce(opts: {
       // never-judged commitments: the model answered honestly in prose and the
       // gate read that prose as invention. See CommitmentAssessment.unseen.
       if (x.unseen === true) return true;
-      if (evidenceGrounded(opts.corpus, x.evidence ?? "")) return true;
+      if (evidenceGrounded(corpus, x.evidence ?? "")) return true;
       note(kind, "ungrounded", x.evidence ?? "", x.index);
       return false;
     });
@@ -236,7 +242,7 @@ export async function extractCommitmentsOnce(opts: {
 
   // STRUCTURAL GATES — core/corpus-lines.ts `mintable`, the ONE implementation
   // the bench also runs, so what ships here is what the scorecard measures.
-  const lines = indexCorpus(opts.corpus);
+  const lines = indexCorpus(corpus);
   const nowMs = Date.parse(at);
   let gated = 0;
   const fresh = okExtracted.filter((e) => !seen.has(norm(e.what))).filter((e) => {
