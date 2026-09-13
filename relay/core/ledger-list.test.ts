@@ -433,3 +433,47 @@ describe("the verdict promotes, the matter only files", () => {
     expect(derive([persona([c({})])])[0]!.payload.project).toBe(POOL_LIST);
   });
 });
+
+describe("a date-anchored occasion sinks once it is long past", () => {
+  // 2026-09-13: the owner adjudicated all 91 open who=me commitments and struck
+  // 78. The dominant shape was an OCCASION whose date had gone by — 「周四先去
+  // 奇迹当面看一下」, 「Visit/meet Amlogic on Sept 1」 — not a deadline. Nothing
+  // was retiring them, so they sat on his list forever.
+  //
+  // But priorityFor pushes a freshly overdue row to the TOP on purpose ("unpaid
+  // work is MORE urgent past its date"), and no code can tell an invoice from an
+  // appointment. So the rule waits out MINT_WINDOW_DAYS before sinking.
+  const days = (n: number) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
+  it("keeps a freshly overdue commitment loud, not sunk", () => {
+    const row = derive([persona([c({ due: days(3), ...assessed(true) })])])[0]!;
+    expect(row.payload.project).toBeUndefined();
+    expect(row.payload.priority).toBe(5);
+  });
+
+  it("sinks it to the pool once its date is more than the window past", () => {
+    const row = derive([persona([c({ due: days(20), ...assessed(true) })])])[0]!;
+    expect(row.payload.project).toBe(POOL_LIST);
+    expect(row.payload.priority).toBe(0);
+  });
+
+  it("sinks the lead of a LIVE matter too — the occasion passed either way", () => {
+    const row = derive([persona([c({ matter_id: "m1", due: days(30), ...assessed(true) })])])[0]!;
+    expect(row.payload.project).toBe(POOL_LIST);
+  });
+
+  it("never sinks on an unparseable due — prose is not a date", () => {
+    const row = derive([persona([c({ due: "end of weekend", ...assessed(true) })])])[0]!;
+    expect(row.payload.project).toBeUndefined();
+  });
+
+  it("leaves a commitment with no due exactly as the verdict decided", () => {
+    expect(derive([persona([c({ ...assessed(true) })])])[0]!.payload.project).toBeUndefined();
+    expect(derive([persona([c({ ...assessed(false) })])])[0]!.payload.project).toBe(POOL_LIST);
+  });
+
+  it("sinks but does NOT remove — a commitment still ends only by done or dropped", () => {
+    const rows = derive([persona([c({ due: days(60), ...assessed(true) })])]);
+    expect(rows).toHaveLength(1);
+  });
+});

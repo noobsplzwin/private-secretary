@@ -97,6 +97,40 @@ function recentlyOverdue(due: string | undefined, nowMs: number): boolean {
   return t < nowMs && nowMs - t <= MINT_WINDOW_DAYS * DAY_MS;
 }
 
+/**
+ * A who=me commitment whose own stated date is LONG past.
+ *
+ * Not "past" — long past. priorityFor deliberately pushes a freshly overdue row
+ * to the TOP ("unpaid work is MORE urgent past its date"), and that is right:
+ * an unpaid invoice does not get less urgent on the 3rd of the month. So this
+ * cannot fire the moment a date slips, or it would bury exactly the rows the
+ * owner most needs.
+ *
+ * What it fires on is a date that went by TWO WEEKS ago and still has nothing
+ * behind it. Measured 2026-09-13, when the owner adjudicated his whole ledger:
+ * 78 of 91 open commitments were dead, and the dominant shape was a
+ * DATE-ANCHORED OCCASION rather than a deadline — 「周四先去奇迹当面看一下」,
+ * 「周一(8/24)向瑞萨试探」, 「Visit/meet Amlogic on Sept 1」. The occasion passed,
+ * so the work is moot; nothing in the text distinguishes it from an invoice,
+ * and no code can tell them apart. Two weeks is the compromise: a real deadline
+ * gets a fortnight at the top of his list before it sinks, and a dead
+ * appointment stops occupying the list forever.
+ *
+ * SINKING IS NOT DELETION. The row moves to the pool with priority 0 — the
+ * owner's own rule, 「如果还是待办，但是优先级较低，那就往后排」. A commitment
+ * only ends by being done or dropped, and neither happens here.
+ *
+ * Same window and same parse rule as recentlyOverdue above, which governs the
+ * mirror case on the other side (chasing what THEY owe). One horizon, both
+ * directions.
+ */
+function longOverdue(due: string | undefined, nowMs: number): boolean {
+  if (!due) return false;
+  const t = Date.parse(due);
+  if (Number.isNaN(t)) return false;
+  return nowMs - t > MINT_WINDOW_DAYS * DAY_MS;
+}
+
 function itemFor(
   personaKey: string,
   displayName: string | undefined,
@@ -184,7 +218,7 @@ export function deriveLedgerTasks(
       const closed = closedMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (lead) {
-        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed));
+        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs)));
         continue;
       }
       const sunk = closed || !activeMatters.has(matterId);
@@ -215,8 +249,11 @@ export function deriveLedgerTasks(
         continue;
       }
       if (c.who !== "me") continue;
-      // No matter_id at all — unfiled, not closed. The verdict decides.
-      out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, !c.assessment?.needs_leo));
+      // No matter_id at all — unfiled, not closed. The verdict decides, and a
+      // date that went by a fortnight ago overrides a stale yes: see longOverdue.
+      out.push(
+        itemFor(p.key, p.display_name, c, [c], zone, nowMs, !c.assessment?.needs_leo || longOverdue(c.due, nowMs)),
+      );
     }
   }
   return out;
