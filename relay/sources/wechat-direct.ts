@@ -342,3 +342,36 @@ export async function scanWechatGroups(
   }
   return { inbound, book };
 }
+
+/**
+ * When the OWNER last spoke in each of these conversations.
+ *
+ * The engine cannot learn this from an inbound message, which is the whole
+ * problem: a WeChat conversation Leo has answered carries no unread, so it
+ * stops being a scan candidate and never produces one. `userIsLastSenderInChannel`
+ * is hard-coded false on the 1:1 path for the same reason — there was nothing
+ * to set it from. So the answer is fetched directly, and only for conversations
+ * that actually have a card waiting on a reply; a quiet contact costs nothing.
+ *
+ * Works for 1:1 and groups alike — both render as `[ts] <speaker>: <text>` and
+ * both label the owner "me".
+ */
+export async function ownerLastSpokeIn(
+  names: readonly string[],
+  fetchHistory: (name: string, limit: number) => Promise<string>,
+  limit = 20,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const name of names) {
+    let msgs: GroupMsg[];
+    try {
+      msgs = parseGroupHistory(await fetchHistory(name, limit));
+    } catch {
+      continue; // one unreadable conversation must not sink the rest
+    }
+    let latest = 0;
+    for (const m of msgs) if (m.speaker === OWN_LABEL && m.tsMs > latest) latest = m.tsMs;
+    if (latest > 0) out.set(name, latest);
+  }
+  return out;
+}

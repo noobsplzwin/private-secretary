@@ -34,6 +34,7 @@ import type { GroupBook } from "../core/wechat-groups.js";
 import type { ActionItem } from "../core/action-item.js";
 import {
   SILENT_RETIRE_DAYS,
+  cardsAnsweredSince,
   staleSuggestedCards,
   isCalendarRedundant,
   isSupersedeExempt,
@@ -285,6 +286,9 @@ async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200)
 export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
   const startedAtMs = Date.now();
   const perSource: SourceSummary[] = [];
+  // conversation handle → when the OWNER last spoke there. Filled by the WeChat
+  // pass for conversations that have a reply-only card waiting; empty otherwise.
+  let wechatOwnerSpokeAt = new Map<string, number>();
   const sourceMessages: InboundMessage[] = [];
   // P0: carry the message TEXT of everything we filter out. Without it the
   // trigger filter's recall is unmeasurable (and recall cannot be recovered from
@@ -507,7 +511,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     // Trigger on unread sessions (get_recent_sessions), pull the actual
     // incoming messages with direction + full context (get_chat_history).
     if (sources.includes("wechat")) try {
-      const { scanWechatInbox, scanWechatGroups, parseOfficialAccountNames } = await import("../sources/wechat-direct.js");
+      const { scanWechatInbox, scanWechatGroups, ownerLastSpokeIn, parseOfficialAccountNames } = await import("../sources/wechat-direct.js");
       const { wechatSessions, wechatHistory, wechatRaw } = await import("../io/wechat-cli.js");
       // 公众号/服务号 set (gh_ accounts) to drop. get_contacts is heavy, so cache
       // it — the set barely changes. Stale-on-error: never block the scan on it.
@@ -551,6 +555,27 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           // A group-pass failure must never cost the 1:1 scan its tick.
           console.log(`[wechat] group pass failed — ${(e as Error).message.split("\n")[0]}`);
         }
+      }
+      // ANSWERED-CLOSES (core/action-item.ts): a card whose whole job was
+      // "write back to this person" is finished the moment he writes back, and
+      // he should never have to tick it. The fact cannot arrive as a message —
+      // an answered WeChat thread has no unread, so it is not a scan candidate
+      // at all — so it is fetched, for the handful of conversations that have
+      // such a card open and no others.
+      try {
+        const waiting = [
+          ...new Set(
+            state.actions
+              .filter((a) => a.status === "suggested" && a.params?.answered_closes === true)
+              .map((a) => a.context?.sender_handle)
+              .filter((h): h is string => !!h),
+          ),
+        ];
+        if (waiting.length > 0) {
+          wechatOwnerSpokeAt = await ownerLastSpokeIn(waiting, fetchHistory);
+        }
+      } catch (e) {
+        console.log(`[wechat] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
       }
       // The unread set is the full current state each tick; persisted marks
       // dedup at the id level so a restart / re-poll re-surfaces ONLY genuinely
@@ -755,6 +780,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let supersededCount = 0;
   let supersedeExemptCount = 0;
   let staleRetiredCount = 0;
+  let answeredCount = 0;
   if (!opts.dryRun && (draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)) {
     const committed = await commitUnderLock((fresh) => {
       if (draftedActions.length > 0) {
@@ -830,7 +856,15 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         // inject a fixed clock into drafting — the fresh card was born looking
         // three months old and swept before it was ever rendered.
         const justDrafted = new Set(draftedActions.map((a) => a.id));
-        const retired = staleSuggestedCards(fresh.actions, Date.now()).filter(
+        // Two ways out, both silent, both labelled: aged out, or ANSWERED. The
+        // second is the owner's own request — a card whose whole job was
+        // writing back should vanish when he writes back, not wait for him to
+        // tick it. The map is keyed the same way conversationKey builds it.
+        const spoke = new Map<string, number>();
+        for (const [handle, ms] of wechatOwnerSpokeAt) spoke.set(`wechat:${handle}`, ms);
+        const answered = cardsAnsweredSince(fresh.actions, spoke);
+        answeredCount = answered.length;
+        const retired = [...staleSuggestedCards(fresh.actions, Date.now()), ...answered].filter(
           (a) => !justDrafted.has(a.id),
         );
         if (retired.length > 0) {
@@ -889,6 +923,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     if (committed) {
       draftedCount = draftedActions.length;
       shadowWritten = willWrite;
+      if (answeredCount > 0) {
+        logActivity(
+          "supersede",
+          `closed ${answeredCount} card(s) Leo had already answered`,
+          { phase: "draft-commit", answered: answeredCount },
+        );
+      }
       if (staleRetiredCount > 0) {
         logActivity(
           "supersede",

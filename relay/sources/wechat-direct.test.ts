@@ -5,6 +5,7 @@ import {
   parseOfficialAccountNames,
   scanWechatInbox,
   scanWechatGroups,
+  ownerLastSpokeIn,
 } from "./wechat-direct.js";
 
 const NOW = new Date("2026-06-14T22:00:00").getTime();
@@ -241,5 +242,37 @@ describe("groups (2026-09-12: a legal thread lived in a 2-person group, unseen)"
       now: () => "x",
     });
     expect(r.book["台州帮"]).toBeUndefined();
+  });
+});
+
+describe("ownerLastSpokeIn (an answered WeChat thread never reaches the engine)", () => {
+  const H = (lines: Array<[string, string, string]>): string =>
+    ["记录:", "", ...lines.map(([t, who, text]) => `[${t}] ${who}: ${text}`)].join("\n");
+
+  it("reports when the owner last spoke, ignoring the contact's messages", async () => {
+    const m = await ownerLastSpokeIn(["Leila"], async () =>
+      H([
+        ["2026-09-13 09:00", "Leila", "什么时候回深圳"],
+        ["2026-09-13 09:30", "me", "下周三"],
+        ["2026-09-13 09:40", "Leila", "好"],
+      ]),
+    );
+    expect(m.get("Leila")).toBe(Date.parse("2026-09-13T09:30:00"));
+  });
+
+  it("omits a conversation the owner has not spoken in at all", async () => {
+    const m = await ownerLastSpokeIn(["Leila"], async () =>
+      H([["2026-09-13 09:00", "Leila", "在吗"]]),
+    );
+    expect(m.has("Leila")).toBe(false);
+  });
+
+  it("keeps going when one conversation cannot be read", async () => {
+    const m = await ownerLastSpokeIn(["bad", "good"], async (name) => {
+      if (name === "bad") throw new Error("db locked");
+      return H([["2026-09-13 10:00", "me", "回了"]]);
+    });
+    expect(m.has("bad")).toBe(false);
+    expect(m.get("good")).toBe(Date.parse("2026-09-13T10:00:00"));
   });
 });

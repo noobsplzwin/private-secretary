@@ -78,7 +78,7 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           params: {
             type: "object",
             description:
-              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
+              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?, answered_closes?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
           },
           draft: { type: "string", description: "the message text for a reply" },
           headline: {
@@ -158,7 +158,20 @@ ACTION TYPES (a sender's batch may yield several, or none):
   address) and put a Google Maps search link in description, e.g.
   "https://www.google.com/maps/search/?api=1&query=湘湖地铁站" — so the card carries
   a tappable map. ALWAYS requires Leo's one-click approval before it's created.
-- task: track a to-do Leo OWNS or must follow up on. params {title, due?}.
+- task: track a to-do Leo OWNS or must follow up on. params {title, due?,
+  answered_closes?}.
+  answered_closes: true when ANSWERING THE PERSON IS THE WHOLE JOB — the card is
+  finished the moment Leo writes back, with no work left over. 「回复 Leila 何时
+  回深圳」, 「回复茉莉是否需要装空调」, 「回复郑建明沉香购买地址」 are all true:
+  he types a sentence and it is done. It is FALSE whenever the reply is the
+  wrapper on real work — 「审核付款节奏方案并回复金小奇」 needs the scheme
+  reviewed, 「测试新 WiFi 固件」 needs the firmware tested; answering does not
+  finish either.
+  Marking it lets the engine close the card silently when he answers, which he
+  asked for 2026-09-13: 「很多回复我都已经回复过了…可以自动无感的直接删掉」.
+  Nothing is auto-closed without this flag, so when in doubt leave it off — an
+  extra row he ticks himself costs a second, a wrongly closed one costs the
+  work.
   due: ISO **YYYY-MM-DD** (or YYYY-MM-DDTHH:MM), or leave it out. Nothing else
   is a date — prose in this field is dropped downstream, so it looks like a
   deadline and behaves like nothing. Resolve 「周一」/「by Friday」/「end of day」

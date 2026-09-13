@@ -284,6 +284,64 @@ export function staleSuggestedCards(actions: readonly ActionItem[], nowMs: numbe
   });
 }
 
+// A card whose whole job was "answer this person" is finished the moment the
+// owner answers, and he should never have to tick it himself. His words,
+// 2026-09-13: 「这些task里面很多回复我都已经回复过了…你可以自动无感的直接删掉或者
+// 完成这个task么？就不显示出来了，后台全自动监控」.
+//
+// Nothing was retiring them, and the reason is a loop that runs backwards. The
+// trigger filter already skips drafting for a conversation the owner answered
+// (isAlreadyHandled), and supersede only fires when a fresh draft LANDS — so
+// answering promptly guarantees no new draft, which guarantees the old card
+// survives. The faster he replied, the more permanent the card nagging him to
+// reply.
+//
+// WeChat is worse than that: `userIsLastSenderInChannel` is hard-coded false
+// there, and a conversation he has answered carries no unread, so it stops
+// being a scan candidate at all. The fact never reaches the engine as a
+// message. Hence a CURSOR — did he speak in that conversation after this card
+// was minted — rather than a flag riding on an inbound that never arrives.
+//
+// Only cards that SAY they close on an answer qualify. "Reply to Leila about
+// when she's back in Shenzhen" is done when he replies; 「审核付款节奏方案并回复
+// 金小奇」 is not, because the review is the work and the reply is its wrapper.
+// Code cannot see that difference, so the drafter marks it (params.answered_closes)
+// and this gate enforces it. An unmarked card is never auto-retired.
+/**
+ * Which conversation a card belongs to.
+ *
+ * NOT source_message_id: that is a MESSAGE id whose shape differs per platform
+ * — `gmail:<msgId>` carries no conversation at all, while slack and wechat
+ * happen to prefix theirs with one. Platform + sender handle is the thing that
+ * actually means "my thread with this person", and it is what both the card and
+ * the source can produce.
+ */
+export function conversationKey(a: ActionItem): string | null {
+  const who = a.context?.sender_handle;
+  const platform = a.target?.platform ?? a.source_message_id.split(":")[0];
+  return who && platform ? `${platform}:${who}` : null;
+}
+
+export function cardsAnsweredSince(
+  actions: readonly ActionItem[],
+  /** conversationKey → epoch ms of the OWNER's latest message in that thread. */
+  ownerSpokeAt: ReadonlyMap<string, number>,
+): ActionItem[] {
+  if (ownerSpokeAt.size === 0) return [];
+  return actions.filter((a) => {
+    // A user-touched card is never "suggested" — same rule supersede uses.
+    if (a.status !== "suggested") return false;
+    if (a.params?.answered_closes !== true) return false;
+    const key = conversationKey(a);
+    const spoke = key === null ? undefined : ownerSpokeAt.get(key);
+    if (spoke === undefined) return false;
+    const born = Date.parse(a.created_at);
+    // Strictly after: a message in the same breath as the card is the exchange
+    // that CREATED it, not an answer to it.
+    return Number.isFinite(born) && spoke > born;
+  });
+}
+
 // Already-booked check (draft-commit + refresh-commit in scan-loop). A fresh
 // suggested calendar whose task_id OR exact start matches an EXECUTED calendar
 // is a duplicate waiting to double-book — the event already exists. Refresh

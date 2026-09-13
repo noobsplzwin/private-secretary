@@ -4,6 +4,7 @@ import {
   addComment,
   readComments,
   approveAction,
+  cardsAnsweredSince,
   staleSuggestedCards,
   isCalendarRedundant,
   redundantPendingCalendarIds,
@@ -736,5 +737,54 @@ describe("staleSuggestedCards (a card the owner never touched)", () => {
 
   it("keeps a card whose created_at is unparseable rather than guessing it is old", () => {
     expect(staleSuggestedCards([card({ created_at: "" })], now)).toEqual([]);
+  });
+});
+
+describe("cardsAnsweredSince (a reply card the owner already answered)", () => {
+  const born = "2026-09-13T10:00:00Z";
+  const card = (over: Partial<ActionItem> = {}) =>
+    item({
+      action_type: "task",
+      params: { title: "回复 Leila 何时回深圳", answered_closes: true },
+      target: { personaKey: "leila", platform: "wechat" },
+      context: { sender_handle: "Leila" },
+      created_at: born,
+      ...over,
+    });
+  const at = (iso: string) => new Map([["wechat:Leila", Date.parse(iso)]]);
+
+  it("retires it once the owner speaks in that thread afterwards", () => {
+    expect(cardsAnsweredSince([card()], at("2026-09-13T11:00:00Z")).map((a) => a.id)).toEqual(["a1"]);
+  });
+
+  it("keeps it when the owner's last word predates the card", () => {
+    expect(cardsAnsweredSince([card()], at("2026-09-13T09:00:00Z"))).toEqual([]);
+  });
+
+  // The exchange that MINTED the card usually ends with a message; that is not
+  // an answer to the card.
+  it("keeps it when the owner spoke at the very moment it was minted", () => {
+    expect(cardsAnsweredSince([card()], at(born))).toEqual([]);
+  });
+
+  // 「审核付款节奏方案并回复金小奇」 — the review is the work, the reply is its
+  // wrapper. Code cannot see that; the drafter marks what closes on an answer.
+  it("never retires a card that did not declare it closes on an answer", () => {
+    const unmarked = card({ params: { title: "审核付款节奏方案并回复金小奇" } });
+    expect(cardsAnsweredSince([unmarked], at("2026-09-13T11:00:00Z"))).toEqual([]);
+  });
+
+  it("leaves a card the owner has already touched alone", () => {
+    expect(cardsAnsweredSince([card({ status: "approved" })], at("2026-09-13T11:00:00Z"))).toEqual([]);
+  });
+
+  it("ignores a card whose conversation is unknown rather than guessing", () => {
+    expect(cardsAnsweredSince([card({ context: {} })], at("2026-09-13T11:00:00Z"))).toEqual([]);
+    expect(cardsAnsweredSince([card()], new Map())).toEqual([]);
+  });
+
+  it("does not confuse two people on the same platform", () => {
+    const other = new Map([["wechat:茉莉", Date.parse("2026-09-13T11:00:00Z")]]);
+    expect(cardsAnsweredSince([card()], other)).toEqual([]);
   });
 });
