@@ -648,7 +648,20 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
         ? await createAnthropicJsonCaller()
         : llmMode === "deepseek"
           ? await createDeepseekJsonCaller({ model: draftModel })
-          : createClaudeCliJsonCaller({ model: draftModel });
+          : // The assess pass needs more headroom than the 180s default, which
+            // was set for drafting. Measured 2026-09-13 on two real contacts:
+            // the call lands at ~166s when it lands at all, so the default left
+            // a margin of fourteen seconds and clipped whichever runs drifted
+            // over. Two contacts of five produced nothing — and they were the
+            // two with the MOST open commitments, so the pass failed hardest
+            // exactly where the owner's list depended on it most.
+            //
+            // The cause is NOT corpus size and NOT commitment count: capping
+            // the corpus from 427k to 41k still timed out, and six commitments
+            // timed out where twelve finished. Both hypotheses were tested and
+            // refuted. What the numbers show is a call that simply costs about
+            // three minutes, against a ceiling set three minutes away.
+            createClaudeCliJsonCaller({ model: draftModel, timeoutMs: 420_000 });
     const personas = loadPersonas(personaDir);
     const { resolve: resolvePersona } = buildPersonaResolver(personas);
     const byKey = new Map(personas.map((p) => [p.key, p]));
