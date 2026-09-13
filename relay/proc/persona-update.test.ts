@@ -4,9 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { stringify, parse } from "yaml";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
-import { buildPersonaUpdateRequest } from "./persona-update-prompt.js";
+import { buildPersonaUpdateRequest, parseExtractedAssessments } from "./persona-update-prompt.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { Persona } from "../core/types.js";
+import type { Commitment } from "../core/persona-v3.js";
 
 const zech: Persona = {
   key: "zech-noiseux",
@@ -536,5 +537,51 @@ describe("due is an ISO date or it is nothing", () => {
   it("keeps prose out of the field by telling it to omit instead", () => {
     const req = buildPersonaUpdateRequest({ name: "Ihor", existing: [], thread: "x" });
     expect(req.system).toMatch(/leave the field out/);
+  });
+});
+
+describe("a commitment this conversation never mentions still gets a verdict", () => {
+  // 2026-09-13: the assess pass demanded a verdict on EVERY open commitment AND
+  // a verbatim quote behind every verdict. Those cannot both hold when the
+  // commitment is absent from the corpus, so the model answered honestly —
+  // 「not discussed in this conversation」 — and the quote gate discarded it as
+  // invented. 86 of 90 logged discards were exactly that, leaving 39 of the
+  // owner's open commitments never judged once.
+  const existing: Commitment[] = [
+    { who: "me", what: "Ping Rajat about the OSYX listing", status: "open" },
+  ];
+
+  it("keeps an unseen verdict that has no quote, and marks it", () => {
+    const parsed = parseExtractedAssessments(
+      { assessments: [{ index: 0, needs_leo: false, unseen: true, evidence: "" }] },
+      existing.length,
+    );
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]!.unseen).toBe(true);
+  });
+
+  it("still discards a prose non-quote when unseen was NOT claimed", () => {
+    const parsed = parseExtractedAssessments(
+      { assessments: [{ index: 0, needs_leo: false, evidence: "" }] },
+      existing.length,
+    );
+    expect(parsed).toEqual([]);
+  });
+
+  it("refuses an unseen verdict that summons Leo — silence is not a summons", () => {
+    const parsed = parseExtractedAssessments(
+      { assessments: [{ index: 0, needs_leo: true, unseen: true, evidence: "" }] },
+      existing.length,
+    );
+    expect(parsed).toEqual([]);
+  });
+
+  it("still requires a real quote from a verdict that claims to have read the thread", () => {
+    const parsed = parseExtractedAssessments(
+      { assessments: [{ index: 0, needs_leo: true, evidence: "I'll ping him today" }] },
+      existing.length,
+    );
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]!.unseen).toBeUndefined();
   });
 });

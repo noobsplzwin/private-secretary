@@ -50,6 +50,23 @@ export interface CommitmentAssessment {
   next_step?: string;
   /** Verbatim quote from the corpus. Ungrounded verdicts never reach the ledger. */
   evidence: string;
+  /**
+   * The conversation did not mention this commitment at all, so there was
+   * nothing to quote and nothing to judge from.
+   *
+   * This exists because the assess pass asked for two things that cannot both
+   * be satisfied: a verdict on EVERY open commitment, and a verbatim quote
+   * behind every verdict. When a commitment is simply absent from the recent
+   * corpus the model answered honestly — 「not discussed in this conversation」 —
+   * and the quote gate threw the verdict away as invented. Measured 2026-09-13:
+   * 86 of 90 discarded items were assessments rejected for exactly that string,
+   * which is why 39 of the owner's open commitments had never been judged once.
+   *
+   * An unseen verdict carries needs_leo=false — no news is not a summons — but
+   * it is NOT the same claim as "I read the thread and he is off the hook", so
+   * it is marked rather than silently merged with one.
+   */
+  unseen?: boolean;
   /** ISO instant this verdict was made, so staleness is visible. */
   at: string;
 }

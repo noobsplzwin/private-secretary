@@ -31,6 +31,8 @@ export interface ExtractedAssessment {
   blocked_on?: "leo" | "them" | "third-party";
   next_step?: string;
   evidence: string;
+  /** The thread never mentions this one — see CommitmentAssessment.unseen. */
+  unseen?: boolean;
 }
 
 export interface PersonaUpdateRequest {
@@ -121,10 +123,15 @@ const SCHEMA: Record<string, unknown> = {
       evidence: {
         type: "string",
         description:
-          "VERBATIM quote from the conversation showing the CURRENT state of this commitment. Ungrounded verdicts are discarded.",
+          "VERBATIM quote from the conversation showing the CURRENT state of this commitment. Ungrounded verdicts are discarded. Leave empty ONLY when unseen is true.",
+      },
+      unseen: {
+        type: "boolean",
+        description:
+          "true when this conversation does not mention the commitment AT ALL. Then evidence is not required and needs_leo must be false. Use this instead of writing 'not discussed in this conversation' as the quote.",
       },
     },
-    required: ["index", "needs_leo", "evidence"],
+    required: ["index", "needs_leo"],
   },
 };
 
@@ -203,6 +210,14 @@ WHO=THEM — they owe it, and Leo is the one left waiting.
 - next_step only when needs_leo, and it must meet the standard below.
 - Quote the corpus verbatim. A verdict whose evidence is not found in the text is
   discarded by code, so a guess costs you the whole verdict.
+- NOT EVERY TRACKED COMMITMENT IS IN THIS CONVERSATION, and the honest answer
+  when one is absent is not a sentence. Set "unseen": true, needs_leo false, and
+  leave evidence empty. Do NOT write 「not discussed in this conversation」 or
+  「not referenced in this conversation」 as the quote: that is prose, the quote
+  gate discards it, and the commitment ends up with NO verdict at all. Measured
+  2026-09-13 — 86 of 90 discarded items were exactly this, and 39 of the owner's
+  open commitments had therefore never been judged once. An unseen verdict is a
+  real answer: it says no news, which is different from saying he is off the hook.
 
 ${ITEM_STANDARD}`;
 
@@ -268,8 +283,14 @@ export function parseExtractedAssessments(obj: unknown, existingCount: number): 
       typeof (x as ExtractedAssessment).needs_leo === "boolean" &&
       ((x as ExtractedAssessment).blocked_on === undefined ||
         ["leo", "them", "third-party"].includes((x as ExtractedAssessment).blocked_on!)) &&
-      typeof (x as ExtractedAssessment).evidence === "string" &&
-      (x as ExtractedAssessment).evidence.trim() !== "",
+      // An UNSEEN verdict has nothing to quote by definition, so requiring a
+      // non-empty evidence string would drop exactly the answer this field was
+      // added to make sayable. It must still be a "no": claiming the owner is
+      // needed on a commitment the thread never mentions is a guess.
+      ((x as ExtractedAssessment).unseen === true
+        ? (x as ExtractedAssessment).needs_leo === false
+        : typeof (x as ExtractedAssessment).evidence === "string" &&
+          (x as ExtractedAssessment).evidence.trim() !== ""),
   );
 }
 

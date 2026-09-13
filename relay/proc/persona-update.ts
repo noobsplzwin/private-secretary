@@ -195,11 +195,16 @@ export async function extractCommitmentsOnce(opts: {
   ): void =>
     opts.onDiscard?.({ at: nowIso, persona: opts.file, kind, reason, evidence, ...(index !== undefined ? { index } : {}) });
 
-  const grounded = <T extends { evidence?: string; index?: number }>(
+  const grounded = <T extends { evidence?: string; index?: number; unseen?: boolean }>(
     xs: T[],
     kind: "commitment" | "transition" | "assessment",
   ): T[] =>
     xs.filter((x) => {
+      // A verdict that says "this conversation never mentions it" has nothing to
+      // quote, and holding it to the quote gate is what silently produced 39
+      // never-judged commitments: the model answered honestly in prose and the
+      // gate read that prose as invention. See CommitmentAssessment.unseen.
+      if (x.unseen === true) return true;
       if (evidenceGrounded(opts.corpus, x.evidence ?? "")) return true;
       note(kind, "ungrounded", x.evidence ?? "", x.index);
       return false;
@@ -267,7 +272,11 @@ export async function extractCommitmentsOnce(opts: {
       needs_leo: a.needs_leo,
       ...(a.blocked_on ? { blocked_on: a.blocked_on } : {}),
       ...(a.needs_leo && a.next_step?.trim() ? { next_step: a.next_step.trim() } : {}),
-      evidence: a.evidence,
+      // Marked, not blended: "the thread is silent about this" and "I read the
+      // thread and he is off the hook" both set needs_leo=false, and only one of
+      // them is evidence of anything.
+      ...(a.unseen ? { unseen: true } : {}),
+      evidence: a.unseen ? "" : a.evidence,
       at,
     };
     assessed++;
