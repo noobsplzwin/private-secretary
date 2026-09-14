@@ -4,6 +4,7 @@ import {
   gmailMessageToInbound,
   pollMailbox,
   scanGmailDirect,
+  ownerLastSpokeInThreads,
 } from "./gmail-direct.js";
 import { encodeBase64Url, type GmailClient, type GmailMessage } from "../io/gmail-api.js";
 
@@ -474,5 +475,30 @@ describe("pollMailbox — self-sent mail", () => {
     expect(r.inbound).toEqual([]);
     expect(r.filtered).toEqual([{ id: "gmail:M1", reason: "gmail:self" }]);
     expect(r.newHistoryId).toBe("999"); // cursor still advances
+  });
+});
+
+describe("ownerLastSpokeInThreads (answered-closes on Gmail)", () => {
+  const msg = (from: string, ms: number) => ({ id: String(ms), threadId: "t1", internalDate: String(ms), payload: { headers: [{ name: "From", value: from }] } });
+  const client = (owned: Record<string, any[]>) =>
+    ({ getThread: async ({ id }: { id: string }) => { if (!(id in owned)) throw new Error("404"); return { id, messages: owned[id] }; } }) as any;
+
+  it("finds the owning mailbox and the owner's latest message in the thread", async () => {
+    const clients = {
+      "leo@taiv.tv": client({}),
+      "zhenghleo@gmail.com": client({ t1: [msg("João <joao@osyx.tech>", 100), msg("Leo <zhenghleo@gmail.com>", 200), msg("João <joao@osyx.tech>", 300)] }),
+    };
+    const m = await ownerLastSpokeInThreads(clients, ["t1"]);
+    expect(m.get("t1")).toBe(200);
+  });
+
+  it("omits a thread the owner never wrote in", async () => {
+    const m = await ownerLastSpokeInThreads({ "leo@taiv.tv": client({ t1: [msg("x@y.z", 100)] }) }, ["t1"]);
+    expect(m.has("t1")).toBe(false);
+  });
+
+  it("omits a thread no mailbox can read", async () => {
+    const m = await ownerLastSpokeInThreads({ "leo@taiv.tv": client({}) }, ["t1"]);
+    expect(m.size).toBe(0);
   });
 });

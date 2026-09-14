@@ -418,3 +418,40 @@ export function buildRawMimeMessage(opts: BuildMimeOptions): string {
   const msg = headers.join("\r\n") + "\r\n\r\n" + opts.body;
   return encodeBase64Url(msg);
 }
+
+/**
+ * When the OWNER last wrote in each of these threads. A card carries its
+ * threadId (context.thread_ref) but not which of the four mailboxes owns it, so
+ * each mailbox is tried in turn and the first that can read the thread is the
+ * owner — thread ids are per-mailbox, so a foreign one simply 404s. At most
+ * four calls per waiting card, on the 180s Gmail cadence, only while a reply
+ * card is open. "From is this mailbox" is the self test, same as the rest of
+ * this file.
+ */
+export async function ownerLastSpokeInThreads(
+  clients: Readonly<Record<string, GmailClient>>,
+  threadIds: readonly string[],
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  for (const id of threadIds) {
+    for (const [email, client] of Object.entries(clients)) {
+      let thread;
+      try {
+        thread = await client.getThread({ id, format: "metadata" });
+      } catch {
+        continue; // not this mailbox's thread
+      }
+      const self = email.toLowerCase();
+      let latest = 0;
+      for (const m of thread.messages ?? []) {
+        const from = (getHeader(m.payload, "From") ?? "").toLowerCase();
+        if (!from.includes(self)) continue;
+        const ms = Number(m.internalDate ?? "0") || 0;
+        if (ms > latest) latest = ms;
+      }
+      if (latest > 0) out.set(id, latest);
+      break; // the thread was readable here; no other mailbox owns it
+    }
+  }
+  return out;
+}

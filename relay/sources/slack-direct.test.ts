@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { pollChannel, pollResultToInbound, scanSlackDirect } from "./slack-direct.js";
+import { pollChannel, pollResultToInbound, scanSlackDirect, ownerLastSpokeInChannels } from "./slack-direct.js";
 import type {
   SlackClient,
   SlackConversation,
@@ -348,5 +348,34 @@ describe("scanSlackDirect — end-to-end orchestration", () => {
     expect(r.errors).toEqual([{ channelId: "C1", error: "rate limited" }]);
     expect(r.nextState.channels.C2?.lastTs).toBe("200.0"); // healthy channel advanced
     expect(r.nextState.channels.C1).toBeUndefined(); // failed channel not advanced
+  });
+});
+
+describe("ownerLastSpokeInChannels (answered-closes on Slack)", () => {
+  const fake = (msgs: Record<string, Array<{ user: string; ts: string }>>) =>
+    ({
+      conversationsHistory: async ({ channel }: { channel: string }) => {
+        if (!(channel in msgs)) throw new Error("channel_not_found");
+        return { ok: true, messages: msgs[channel] };
+      },
+    }) as any;
+
+  it("reports the owner's latest message per channel, ignoring others", async () => {
+    const m = await ownerLastSpokeInChannels(
+      fake({ D1: [{ user: "UME", ts: "1789300000.000100" }, { user: "UJ", ts: "1789300500.000000" }, { user: "UME", ts: "1789300200.000000" }] }),
+      "UME", ["D1"], 1789200000000,
+    );
+    expect(m.get("D1")).toBe(1789300200000);
+  });
+
+  it("omits a channel where only the other side spoke", async () => {
+    const m = await ownerLastSpokeInChannels(fake({ D1: [{ user: "UJ", ts: "1789300500.000000" }] }), "UME", ["D1"], 0);
+    expect(m.has("D1")).toBe(false);
+  });
+
+  it("skips a channel this workspace cannot read and keeps going", async () => {
+    const m = await ownerLastSpokeInChannels(fake({ D2: [{ user: "UME", ts: "1789300000.000000" }] }), "UME", ["D1", "D2"], 0);
+    expect(m.has("D1")).toBe(false);
+    expect(m.get("D2")).toBe(1789300000000);
   });
 });

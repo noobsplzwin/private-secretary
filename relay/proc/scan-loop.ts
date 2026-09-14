@@ -52,11 +52,11 @@ import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
-import { scanSlackDirect } from "../sources/slack-direct.js";
+import { ownerLastSpokeInChannels, scanSlackDirect } from "../sources/slack-direct.js";
 import { resolveSlackUserNames } from "../io/slack-users.js";
 import type { SlackClient } from "../io/slack-api.js";
 import { GmailClient } from "../io/gmail-api.js";
-import { scanGmailDirect } from "../sources/gmail-direct.js";
+import { ownerLastSpokeInThreads, scanGmailDirect } from "../sources/gmail-direct.js";
 import {
   createSlackClientFromKeychain,
   SLACK_ACCOUNTS,
@@ -286,9 +286,18 @@ async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200)
 export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
   const startedAtMs = Date.now();
   const perSource: SourceSummary[] = [];
-  // conversation handle → when the OWNER last spoke there. Filled by the WeChat
-  // pass for conversations that have a reply-only card waiting; empty otherwise.
-  let wechatOwnerSpokeAt = new Map<string, number>();
+  // `platform:handle` → when the OWNER last spoke in that conversation. Each
+  // source pass fills its own platform, only for conversations that have a
+  // reply-only card waiting (params.answered_closes); empty otherwise. Keyed
+  // exactly as core/action-item.ts conversationKey builds it.
+  const ownerSpokeAt = new Map<string, number>();
+  const waitingCards = (platform: string) =>
+    state.actions.filter(
+      (a) =>
+        a.status === "suggested" &&
+        a.params?.answered_closes === true &&
+        (a.target?.platform ?? a.source_message_id.split(":")[0]) === platform,
+    );
   const sourceMessages: InboundMessage[] = [];
   // P0: carry the message TEXT of everything we filter out. Without it the
   // trigger filter's recall is unmeasurable (and recall cannot be recovered from
@@ -384,6 +393,27 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           // name resolution is best-effort
         }
         if (!opts.dryRun) setSlackState(slackMarks, acct.account, r.nextState);
+        // ANSWERED-CLOSES for Slack: one conversations.history per waiting card,
+        // this workspace only (a foreign channel id is skipped inside).
+        try {
+          const cards = waitingCards("slack");
+          if (cards.length > 0) {
+            const byChannel = new Map<string, { handle: string; since: number }>();
+            for (const a of cards) {
+              const channel = a.source_message_id.split(":")[1];
+              const handle = a.context?.sender_handle;
+              const since = Date.parse(a.created_at);
+              if (!channel || !handle || !Number.isFinite(since)) continue;
+              const cur = byChannel.get(channel);
+              byChannel.set(channel, { handle, since: cur ? Math.min(cur.since, since) : since });
+            }
+            const sinceMs = Math.min(...[...byChannel.values()].map((v) => v.since));
+            const spoke = await ownerLastSpokeInChannels(slack, r.raw.selfId, [...byChannel.keys()], sinceMs);
+            for (const [channel, ms] of spoke) ownerSpokeAt.set(`slack:${byChannel.get(channel)!.handle}`, ms);
+          }
+        } catch (e) {
+          console.log(`[slack] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
+        }
         let triggered = 0;
         let filtered = 0;
         for (const m of r.inbound) {
@@ -451,6 +481,21 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           state.marks as Record<string, { lastTimestampMs: number; seenIds: string[] }>,
           r.nextState,
         );
+      }
+      // ANSWERED-CLOSES for Gmail: the card knows its thread (context.thread_ref)
+      // but not its mailbox; the helper tries each and the owner answers.
+      try {
+        const cards = waitingCards("gmail").filter((a) => typeof a.context?.thread_ref === "string");
+        if (cards.length > 0) {
+          const spoke = await ownerLastSpokeInThreads(clients, [...new Set(cards.map((a) => a.context!.thread_ref!))]);
+          for (const a of cards) {
+            const ms = spoke.get(a.context!.thread_ref!);
+            const handle = a.context?.sender_handle;
+            if (ms !== undefined && handle) ownerSpokeAt.set(`gmail:${handle}`, Math.max(ms, ownerSpokeAt.get(`gmail:${handle}`) ?? 0));
+          }
+        }
+      } catch (e) {
+        console.log(`[gmail] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
       }
       let triggered = 0;
       let filtered = 0;
@@ -572,7 +617,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           ),
         ];
         if (waiting.length > 0) {
-          wechatOwnerSpokeAt = await ownerLastSpokeIn(waiting, fetchHistory);
+          for (const [h, ms] of await ownerLastSpokeIn(waiting, fetchHistory)) ownerSpokeAt.set(`wechat:${h}`, ms);
         }
       } catch (e) {
         console.log(`[wechat] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
@@ -860,9 +905,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         // second is the owner's own request — a card whose whole job was
         // writing back should vanish when he writes back, not wait for him to
         // tick it. The map is keyed the same way conversationKey builds it.
-        const spoke = new Map<string, number>();
-        for (const [handle, ms] of wechatOwnerSpokeAt) spoke.set(`wechat:${handle}`, ms);
-        const answered = cardsAnsweredSince(fresh.actions, spoke);
+        const answered = cardsAnsweredSince(fresh.actions, ownerSpokeAt);
         answeredCount = answered.length;
         const retired = [...staleSuggestedCards(fresh.actions, Date.now()), ...answered].filter(
           (a) => !justDrafted.has(a.id),

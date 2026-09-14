@@ -292,3 +292,38 @@ export async function scanSlackDirect(opts: SlackDirectScan): Promise<{
   }
   return { inbound, nextState: { channels }, raw, errors: raw.errors };
 }
+
+/**
+ * When the OWNER last spoke in each of these channels, looking only at or
+ * after `sinceMs`. For the answered-closes gate (core/action-item.ts): a card
+ * whose whole job was "write back" is finished once he writes back, and on
+ * Slack the fact is one conversations.history call away. Only channels with a
+ * reply card waiting are asked, on the Slack cadence, so this cannot approach
+ * a rate limit. A channel this workspace cannot read (it belongs to the other
+ * account) is skipped, not failed.
+ */
+export async function ownerLastSpokeInChannels(
+  client: SlackClient,
+  selfId: string,
+  channels: readonly string[],
+  sinceMs: number,
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  // Slack ts is seconds with a fraction; `oldest` is an exclusive lower bound.
+  const oldest = (sinceMs / 1000).toFixed(6);
+  for (const channel of channels) {
+    try {
+      const h = await client.conversationsHistory({ channel, oldest, limit: 100 });
+      let latest = 0;
+      for (const m of h.messages ?? []) {
+        if (m.user !== selfId) continue;
+        const ms = Math.round(Number(m.ts) * 1000);
+        if (ms > latest) latest = ms;
+      }
+      if (latest > 0) out.set(channel, latest);
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}
