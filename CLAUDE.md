@@ -54,9 +54,14 @@ call, 2026-09-12.
 
 ## Hard constraints
 
-- **Nothing sends without explicit approval.** calendar / reply / relay /
-  forward always require it — hard-coded in `relay/core/executors.ts`, not
-  configurable.
+- **Nothing SENDS without explicit approval.** reply / relay / forward / tool
+  always require it — hard-coded in `relay/core/executors.ts`, not configurable.
+  **calendar no longer does** (owner, 2026-09-14): an event whose time the
+  thread CONFIRMED is created automatically. What keeps that safe is
+  `missingInfo`'s calendar case — title/start/end plus `time_confirmed` — so a
+  clock time nobody stated still cannot become an event. An auto-created event
+  does NOT email its attendees (`notifyAttendees:false`); inviting other people
+  is still a human act.
 - **Recipient resolution is ASK-not-GUESS.** Resolve only on an exact
   unambiguous match, else the item carries `missing_info` and cannot be
   approved. Wrong-recipient is the worst failure mode this product has.

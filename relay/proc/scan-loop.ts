@@ -32,6 +32,7 @@ import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { GroupBook } from "../core/wechat-groups.js";
 import type { ActionItem } from "../core/action-item.js";
+import { canAutoExecute } from "../core/executors.js";
 import {
   SILENT_RETIRE_DAYS,
   cardsAnsweredSince,
@@ -826,6 +827,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let supersedeExemptCount = 0;
   let staleRetiredCount = 0;
   let answeredCount = 0;
+  let autoCalendarCount = 0;
   if (!opts.dryRun && (draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)) {
     const committed = await commitUnderLock((fresh) => {
       if (draftedActions.length > 0) {
@@ -1016,6 +1018,52 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // them the three passes were ~90% of the LLM bill, and every list-quality
   // failure the owner struck (umbrella merges, resurrected cards, flapping
   // tiers) lived in this stretch of the file.
+
+  // ── AUTO-CREATE CALENDAR (no LLM, no tick) ────────────────────────────
+  //
+  // The owner's decision, 2026-09-14: 「限制取消，日历允许自动创建」. A meeting
+  // agreed in writing used to sit as a row waiting for him to tick it, which is
+  // the one job he most expected the secretary to just do.
+  //
+  // The gate is core/executors.canAutoExecute → missingInfo: title, start, end,
+  // and time_confirmed. An hour the thread never stated fails there and never
+  // becomes an event — the same fail-closed rule that has always governed the
+  // ticked route, not a weaker one. The conflict check inside executeAction
+  // still runs, and an event that collides comes back unexecuted for him.
+  //
+  // notifyAttendees:false — this fills in HIS calendar. Mailing an invite to
+  // other people stays a human act.
+  if (!opts.dryRun && opts.execute) {
+    const snapshot = loadState(opts.statePath);
+    const auto = snapshot.actions.filter((a) => a.action_type === "calendar" && canAutoExecute(a));
+    for (const action of auto) {
+      try {
+        const r = await executeAction(approveAction(action), {
+          ...opts.execute,
+          notifyAttendees: false,
+          persistClaim: async (claimed) => {
+            await commitUnderLock((fresh) => {
+              fresh.actions = fresh.actions.map((a) => (a.id === claimed.id ? claimed : a));
+            });
+          },
+        });
+        await commitUnderLock((fresh) => {
+          fresh.actions = fresh.actions.map((a) => (a.id === r.action.id ? r.action : a));
+        });
+        if (r.conflicts?.length) {
+          console.log(`[calendar] auto-create held — conflicts: ${String(action.params.title ?? action.id)}`);
+        } else {
+          autoCalendarCount++;
+          console.log(`[calendar] auto-created: "${String(action.params.title ?? action.id)}" (${r.receipt?.ref ?? "no ref"})`);
+        }
+      } catch (e) {
+        console.log(`[calendar] auto-create failed — ${(e as Error).message.split("\n")[0]}`);
+      }
+    }
+    if (autoCalendarCount > 0) {
+      logActivity("tick", `auto-created ${autoCalendarCount} calendar event(s)`, { autoCalendar: autoCalendarCount });
+    }
+  }
 
   // ── PHASE 6a (UNLOCKED, no LLM): pull completions BACK from TickTick.
   //

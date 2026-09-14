@@ -88,6 +88,12 @@ export interface ToolRunner {
 }
 
 export interface ExecuteDeps {
+  /**
+   * Whether creating a calendar event emails its attendees. Default true — a
+   * person ticked the line. The auto-create path passes false: see the
+   * sendUpdates call site.
+   */
+  notifyAttendees?: boolean;
   // Slack send target. One workspace in v1.
   slack?: SlackSender;
   // Gmail drafters keyed by mailbox email. The action's target picks one.
@@ -288,9 +294,13 @@ async function executeCalendar(action: ActionItem, deps: ExecuteDeps): Promise<E
     event,
     // conferenceDataVersion:1 is REQUIRED for a Meet createRequest to take effect.
     ...(event.conferenceData ? { conferenceDataVersion: 1 } : {}),
-    // Actually email the attendees the invite when there are any (else it just
-    // books on Leo's own calendar).
-    ...((event.attendees?.length ?? 0) > 0 ? { sendUpdates: "all" as const } : {}),
+    // Email the attendees only when a HUMAN triggered this. Auto-creation
+    // (core/executors.canAutoExecute) fills in Leo's own calendar without the
+    // engine mailing anyone on its own initiative: a wrong entry on his
+    // calendar he deletes, a wrong invite has already reached an investor.
+    ...((event.attendees?.length ?? 0) > 0 && deps.notifyAttendees !== false
+      ? { sendUpdates: "all" as const }
+      : {}),
   });
   const receipt: ExecutionReceipt = {
     kind: "calendar_event",

@@ -3,10 +3,22 @@
 
 import { missingInfo, type ActionItem, type ActionType } from "./action-item.js";
 
-// V1 hard rule (spec): these types ALWAYS need human confirmation. Hard-coded on
-// purpose — not configurable, cannot be overridden.
+// These types ALWAYS need human confirmation.
+//
+// `calendar` LEFT this set on 2026-09-14, by the owner's decision: 「限制取消，
+// 日历允许自动创建」. He had a meeting agreed in writing and still had to tick a
+// row to get it onto his calendar, which is not what a secretary is for.
+//
+// What makes that safe is not this set — it is missingInfo's calendar case,
+// which refuses any event whose time was not CONFIRMED in the thread
+// (params.time_confirmed). That gate exists because the engine once booked a
+// fabricated hour and the owner asked 「你哪来的20-21时间?」. Auto-creation rides
+// on it: an unconfirmed time still cannot become an event, by either route.
+//
+// Inviting other people is a different act from filling in his own calendar, so
+// an auto-created event does not email anyone (see notifyAttendees in
+// proc/execute.ts). Sending an invite is still his to trigger.
 export const ALWAYS_CONFIRM: ReadonlySet<ActionType> = new Set([
-  "calendar",
   "reply",
   "relay",
   "forward",
@@ -26,7 +38,9 @@ export const AUTO_EXECUTE_CONFIDENCE = 0.9;
 
 export function canAutoExecute(a: ActionItem): boolean {
   if (a.status !== "suggested") return false;
-  if (a.action_type !== "ignore") return false;
+  if (a.action_type !== "ignore" && a.action_type !== "calendar") return false;
   if (a.confidence < AUTO_EXECUTE_CONFIDENCE) return false;
+  // For a calendar this is the whole safety story: title, start, end, and
+  // time_confirmed. A guessed hour fails here and never reaches the API.
   return missingInfo(a).length === 0;
 }
