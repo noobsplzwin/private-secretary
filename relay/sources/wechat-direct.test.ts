@@ -183,7 +183,7 @@ describe("groups (2026-09-12: a legal thread lived in a 2-person group, unseen)"
     // Exact-match-or-nothing is the one rule this codebase does not bend.
     return scanWechatGroups({
       sessions,
-      book: { "台州帮": { decision: "allow", by: "owner", at: "x" } },
+      book: { "台州帮": { decision: "allow", by: "owner", at: "x", lastSeenMs: 0 } },
       fetchHistory: async () => H([["2026-09-12 17:39", "金小奇 芯联集成", "在的"]]),
       now: () => "x",
     }).then((r) => expect(r.inbound[0]!.senderHandle).toBe("台州帮"));
@@ -208,7 +208,9 @@ describe("groups (2026-09-12: a legal thread lived in a 2-person group, unseen)"
     const hist = H([["2026-09-12 17:39", "金小奇 芯联集成", "一条"]]);
     const first = await scanWechatGroups({
       sessions,
-      book: { "台州帮": { decision: "allow", by: "owner", at: "x" } },
+      // Covered, nothing seen yet. (No cursor at all means first contact, which
+      // seeds and mints nothing — a different scenario, tested separately.)
+      book: { "台州帮": { decision: "allow", by: "owner", at: "x", lastSeenMs: 0 } },
       fetchHistory: async () => hist,
       now: () => "x",
     });
@@ -274,5 +276,34 @@ describe("ownerLastSpokeIn (an answered WeChat thread never reaches the engine)"
     });
     expect(m.has("bad")).toBe(false);
     expect(m.get("good")).toBe(Date.parse("2026-09-13T10:00:00"));
+  });
+});
+
+describe("first contact with a group seeds the cursor and mints nothing", () => {
+  // REGRESSION: an admitted group with no cursor read its whole recent history
+  // as new — «Lucky» produced a reply card from a 2025-06-13 message on
+  // 2026-09-12. Coverage begins at admission; older history is not a to-do.
+  const H = (lines: Array<[string, string, string]>): string =>
+    ["群 的消息记录: [群聊]", "", ...lines.map(([t, who, text]) => `[${t}] ${who}: ${text}`)].join("\n");
+  const sessions = [{ name: "Lucky", isGroup: true, unread: 0, tsMs: Date.parse("2026-09-12T11:00:00") }];
+  const hist = H([["2025-06-13 21:17", "茉莉", "你们那热吗？"], ["2025-06-13 21:18", "茉莉", "要装空调吗"]]);
+
+  it("emits no inbound on the first pass and records the newest message as the cursor", async () => {
+    const r = await scanWechatGroups({
+      sessions,
+      book: { Lucky: { decision: "allow", by: "auto", at: "x", speakers: 1 } },
+      fetchHistory: async () => hist,
+      now: () => "x",
+    });
+    expect(r.inbound).toEqual([]);
+    expect(r.book.Lucky!.lastSeenMs).toBe(Date.parse("2025-06-13T21:18:00"));
+  });
+
+  it("then only messages newer than that cursor become inbound", async () => {
+    const seeded = { Lucky: { decision: "allow" as const, by: "auto" as const, at: "x", lastSeenMs: Date.parse("2025-06-13T21:18:00") } };
+    const later = H([["2025-06-13 21:18", "茉莉", "要装空调吗"], ["2026-09-12 10:59", "茉莉", "新的一条"]]);
+    const r = await scanWechatGroups({ sessions, book: seeded, fetchHistory: async () => later, now: () => "x" });
+    expect(r.inbound).toHaveLength(1);
+    expect(r.inbound[0]!.text).toBe("茉莉: 新的一条");
   });
 });

@@ -309,7 +309,17 @@ export async function scanWechatGroups(
     }
     if (msgs.length === 0) continue;
     const newest = msgs[msgs.length - 1]!.tsMs;
-    const cursor = entry.lastSeenMs ?? 0;
+    // FIRST CONTACT seeds the cursor and mints nothing. A group admitted with no
+    // cursor used to read as "everything is new", so its whole recent history
+    // came through as fresh work: on 2026-09-12 the two-message group «Lucky»
+    // produced 「回复茉莉：是否需要装空调」 from a message dated 2025-06-13 — a
+    // reply the owner was asked to make to a question fifteen months old.
+    // Coverage starts at admission; history before it is not a to-do.
+    if (entry.lastSeenMs === undefined) {
+      book[name] = { ...entry, lastSeenMs: newest };
+      continue;
+    }
+    const cursor = entry.lastSeenMs;
     const unseen = msgs.filter((m) => m.tsMs > cursor && m.speaker !== OWN_LABEL);
     // The cursor advances over Leo's OWN messages too — they are seen, just not
     // work for him — otherwise a group where he speaks last re-reads every tick.
