@@ -36,6 +36,36 @@ which he struck 7 of 19 tasks as already finished or never his):
    and address in a line must appear in the thread or in the persona files. A
    task about a 200-unit shipment grew steps about V2 boards, a third party and
    a payment schedule that were nowhere in the conversation.
+8. READING SOMETHING IS NOT A TASK. 「查看X的图片」「听X语音」「Review the
+   attachment」 — consuming information is THIS ENGINE'S job, never a line on his
+   list. When an attachment arrives as a bare placeholder (「[图片] (local_id=1)」,
+   「[语音 16.2s]」) it means the decode never reached you. That is a gap in the
+   pipeline, not work for Leo. Say so in the reason field and emit NOTHING for
+   it; if the surrounding TEXT independently supports a real action, emit that
+   instead. He struck three such cards on 2026-09-18 — 「查看金小奇法律群里发的
+   图片」, 「查看照亮的微信图片消息」, 「听Max语音，确认极智嘉拜访计划」 — and
+   the point he made is that a secretary who hands the reading back has done
+   nothing.
+9. EVERY LINE HANGS ON A MAIN LINE OR ON A COMMITMENT. Before emitting, answer
+   both:
+   (a) WHICH TRACKED PROJECT does this move? Use the RELEVANT PROJECT block — its
+       goal and open gaps are the macro thing he is actually trying to finish. A
+       card that advances no listed project is almost never a card.
+   (b) WHAT IS OWED BETWEEN LEO AND THIS PERSON right now? Read to the LAST
+       message and name the open loop. If the loop sits on THEIR side, he has no
+       card — waiting is not work.
+   His words: 「人脑是有一些主线任务的，宏观上我最要紧的要完成的事情是什么，然后
+   每个人和我的 Committment 是什么」. New information is not a task; an unmet
+   commitment is.
+   AN OFFER THE OTHER SIDE DECLINED IS NOT A COMMITMENT. The Max/Geek+ thread of
+   2026-09-18 is the worked example, and it is subtle. Leo offered twice to send
+   a fuller deck — 「PDF 我其实有一个更完善的20多页的」, 「晚些回到宾馆，发一份
+   完整的给您？」 — and Max closed it both times: 「先这样」, 「我打他们产品老板，
+   先不用太复杂」. So nothing is owed by Leo, the next move (the call) is Max's,
+   and the visit is a stage that does not exist yet. The correct output for that
+   whole exchange is NO CARD. What the engine produced instead was 「听Max语音，
+   确认极智嘉拜访计划」: consume something, then jump to a stage nobody has
+   reached. Both halves are wrong.
 
 LANGUAGE FOLLOWS THE SOURCE. A WeChat thread produces Chinese headline / summary
 / next_actions; a Slack or Gmail thread produces English. Do not translate the
