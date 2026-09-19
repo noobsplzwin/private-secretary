@@ -44,6 +44,74 @@ export interface SlackChannelCursor {
 export interface SlackPollState {
   // Keyed by channel id. Missing entry = first poll.
   channels: Record<string, SlackChannelCursor>;
+  /** Where the cold rotation resumes next tick. See selectChannelsToPoll. */
+  rotation?: number;
+}
+
+/** A channel with a message this recent is polled every tick. */
+export const HOT_WINDOW_DAYS = 7;
+
+/**
+ * How many channels one tick may poll. Each costs a conversations.history
+ * (~326ms measured) plus a listAllReplies per threaded parent in the batch.
+ */
+export const POLL_BUDGET = 60;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Which channels this tick actually asks about.
+ *
+ * Every tick used to poll all of them. On the owner's account that is 447 —
+ * 148 IMs and 280 group DMs, years of ad-hoc threads — and at ~326ms each the
+ * Slack pass took 276 to 559 seconds against a 60-second cadence. He put it
+ * plainly: 「我Slack的新的信息其实不是很多，不应该耗时5分钟」. He was right;
+ * the time went on re-asking dead conversations whether they were still dead.
+ * Measured the same day: 18 channels had a message inside a week, 15 inside a
+ * month, and 371 had been silent for one to six months.
+ *
+ * So: everything HOT (a message within HOT_WINDOW_DAYS) is polled every tick,
+ * and the cold remainder rotates through the leftover budget. A channel that
+ * has never been polled counts as hot — it must be seen once before anything
+ * can be said about it.
+ *
+ * The trade: a conversation silent for months is noticed up to a full rotation
+ * late. That is not a regression — a pass that takes five to nine minutes was
+ * already slower than the rotation will be, and the active channels go from
+ * being checked every 5-9 minutes to every tick.
+ *
+ * Hot never yields to the budget. If more than POLL_BUDGET channels are live,
+ * they are all polled and the cold rotation simply waits — starving the busy
+ * conversations to make room for dormant ones would invert the whole point.
+ */
+export function selectChannelsToPoll(
+  channels: readonly SlackConversation[],
+  state: SlackPollState | undefined,
+  nowMs: number,
+  budget: number = POLL_BUDGET,
+): { poll: SlackConversation[]; nextRotation: number } {
+  const cursors = state?.channels ?? {};
+  const live = channels.filter((c) => !c.is_archived);
+  const hot: SlackConversation[] = [];
+  const cold: SlackConversation[] = [];
+  for (const c of live) {
+    const lastTs = cursors[c.id]?.lastTs;
+    // Never polled → must be seen once before it can be called cold.
+    if (lastTs === undefined || lastTs === "" || lastTs === "0") {
+      hot.push(c);
+      continue;
+    }
+    const lastMs = Number(lastTs) * 1000;
+    if (!Number.isFinite(lastMs) || nowMs - lastMs <= HOT_WINDOW_DAYS * DAY_MS) hot.push(c);
+    else cold.push(c);
+  }
+  if (cold.length === 0) return { poll: hot, nextRotation: 0 };
+  const room = Math.max(0, budget - hot.length);
+  const start = ((state?.rotation ?? 0) % cold.length + cold.length) % cold.length;
+  const take = Math.min(room, cold.length);
+  const slice: SlackConversation[] = [];
+  for (let i = 0; i < take; i++) slice.push(cold[(start + i) % cold.length]!);
+  return { poll: [...hot, ...slice], nextRotation: take === 0 ? start : (start + take) % cold.length };
 }
 
 export interface PolledChannel {
@@ -55,6 +123,8 @@ export interface PolledChannel {
 export interface SlackPollResult {
   selfId: string;
   channels: PolledChannel[];
+  /** Where the cold rotation resumes; persist into SlackPollState.rotation. */
+  nextRotation?: number;
   // Per-channel failures. A bad channel is isolated here so the channels
   // that DID poll keep their results (and advance their cursors); the
   // caller surfaces these without discarding the successes.
@@ -195,13 +265,26 @@ export interface PollOptions {
   state?: SlackPollState;
   // Cap per channel. Forwarded to pollChannel.
   perChannelLimit?: number;
+  /** Poll EVERY channel, ignoring the hot/cold tiering. Used by a wake tick. */
+  pollAll?: boolean;
+  /** Channels per tick; see POLL_BUDGET. */
+  pollBudget?: number;
+  /** Clock for the hot-window test. Injectable for tests. */
+  nowMs?: number;
 }
 
 export async function pollAllChannels(opts: PollOptions): Promise<SlackPollResult> {
   const { client } = opts;
   const auth = await client.authTest();
-  const channels = opts.channels ?? (await client.listAllConversations());
+  const all = opts.channels ?? (await client.listAllConversations());
   const state = opts.state?.channels ?? {};
+  // TIERED (selectChannelsToPoll): hot every tick, cold on a rotation. A wake
+  // tick catches up on everything — that is the one pass where a dormant
+  // channel may hold something from the hours the machine was asleep.
+  const selection = opts.pollAll
+    ? { poll: all.filter((c) => !c.is_archived), nextRotation: opts.state?.rotation ?? 0 }
+    : selectChannelsToPoll(all, opts.state, opts.nowMs ?? Date.now(), opts.pollBudget);
+  const channels = selection.poll;
   const polled: PolledChannel[] = [];
   const errors: SlackPollResult["errors"] = [];
   for (const channel of channels) {
@@ -229,7 +312,7 @@ export async function pollAllChannels(opts: PollOptions): Promise<SlackPollResul
       errors.push({ channelId: channel.id, error: msg });
     }
   }
-  return { selfId: auth.user_id, channels: polled, errors };
+  return { selfId: auth.user_id, channels: polled, errors, nextRotation: selection.nextRotation };
 }
 
 // ─── adapter that produces InboundMessage[] using the existing pure
@@ -290,7 +373,15 @@ export async function scanSlackDirect(opts: SlackDirectScan): Promise<{
   for (const polled of raw.channels) {
     channels[polled.channel.id] = { lastTs: polled.newLastTs };
   }
-  return { inbound, nextState: { channels }, raw, errors: raw.errors };
+  // The rotation MUST round-trip through state, or every tick restarts the
+  // cold sweep at the same offset and the channels past the first budget are
+  // never reached at all.
+  return {
+    inbound,
+    nextState: { channels, ...(raw.nextRotation !== undefined ? { rotation: raw.nextRotation } : {}) },
+    raw,
+    errors: raw.errors,
+  };
 }
 
 /**

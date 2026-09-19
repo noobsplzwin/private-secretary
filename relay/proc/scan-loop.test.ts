@@ -141,7 +141,9 @@ describe("runScanTick", () => {
 
     // state file is on disk and has both cursor slices stored under marks
     const saved = JSON.parse(readFileSync(statePath, "utf8"));
-    expect(saved.marks._slackDirect).toEqual({ channels: { C1: { lastTs: "100.0" } } });
+    // The cursor is what must survive; `rotation` rides alongside it so the
+    // cold sweep resumes where it stopped (sources/slack-direct.selectChannelsToPoll).
+    expect(saved.marks._slackDirect.channels).toEqual({ C1: { lastTs: "100.0" } });
     expect(saved.marks._gmailDirect).toEqual({
       mailboxes: { "leo@taiv.tv": { historyId: "9999" } },
     });

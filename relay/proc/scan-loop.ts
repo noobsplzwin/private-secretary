@@ -196,6 +196,8 @@ function errString(e: unknown): string {
 
 interface SlackSliceState {
   channels: Record<string, { lastTs: string }>;
+  /** Cold-rotation offset (sources/slack-direct.selectChannelsToPoll). */
+  rotation?: number;
 }
 
 // Per-account cursor slice key. Taiv keeps the legacy "_slackDirect" key (so its
@@ -373,6 +375,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           channels,
           state: prev,
           perChannelLimit: opts.onWake ? 500 : 200,
+          // A wake tick is the catch-up pass: the machine was asleep, so even a
+          // dormant channel may hold something. Every other tick polls hot
+          // channels plus a slice of the cold rotation — see
+          // selectChannelsToPoll for why all 447 every minute was the bug.
+          ...(opts.onWake ? { pollAll: true } : {}),
         });
         // Cosmetic display names: resolve this tick's distinct sender IDs →
         // Slack display names via a 24h disk cache (relay/io/slack-users.ts),

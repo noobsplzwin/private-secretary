@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
-import { pollChannel, pollResultToInbound, scanSlackDirect, ownerLastSpokeInChannels } from "./slack-direct.js";
+import { pollChannel, pollResultToInbound, scanSlackDirect, ownerLastSpokeInChannels,
+  selectChannelsToPoll,
+} from "./slack-direct.js";
 import type {
   SlackClient,
   SlackConversation,
@@ -377,5 +379,70 @@ describe("ownerLastSpokeInChannels (answered-closes on Slack)", () => {
     const m = await ownerLastSpokeInChannels(fake({ D2: [{ user: "UME", ts: "1789300000.000000" }] }), "UME", ["D1", "D2"], 0);
     expect(m.has("D1")).toBe(false);
     expect(m.get("D2")).toBe(1789300000000);
+  });
+});
+
+describe("selectChannelsToPoll (447 channels every 60s made the pass take 5-9 min)", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const NOW = Date.parse("2026-09-19T12:00:00Z");
+  const ch = (id: string, over: Record<string, unknown> = {}) => ({ id, is_im: true, ...over }) as any;
+  // lastTs is a Slack ts: seconds, as a string.
+  const ago = (days: number) => String((NOW - days * DAY) / 1000);
+  const st = (entries: Record<string, number>, rotation?: number) => ({
+    channels: Object.fromEntries(Object.entries(entries).map(([k, d]) => [k, { lastTs: ago(d) }])),
+    ...(rotation !== undefined ? { rotation } : {}),
+  });
+
+  it("polls every channel that spoke inside the hot window", () => {
+    const r = selectChannelsToPoll([ch("A"), ch("B")], st({ A: 1, B: 6 }), NOW);
+    expect(r.poll.map((c) => c.id).sort()).toEqual(["A", "B"]);
+  });
+
+  it("treats a never-polled channel as hot — it must be seen once", () => {
+    const r = selectChannelsToPoll([ch("NEW")], st({}), NOW);
+    expect(r.poll.map((c) => c.id)).toEqual(["NEW"]);
+  });
+
+  it("leaves cold channels out when the budget is already spent on hot ones", () => {
+    const hot = [ch("H1"), ch("H2")];
+    const cold = [ch("C1"), ch("C2"), ch("C3")];
+    const r = selectChannelsToPoll([...hot, ...cold], st({ H1: 1, H2: 2, C1: 90, C2: 90, C3: 90 }), NOW, 2);
+    expect(r.poll.map((c) => c.id)).toEqual(["H1", "H2"]);
+  });
+
+  // Starving the live conversations to make room for dormant ones would invert
+  // the whole point of the tiering.
+  it("never drops a hot channel to fit the budget", () => {
+    const hot = [ch("H1"), ch("H2"), ch("H3")];
+    const r = selectChannelsToPoll([...hot, ch("C1")], st({ H1: 1, H2: 1, H3: 1, C1: 90 }), NOW, 1);
+    expect(r.poll.map((c) => c.id)).toEqual(["H1", "H2", "H3"]);
+  });
+
+  it("spends leftover budget on the cold rotation and reports where it stopped", () => {
+    const all = [ch("H1"), ch("C1"), ch("C2"), ch("C3"), ch("C4")];
+    const state = st({ H1: 1, C1: 90, C2: 90, C3: 90, C4: 90 });
+    const r = selectChannelsToPoll(all, state, NOW, 3);
+    expect(r.poll.map((c) => c.id)).toEqual(["H1", "C1", "C2"]);
+    expect(r.nextRotation).toBe(2);
+  });
+
+  // Without the round-trip every tick restarts at the same offset and the
+  // channels past the first slice are never reached at all.
+  it("resumes where the previous tick stopped, and wraps", () => {
+    const all = [ch("C1"), ch("C2"), ch("C3")];
+    const cold = { C1: 90, C2: 90, C3: 90 };
+    const second = selectChannelsToPoll(all, st(cold, 2), NOW, 2);
+    expect(second.poll.map((c) => c.id)).toEqual(["C3", "C1"]);
+    expect(second.nextRotation).toBe(1);
+  });
+
+  it("ignores archived channels entirely", () => {
+    const r = selectChannelsToPoll([ch("A"), ch("Z", { is_archived: true })], st({ A: 1, Z: 1 }), NOW);
+    expect(r.poll.map((c) => c.id)).toEqual(["A"]);
+  });
+
+  it("polls an unparseable cursor rather than assuming it is cold", () => {
+    const r = selectChannelsToPoll([ch("X")], { channels: { X: { lastTs: "not-a-ts" } } }, NOW);
+    expect(r.poll.map((c) => c.id)).toEqual(["X"]);
   });
 });
