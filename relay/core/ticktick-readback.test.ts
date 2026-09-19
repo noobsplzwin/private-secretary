@@ -35,9 +35,38 @@ describe("diffTickTickReadback", () => {
     expect(r.doneUnitKeys).toEqual(["u2"]);
   });
 
+  // The owner's only free verdict. It must never be read as an approval: a
+  // dismissed task's other ticks are whatever he clicked on the way out, and
+  // executing one would send something he has just called a mistake.
+  it("reports a dismissal and suppresses that task's other ticks", () => {
+    const withDismiss: SyncMap = {
+      ...map,
+      u1: { ...map.u1!, dismissItemId: "ix" },
+    };
+    const r = diffTickTickReadback(withDismiss, [
+      task("tt1", [["i1", 1], ["i2", 0], ["ix", 1]]),
+      task("tt2"),
+    ]);
+    expect(r.dismissedUnitKeys).toEqual(["u1"]);
+    expect(r.doneActionIds).toEqual([]);
+    expect(r.doneUnitKeys).toEqual([]);
+  });
+
+  // Untouched, it is inert — the row behaves exactly as it did before the line
+  // existed, so adding it to every task changes nothing until it is ticked.
+  it("is inert while the dismissal line is unticked", () => {
+    const withDismiss: SyncMap = { ...map, u1: { ...map.u1!, dismissItemId: "ix" } };
+    const r = diffTickTickReadback(withDismiss, [
+      task("tt1", [["i1", 1], ["ix", 0]]),
+      task("tt2"),
+    ]);
+    expect(r.dismissedUnitKeys).toEqual([]);
+    expect(r.doneActionIds).toEqual(["a1"]);
+  });
+
   it("is silent when nothing was ticked", () => {
     const r = diffTickTickReadback(map, [task("tt1", [["i1", 0], ["i2", 0]]), task("tt2")]);
-    expect(r).toEqual({ doneActionIds: [], doneUnitKeys: [] });
+    expect(r).toEqual({ doneActionIds: [], doneUnitKeys: [], dismissedUnitKeys: [] });
   });
 
   // Our own sync replaces the checklist on every update, minting new item ids,

@@ -1094,7 +1094,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     try {
       const remote = await opts.ticktickReader.listActive();
       const snapshot = loadState(opts.statePath);
-      const { ticked, closed, map, unitsClosed } = readbackFromTickTick(
+      const { ticked, closed, dismissed, map, unitsClosed } = readbackFromTickTick(
         snapshot,
         loadSyncMap(opts.statePath),
         remote,
@@ -1146,6 +1146,34 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // (the pre-§1 behaviour — a tick means "I already did it").
       const done = new Set([...closed, ...(opts.execute ? [] : ticked)]);
 
+      // THE ONLY VERDICT THE OWNER CAN GIVE FOR FREE. Every other exit a row has
+      // — 完成, deleted, aged out, superseded — says nothing about whether the
+      // row deserved to exist: the owner's own words are that he completes
+      // things only because there is no other way to clear them, and the data
+      // agrees (353 of 400 completions were engine rows, 0 of them meaningful).
+      // Ticking DISMISS_LINE is the one gesture that can only mean "this should
+      // not have been here", so it is the one that becomes a label.
+      //
+      // Written BEFORE the status change, per the labels.jsonl contract: if the
+      // append throws, the rows stay as they are and the next tick retries.
+      const dismissedSet = new Set(dismissed);
+      if (dismissedSet.size > 0) {
+        const rows = snapshot.actions.filter((a) => dismissedSet.has(a.id));
+        appendLabels(
+          labelsPathFor(opts.statePath),
+          rows.map((a) =>
+            buildLabel({
+              action: a,
+              decision: "rejected",
+              existence: "not_a_thing",
+              decided_at: new Date().toISOString(),
+              note: "owner ticked 这条不该出现",
+            }),
+          ),
+        );
+        console.log(`[ticktick] ${rows.length} row(s) dismissed by owner → not_a_thing`);
+      }
+
       // The MAP is saved on its own signal. `done` counts card-derived actions,
       // and a ledger row has no action behind it — gating the save on `done`
       // threw away every tombstone the owner earned by finishing ledger tasks.
@@ -1156,19 +1184,22 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // it is the map-changed signal.
       if (unitsClosed > 0) saveSyncMap(opts.statePath, map);
 
-      if (done.size > 0 || executedNow.length > 0) {
+      if (done.size > 0 || executedNow.length > 0 || dismissedSet.size > 0) {
         const byId = new Map(executedNow.map((a) => [a.id, a]));
         await commitUnderLock((fresh) => {
           fresh.actions = fresh.actions.map((a) => {
             const exec = byId.get(a.id);
             if (exec) return exec; // the executed action, receipt and all
-            return done.has(a.id) && (a.status === "suggested" || a.status === "approved")
-              ? { ...a, status: "executed" as const }
-              : a;
+            if (a.status !== "suggested" && a.status !== "approved") return a;
+            // `rejected`, never `executed`: the owner did NOT do this work, he
+            // said it was never work. Recording it as executed is the lie the
+            // readback comment above warns about.
+            if (dismissedSet.has(a.id)) return { ...a, status: "rejected" as const };
+            return done.has(a.id) ? { ...a, status: "executed" as const } : a;
           });
         });
       }
-      if (done.size > 0 || executedNow.length > 0 || unitsClosed > 0) {
+      if (done.size > 0 || executedNow.length > 0 || unitsClosed > 0 || dismissedSet.size > 0) {
         console.log(
           `[ticktick] read back ${done.size} finished, ${executedNow.length} executed-by-tick, ${unitsClosed} task(s) closed`,
         );

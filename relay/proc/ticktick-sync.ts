@@ -188,6 +188,12 @@ export async function syncToTickTick(
       .filter((e) => e.sortOrder < itemIds.length)
       .map((e) => ({ itemId: itemIds[e.sortOrder]!, actionId: e.actionId }));
 
+  // buildTaskPayload appends DISMISS_LINE last on every task, so the final slot
+  // is it. Undefined only if TickTick returned no items at all, in which case
+  // there is nothing to tick and the readback simply finds no dismissal.
+  const dismissIdFrom = (itemIds: readonly string[]): string | undefined =>
+    itemIds.length > 0 ? itemIds[itemIds.length - 1] : undefined;
+
   for (const op of ops) {
     if (op.kind === "skip") continue;
     try {
@@ -197,6 +203,7 @@ export async function syncToTickTick(
           ticktickId: created.id,
           projectId: created.projectId,
           items: trackedFrom(op.unitKey, created.itemIds),
+          dismissItemId: dismissIdFrom(created.itemIds),
         };
       } else if (op.kind === "update") {
         // reopen: the task is completed in TickTick and the list wants it back —
@@ -208,6 +215,7 @@ export async function syncToTickTick(
           ticktickId: op.ticktickId,
           projectId: op.projectId,
           items: trackedFrom(op.unitKey, written.itemIds),
+          dismissItemId: dismissIdFrom(written.itemIds),
         };
       }
     } catch (e) {
@@ -267,8 +275,8 @@ export function readbackFromTickTick(
   state: LoopState,
   map: SyncMap,
   remote: readonly RemoteTask[],
-): { ticked: string[]; closed: string[]; map: SyncMap; unitsClosed: number } {
-  const { doneActionIds, doneUnitKeys } = diffTickTickReadback(map, remote);
+): { ticked: string[]; closed: string[]; dismissed: string[]; map: SyncMap; unitsClosed: number } {
+  const { doneActionIds, doneUnitKeys, dismissedUnitKeys } = diffTickTickReadback(map, remote);
   // TWO different owner gestures, kept apart because they mean different things:
   //   ticked — the owner checked an EXECUTABLE line (invite/tool; only those are
   //            tracked). Per specs/ticktick-migration.md §1 that tick is the
@@ -277,11 +285,19 @@ export function readbackFromTickTick(
   const ticked = new Set(doneActionIds);
   const closed = new Set<string>();
 
-  const gone = new Set(doneUnitKeys);
+  //   dismissed — the owner ticked DISMISS_LINE: the row should not have been
+  //            minted. Closed exactly like `closed`, but reported separately so
+  //            the caller can write the not_a_thing label that `closed` cannot
+  //            justify (完成 is also how the owner clears noise off the list).
+  const dismissed = new Set<string>();
+
+  const tossed = new Set(dismissedUnitKeys);
+  const gone = new Set([...doneUnitKeys, ...dismissedUnitKeys]);
   for (const unit of taskUnitsFrom(state)) {
     if (!gone.has(unit.unitKey)) continue;
+    const sink = tossed.has(unit.unitKey) ? dismissed : closed;
     for (const m of unit.members) {
-      if (m.status === "suggested" || m.status === "approved") closed.add(m.id);
+      if (m.status === "suggested" || m.status === "approved") sink.add(m.id);
     }
   }
 
@@ -291,5 +307,11 @@ export function readbackFromTickTick(
   const nowMs = Date.now();
   const next: SyncMap = {};
   for (const [k, v] of Object.entries(map)) next[k] = gone.has(k) ? { ...v, done: nowMs } : v;
-  return { ticked: [...ticked], closed: [...closed], map: next, unitsClosed: gone.size };
+  return {
+    ticked: [...ticked],
+    closed: [...closed],
+    dismissed: [...dismissed],
+    map: next,
+    unitsClosed: gone.size,
+  };
 }

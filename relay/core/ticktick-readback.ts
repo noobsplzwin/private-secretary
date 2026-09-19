@@ -39,6 +39,13 @@ export interface ReadbackResult {
   doneActionIds: string[];
   /** Units whose whole task is completed or deleted — every live member is done. */
   doneUnitKeys: string[];
+  /**
+   * Units the owner DISMISSED by ticking DISMISS_LINE. Kept apart from
+   * doneUnitKeys because the two mean opposite things about the row's quality:
+   * done says nothing (完成 is also how a list gets cleared), dismissed says the
+   * row should never have been minted. Only this one is a label.
+   */
+  dismissedUnitKeys: string[];
 }
 
 /**
@@ -65,6 +72,7 @@ export function diffTickTickReadback(
 
   const doneActionIds: string[] = [];
   const doneUnitKeys: string[] = [];
+  const dismissedUnitKeys: string[] = [];
 
   for (const [unitKey, rec] of Object.entries(map)) {
     // A tombstone is a task WE completed and chose to remember (the duplicate-
@@ -78,9 +86,15 @@ export function diffTickTickReadback(
       continue;
     }
     const itemStatus = new Map((task.items ?? []).map((i) => [i.id, i.status]));
+    // Checked FIRST and exclusively: a dismissed task's other ticks are not
+    // approvals, they are whatever the owner clicked on the way out.
+    if (rec.dismissItemId && itemStatus.get(rec.dismissItemId) === 1) {
+      dismissedUnitKeys.push(unitKey);
+      continue;
+    }
     for (const tracked of rec.items ?? []) {
       if (itemStatus.get(tracked.itemId) === 1) doneActionIds.push(tracked.actionId);
     }
   }
-  return { doneActionIds, doneUnitKeys };
+  return { doneActionIds, doneUnitKeys, dismissedUnitKeys };
 }

@@ -30,6 +30,12 @@ The layout is discoverable from the tree; what is NOT discoverable:
 - No feature flags, no config system. Scan interval is
   `DEFAULT_SCAN_INTERVAL_MINUTES` (30) in `relay/core/action-item.ts`,
   env-overridable. The scan's only output is queue rows — no notifications.
+- **Every TickTick task ends with `DISMISS_LINE` ("🚫 这条不该出现").** It is the
+  owner's ONLY free quality verdict: 完成 is also how he clears noise (his own
+  words — there was no other way to get a row off the list), so a completion
+  says nothing, while ticking this says the row should never have been minted.
+  It closes the row as `rejected` and writes an `existence: not_a_thing` label.
+  Never give it an `actionId` — a tracked line is an execution approval.
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 

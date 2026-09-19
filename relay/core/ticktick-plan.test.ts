@@ -1,10 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { dueFields, buildTaskPayload, deadlineFor, shouldRenderCardUnit, isExecutableAction, wallClockLabel, type TaskUnit } from "./ticktick-plan.js";
+import { dueFields, buildTaskPayload, deadlineFor, shouldRenderCardUnit, isExecutableAction, wallClockLabel, DISMISS_LINE, type TaskUnit } from "./ticktick-plan.js";
 import type { ActionItem } from "./action-item.js";
 
 // The owner's real zone; the fixtures' -05:00 is its summer offset, so the
 // wall-clock labels below read the same either way.
 const ZONE = "America/Winnipeg";
+
+// Every task ends with the owner's dismissal line (see DISMISS_LINE). It is
+// constant chrome, so the assertions below are about the CONTENT lines and drop
+// it — `always ends with the dismissal line` is what guards its presence.
+const content = (p: { items?: ReadonlyArray<{ title: string }> }): string[] => {
+  const t = (p.items ?? []).map((i) => i.title);
+  if (t[t.length - 1] === DISMISS_LINE) t.pop();
+  return t;
+};
 
 const member = (over: Partial<ActionItem> = {}): ActionItem => ({
   id: "a1",
@@ -112,7 +121,7 @@ describe("buildTaskPayload — the task IS the unit", () => {
       }), ZONE);
     expect(built.payload.title).toBe("香港出差");
     expect(built.payload.kind).toBe("CHECKLIST");
-    expect(built.payload.items?.map((i) => i.title)).toEqual(["订机票", "订宾馆"]);
+    expect(content(built.payload)).toEqual(["订机票", "订宾馆"]);
     // Fixed medium since the ranking pass retired: card rows are executable/
     // persona-less only, and dates (never flags) drive the Today view.
     expect(built.payload.priority).toBe(3);
@@ -126,12 +135,12 @@ describe("buildTaskPayload — the task IS the unit", () => {
   it("drops the member's summary line when its steps replace it", () => {
     const built = buildTaskPayload(
       unit({ members: [member({ next_actions: ["查签证要求", " ", "收拾行李"] })] }), ZONE);
-    expect(built.payload.items?.map((i) => i.title)).toEqual(["查签证要求", "收拾行李"]);
+    expect(content(built.payload)).toEqual(["查签证要求", "收拾行李"]);
   });
 
   it("keeps the member line when there are no steps to replace it", () => {
     const built = buildTaskPayload(unit({ members: [member({ next_actions: [] })] }), ZONE);
-    expect(built.payload.items?.map((i) => i.title)).toEqual(["订机票"]);
+    expect(content(built.payload)).toEqual(["订机票"]);
   });
 
   // An executable line IS the action, not a description of it, so it survives
@@ -148,15 +157,14 @@ describe("buildTaskPayload — the task IS the unit", () => {
           }),
         ],
       }), ZONE);
-    expect(built.payload.items).toHaveLength(2);
-    expect(built.payload.items![0]!.title).toContain("k@x.com");
+    expect(content(built.payload)).toEqual([expect.stringContaining("k@x.com"), "提前发议程"]);
     expect(built.executable).toEqual([{ sortOrder: 0, actionId: "cal1" }]);
   });
 
   it("skips members that already finished", () => {
     const built = buildTaskPayload(
       unit({ members: [member({ id: "m1", status: "executed" }), member({ id: "m2", params: { title: "订宾馆" } })] }), ZONE);
-    expect(built.payload.items?.map((i) => i.title)).toEqual(["订宾馆"]);
+    expect(content(built.payload)).toEqual(["订宾馆"]);
   });
 });
 
@@ -180,7 +188,7 @@ describe("buildTaskPayload — executable lines", () => {
   // Attendee-less events are auto-created (spec §2), so they are not a step.
   it("an attendee-less event produces no line at all", () => {
     const built = buildTaskPayload(unit({ members: [cal([])] }), ZONE);
-    expect(built.payload.items ?? []).toHaveLength(0);
+    expect(content(built.payload)).toHaveLength(0);
     expect(built.executable).toEqual([]);
   });
 
@@ -215,7 +223,7 @@ describe("buildTaskPayload — executable lines", () => {
   it("a legacy reply card renders no line at all", () => {
     const built = buildTaskPayload(
       unit({ members: [member({ id: "r1", action_type: "reply", headline: "回复报价", next_actions: ["不该出现"] })] }), ZONE);
-    expect(built.payload.items ?? []).toEqual([]);
+    expect(content(built.payload)).toEqual([]);
     expect(built.executable).toEqual([]);
   });
 });
@@ -311,7 +319,7 @@ describe("stale fields and dropped steps", () => {
       }),
       ZONE,
     );
-    expect(built.payload.items?.map((i) => i.title)).toEqual([
+    expect(content(built.payload)).toEqual([
       "确认 franklin/amlogic 用同一 init 文件",
       "催 Ezra 授权仓库访问",
     ]);
@@ -324,7 +332,7 @@ describe("stale fields and dropped steps", () => {
       }),
       ZONE,
     );
-    expect(built.payload.items ?? []).toEqual([]);
+    expect(content(built.payload)).toEqual([]);
   });
 
   // REGRESSION: update_task is a PARTIAL patch, so an omitted field keeps
@@ -338,15 +346,32 @@ describe("stale fields and dropped steps", () => {
     ).payload;
     expect(checklist.kind).toBe("CHECKLIST");
     expect(checklist.content).toBe("");
-    expect(checklist.items).toHaveLength(1);
+    expect(content(checklist)).toHaveLength(1);
 
-    const text = buildTaskPayload(
+    // A card that contributes no content line is STILL a checklist now, because
+    // the dismissal line is always there — the owner must be able to throw away
+    // a row whatever it contains.
+    const bare = buildTaskPayload(
       unit({ members: [member({ action_type: "ignore" })] }),
       ZONE,
     ).payload;
-    expect(text.kind).toBe("TEXT");
-    expect(text.desc).toBe("");
-    expect(text.items).toEqual([]);
+    expect(bare.kind).toBe("CHECKLIST");
+    expect(bare.content).toBe("");
+    expect(bare.items?.map((i) => i.title)).toEqual([DISMISS_LINE]);
+  });
+
+  // The owner's only free verdict: every row, however empty, carries the line
+  // that says "this should never have been here", and it is never executable.
+  it("always ends with the dismissal line, untracked", () => {
+    for (const u of [
+      unit({ members: [member({ next_actions: ["一步"] })] }),
+      unit({ members: [member({ action_type: "ignore" })] }),
+    ]) {
+      const built = buildTaskPayload(u, ZONE);
+      const items = built.payload.items ?? [];
+      expect(items[items.length - 1]!.title).toBe(DISMISS_LINE);
+      expect(built.executable.some((e) => e.sortOrder === items.length - 1)).toBe(false);
+    }
   });
 });
 

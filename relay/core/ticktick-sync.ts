@@ -28,6 +28,10 @@ export interface SyncRecord {
   // specs/ticktick-migration.md §1 knows an item was ticked but not what it
   // was supposed to execute, so a tick would silently do nothing.
   items?: TrackedApproval[];
+  // The DISMISS_LINE item's id. Tracked apart from `items` because it approves
+  // nothing — it is the owner saying the row should not exist, and the readback
+  // must never mistake it for an executable line.
+  dismissItemId?: string;
   // The task's title, so a later cycle can recognise "this to-do again" by
   // CONTENT when the key has moved on. Absent on records written before this
   // field existed — those simply cannot be matched, same behaviour as before.
@@ -223,6 +227,7 @@ export interface SyncResult {
   ticktickId: string;
   projectId: string;
   items?: TrackedApproval[];
+  dismissItemId?: string;
 }
 
 /** The map after `ops` have been applied. Completed units leave the map. */

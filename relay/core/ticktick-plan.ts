@@ -22,6 +22,14 @@
 import type { ActionItem } from "./action-item.js";
 import { zoneOffsetAt } from "./when.js";
 import { ENGINE_TAG, type TickTickTaskPayload } from "./ticktick.js";
+
+// The owner's ONLY way to say "this should never have been here". Before it, a
+// row had one exit — 完成 — so dismissing noise and finishing real work produced
+// the identical event, and 353 of 400 completions were uninterpretable. Ticking
+// this is one tap, the same gesture, but lands in the other bucket: it closes
+// the task AND writes a not_a_thing label. Carries NO actionId on purpose — a
+// tracked line is an execution approval, and dismissal must never send anything.
+export const DISMISS_LINE = "\u{1F6AB} 这条不该出现";
 import {
   buildInviteLabel,
   buildToolLabel,
@@ -365,6 +373,10 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
     }
   }
 
+  // Appended LAST on every task, so its slot is itemIds[length-1] and the sync
+  // can find it positionally without tracking it as an approval.
+  lines.push({ title: DISMISS_LINE, status: 0, sortOrder: lines.length });
+
   // A name the drafter used in an addressing position that is in neither the
   // thread nor the roster (core/name-check.ts). Surfaced at the TOP of the
   // notes, because the steps below may tell the owner to contact that person —
@@ -400,14 +412,12 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
     // none — while the hash gate reported "in sync", because the hash only
     // describes what we MEANT to send. The list Leo reads was showing content
     // the engine no longer believed.
-    ...(lines.length > 0
-      ? {
-          kind: "CHECKLIST" as const,
-          desc: note,
-          content: "",
-          items: lines.map(({ actionId: _a, ...i }) => i),
-        }
-      : { kind: "TEXT" as const, content: note, desc: "", items: [] }),
+    // Always CHECKLIST: DISMISS_LINE guarantees at least one item, so the old
+    // TEXT branch for an item-less task is now unreachable.
+    kind: "CHECKLIST" as const,
+    desc: note,
+    content: "",
+    items: lines.map(({ actionId: _a, ...i }) => i),
   };
   const due = deadline ? dueFields(deadline, zone) : null;
   if (due) {
