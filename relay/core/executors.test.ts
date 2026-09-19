@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { canAutoExecute, ALWAYS_CONFIRM } from "./executors.js";
+import { canAutoExecute, ALWAYS_CONFIRM,
+  isSystemicExecuteFailure,
+} from "./executors.js";
 import type { ActionItem } from "./action-item.js";
 
 function item(overrides: Partial<ActionItem> = {}): ActionItem {
@@ -98,5 +100,21 @@ describe("calendar auto-creation (owner removed the approval gate 2026-09-14)", 
   it("still requires a human for reply / relay / forward / tool", () => {
     for (const t of ["reply", "relay", "forward", "tool"] as const) expect(ALWAYS_CONFIRM.has(t)).toBe(true);
     expect(ALWAYS_CONFIRM.has("calendar")).toBe(false);
+  });
+});
+
+describe("isSystemicExecuteFailure (641 identical log lines in under an hour)", () => {
+  it("calls an expired credential systemic — no card can succeed past it", () => {
+    expect(isSystemicExecuteFailure(new Error("OAuth refresh failed for …: HTTP 400"))).toBe(true);
+    expect(isSystemicExecuteFailure(new Error('{"error":"invalid_grant"}'))).toBe(true);
+    expect(isSystemicExecuteFailure(new Error("no Calendar inserter for mailbox leo@taiv.tv"))).toBe(true);
+    expect(isSystemicExecuteFailure(new Error("Request failed: 403 Forbidden"))).toBe(true);
+  });
+
+  // One malformed card must never stop the others from being created.
+  it("leaves a per-card fault per-card", () => {
+    expect(isSystemicExecuteFailure(new Error("invalid start time"))).toBe(false);
+    expect(isSystemicExecuteFailure(new Error("conflict with an existing event"))).toBe(false);
+    expect(isSystemicExecuteFailure("something odd")).toBe(false);
   });
 });

@@ -32,7 +32,7 @@ import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { GroupBook } from "../core/wechat-groups.js";
 import type { ActionItem } from "../core/action-item.js";
-import { canAutoExecute } from "../core/executors.js";
+import { canAutoExecute, isSystemicExecuteFailure } from "../core/executors.js";
 import {
   SILENT_RETIRE_DAYS,
   cardsAnsweredSince,
@@ -1064,6 +1064,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           console.log(`[calendar] auto-created: "${String(action.params.title ?? action.id)}" (${r.receipt?.ref ?? "no ref"})`);
         }
       } catch (e) {
+        // A SYSTEMIC fault stops the pass: an expired credential fails every
+        // card identically and no amount of retrying changes that. Left
+        // unchecked it produced 641 identical log lines in under an hour on
+        // 2026-09-19, which is both noise and wasted tick time. A per-card
+        // fault stays per-card — one bad event must not block the others.
+        if (isSystemicExecuteFailure(e)) {
+          console.log(
+            `[calendar] auto-create ABORTED for this tick (setup fault, ${auto.length - autoCalendarCount} card(s) left) — ${(e as Error).message.split("\n")[0]}`,
+          );
+          break;
+        }
         console.log(`[calendar] auto-create failed — ${(e as Error).message.split("\n")[0]}`);
       }
     }

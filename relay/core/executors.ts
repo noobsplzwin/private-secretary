@@ -44,3 +44,21 @@ export function canAutoExecute(a: ActionItem): boolean {
   // time_confirmed. A guessed hour fails here and never reaches the API.
   return missingInfo(a).length === 0;
 }
+
+/**
+ * Is this failure about the SETUP rather than this particular card?
+ *
+ * Auto-creation retried every eligible card on every tick, and when the
+ * calendar's OAuth token expired on 2026-09-19 that produced 641 identical log
+ * lines in under an hour — two cards, two accounts, a tick a minute, all
+ * hammering a dead credential. None of it could ever have succeeded: the fault
+ * was the token, not the card.
+ *
+ * A systemic failure aborts the whole pass for that tick and is reported once.
+ * Anything else stays per-card, because one malformed card must not stop the
+ * others from being created.
+ */
+export function isSystemicExecuteFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /OAuth|invalid_grant|refresh failed|no Calendar inserter|not configured|unauthor|forbidden|401|403/i.test(msg);
+}
