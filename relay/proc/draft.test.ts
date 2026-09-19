@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildPersonaResolver, draftActions, type LlmCaller } from "./draft.js";
+import { buildPersonaResolver, draftActions, type DraftDeps, type LlmCaller } from "./draft.js";
 import { buildDraftRequest } from "./draft-prompt.js";
 import type { DraftedAction } from "./draft-prompt.js";
 import type { InboundMessage, Persona } from "../core/types.js";
@@ -826,5 +826,57 @@ describe("description guidance: constraints are instructions, strategy is not", 
   it("excludes the strategy framing the owner strikes out", () => {
     expect(system()).toMatch(/NOT the strategy/);
     expect(system()).toMatch(/fundraising/);
+  });
+});
+
+describe("what the pipeline could not read is named, not handed back", () => {
+  const resolver = buildPersonaResolver([]);
+  const deps = (llm: LlmCaller): DraftDeps => ({
+    llm,
+    resolvePersona: resolver.resolve,
+    knownPersonaKeys: resolver.keys,
+    now: () => "2026-09-19T12:00:00Z",
+  });
+  const grab = (): { seen: () => string; llm: LlmCaller } => {
+    let text = "";
+    return {
+      seen: () => text,
+      llm: async (req) => {
+        text = req.userText;
+        return [];
+      },
+    };
+  };
+
+  // 2026-09-19: the decoder's decrypted copy of message_resource.db had been
+  // stale since June, so every image failed silently. To the model a failed
+  // decode and a message with no image look identical — both 「[图片]
+  // (local_id=N)」 — so it did the only thing left and told Leo to go look.
+  it("names an image whose decode failed", async () => {
+    const g = grab();
+    const withImage = msg({ attachments: [{ id: "49", kind: "image", name: "wechat-image local_id=49" }] });
+    await draftActions([withImage], { ...deps(g.llm), resolveImages: async () => [] });
+    expect(g.seen()).toContain("ATTACHMENTS YOU CANNOT SEE");
+    expect(g.seen()).toContain("local_id=49");
+  });
+
+  it("names a voice message, which is never transcribed at all", async () => {
+    const g = grab();
+    await draftActions([msg({ text: "[语音 16.2s] (local_id=25)" })], deps(g.llm));
+    expect(g.seen()).toContain("ATTACHMENTS YOU CANNOT SEE");
+    expect(g.seen()).toContain("语音 16.2s");
+  });
+
+  it("says nothing when every image decoded", async () => {
+    const g = grab();
+    const withImage = msg({ attachments: [{ id: "1", kind: "image", name: "img" }] });
+    await draftActions([withImage], { ...deps(g.llm), resolveImages: async () => ["/decoded/a.png"] });
+    expect(g.seen()).not.toContain("ATTACHMENTS YOU CANNOT SEE");
+  });
+
+  it("says nothing for a plain text message", async () => {
+    const g = grab();
+    await draftActions([msg({ text: "就这样吧" })], deps(g.llm));
+    expect(g.seen()).not.toContain("ATTACHMENTS YOU CANNOT SEE");
   });
 });

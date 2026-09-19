@@ -449,6 +449,15 @@ export function buildDraftRequest(opts: {
   // 2026-07-30 message onto 2025-01-23. Both absent = no CURRENT TIME line.
   now?: string;
   nowLocal?: string;
+  /**
+   * Attachments that reached the batch but could NOT be decoded, so their
+   * content is absent from the text above. Named explicitly because an
+   * undecoded image and a message with no image look identical to the model:
+   * both are just 「[图片] (local_id=N)」. Silence let three months of failed
+   * decodes turn into 「查看X的图片」 cards — the engine handing its own
+   * reading back to the owner.
+   */
+  unreadableAttachments?: string[];
 }): DraftRequest {
   const personaBlock = describePersona(opts.persona);
   const msgBlock = opts.messages.map(describeMessage).join("\n\n");
@@ -463,6 +472,12 @@ prose. NEVER name anyone who is neither in this list nor in the thread: the
 model once wrote "回 Fabian" on a card whose sender was Cody, and there is no
 Fabian. If you do not know a name, describe the role ("回对方") instead of
 inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.knownPersonaKeys.join(", ")}`
+      : "";
+  // What the pipeline could not read. See ITEM_STANDARD rule 8: this is a gap
+  // in the pipeline, never a task for Leo.
+  const unreadableBlock =
+    opts.unreadableAttachments && opts.unreadableAttachments.length > 0
+      ? `\n\nATTACHMENTS YOU CANNOT SEE — the decode failed, so their content is NOT in the text above:\n${opts.unreadableAttachments.map((a) => `- ${a}`).join("\n")}\nDo NOT emit a card asking Leo to look at, open, or listen to these. That is this engine's job and it failed; say so in the reason of whatever you do emit, and judge only on the text you CAN read. If the text alone supports no action, emit nothing.`
       : "";
   // Project block: grounds the action in what's actually open on the project.
   // It is CONTEXT to read, NOT new facts to invent — same rule as thread context.
@@ -488,7 +503,7 @@ inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.
   // userText carries ONLY per-call content. Every stable block (catalog,
   // known people, date rules, Leo profile) is in `system` so the prefix is
   // byte-identical between calls and reads from cache instead of rewriting.
-  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
+  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}${unreadableBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
   // The connected MCP tools the model may route a tool card to.
   const toolHint =
     opts.toolKeys && opts.toolKeys.length > 0

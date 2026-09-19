@@ -225,6 +225,34 @@ export async function draftActions(
     // the same thing until the owner travelled or this ran on a server, at
     // which point every "tomorrow 9am" resolved to the wrong day, silently.
     const nowLocal = nowLocalIn(nowIso, ownerZone);
+    // WHAT WE COULD NOT READ — computed BEFORE the request is assembled, because
+    // the prompt has to carry it. An attachment that arrived but whose content
+    // did not is named for the model; otherwise a failed decode and a message
+    // with no image are indistinguishable to it (both are just
+    // 「[图片] (local_id=N)」) and the only move left is to tell Leo to go look.
+    // Measured 2026-09-19: the decoder's decrypted copy of message_resource.db
+    // had been stale since June, so EVERY image had failed for three months in
+    // silence and produced 「查看X的图片」 cards.
+    const unreadable: string[] = [];
+    let imagePaths: string[] = [];
+    const imageAttachments = batch.flatMap((m) => (m.attachments ?? []).filter((a) => a.kind === "image"));
+    if (deps.resolveImages && imageAttachments.length > 0) {
+      imagePaths = (
+        await Promise.all(batch.map((m) => deps.resolveImages!(m).catch(() => [] as string[])))
+      ).flat();
+      unreadable.push(
+        ...imageAttachments.slice(imagePaths.length).map((a) => `${a.name ?? "image"}（图片，解码失败）`),
+      );
+    }
+    // Voice is never decoded at all: the WeChat MCP server exposes
+    // transcribe_voice and nothing calls it (it needs openai-whisper, which is
+    // not installed). Until it is, say so rather than leave the model to invent
+    // a reason for making Leo press play.
+    for (const m of batch) {
+      for (const match of m.text.matchAll(/\[语音\s*([\d.]+)s\]/g)) {
+        unreadable.push(`语音 ${match[1]}s（未转写）`);
+      }
+    }
     const req = buildDraftRequest({
       persona,
       messages: batch,
@@ -239,23 +267,11 @@ export async function draftActions(
       projectContext,
       projectCatalog,
       relatedContext,
+      ...(unreadable.length > 0 ? { unreadableAttachments: unreadable } : {}),
       now: nowIso,
       nowLocal,
     });
-    // Decode this batch's image attachments to local paths so the model can
-    // SEE them (vision mode). A failed decode is skipped, not fatal — the draft
-    // proceeds text-only. Only resolve when there are image attachments.
-    const hasImages = batch.some((m) => (m.attachments ?? []).some((a) => a.kind === "image"));
-    if (deps.resolveImages && hasImages) {
-      const paths = (
-        await Promise.all(
-          batch.map((m) =>
-            deps.resolveImages!(m).catch(() => [] as string[]),
-          ),
-        )
-      ).flat();
-      if (paths.length > 0) req.imagePaths = paths;
-    }
+    if (imagePaths.length > 0) req.imagePaths = imagePaths;
     let suggested: DraftedAction[];
     try {
       suggested = await deps.llm(req);

@@ -66,12 +66,22 @@ async function resolveImages(m: InboundMessage): Promise<string[]> {
   const imgs = (m.attachments ?? []).filter((a) => a.kind === "image");
   const paths: string[] = [];
   for (const a of imgs) {
+    // A failure is REPORTED, not swallowed. It was swallowed until 2026-09-19,
+    // and that is how the decoder's decrypted copy of message_resource.db could
+    // sit stale since June while every image silently failed: the only symptom
+    // was 「查看X的图片」 cards, which read as a judgment call rather than a
+    // broken pipe. The draft still proceeds text-only — draft.ts now names the
+    // undecodable attachment to the model so it does not hand the reading back.
     try {
       const out = await wechatDecodeImage(m.senderHandle, Number(a.id));
       const match = out.match(/\/[^\s"']+\.(?:jpg|jpeg|png|gif|webp)/i);
-      if (match && existsSync(match[0])) paths.push(match[0]);
-    } catch {
-      /* skip this image — draft text-only */
+      if (match && existsSync(match[0])) {
+        paths.push(match[0]);
+      } else {
+        console.log(`[vision] decode returned no file — ${m.senderHandle} local_id=${a.id}: ${(out.split("\n")[0] ?? "").slice(0, 120)}`);
+      }
+    } catch (e) {
+      console.log(`[vision] decode FAILED — ${m.senderHandle} local_id=${a.id}: ${((e as Error).message.split("\n")[0] ?? "").slice(0, 120)}`);
     }
   }
   return paths;
