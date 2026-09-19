@@ -400,9 +400,24 @@ function resolveGmailMailbox(action: ActionItem): string | null {
 // keeps single-account setups (the common case) working before the user has
 // written a config, without ever GUESSING between several accounts.
 export function resolveCalendarMailbox(action: ActionItem, available?: readonly string[]): string | null {
-  if (typeof action.params.mailbox === "string") return action.params.mailbox;
+  // params.mailbox is honoured ONLY when a calendar for it is actually wired.
+  //
+  // That field is written by the drafter for a different purpose — which
+  // mailbox a Gmail-sourced REPLY should be sent from — and a calendar card
+  // born in a Gmail thread inherits it. Taking it literally meant asking for a
+  // Calendar client keyed "leo@taiv.tv" when the only one configured is the
+  // owner's calendar, so the card could never execute. It went unnoticed while
+  // calendars waited to be ticked; the moment auto-creation shipped
+  // (2026-09-14) the two best cards in the queue — both time_confirmed, both
+  // above the confidence bar — failed on every tick with "no Calendar inserter
+  // for mailbox leo@taiv.tv".
+  //
+  // An explicit, WIRED mailbox still wins: that is a real choice of calendar.
+  const asked = action.params.mailbox;
+  if (typeof asked === "string" && available?.includes(asked)) return asked;
   const configured = loadIdentity().calendarMailbox;
   if (configured) return configured;
+  if (typeof asked === "string") return asked;
   return available && available.length === 1 ? available[0]! : null;
 }
 

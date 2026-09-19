@@ -9,6 +9,7 @@ import {
   type ExecuteDeps,
   type GmailDrafter,
   type SlackSender,
+  resolveCalendarMailbox,
 } from "./execute.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { CalendarEvent } from "../io/calendar-api.js";
@@ -471,5 +472,51 @@ describe("toRfc3339 — datetime normalization (Calendar HTTP 400 guard)", () =>
   // A bogus zone must not silently produce a plausible-looking wrong offset.
   it("falls back to explicit UTC for an unknown zone", () => {
     expect(toRfc3339("2026-08-05T09:00:00", "Not/AZone")).toBe("2026-08-05T09:00:00Z");
+  });
+});
+
+describe("resolveCalendarMailbox: params.mailbox is the REPLY mailbox, not a calendar", () => {
+  const act = (mailbox?: string) =>
+    ({
+      id: "c1",
+      source_message_id: "gmail:abc",
+      action_type: "calendar",
+      target: {},
+      reason: "agreed in thread",
+      confidence: 0.95,
+      params: { title: "Paul / Taiv Meeting", ...(mailbox ? { mailbox } : {}) },
+      status: "suggested",
+      created_at: "2026-09-19T00:00:00Z",
+    }) as ActionItem;
+
+  // A calendar card born in a Gmail thread inherits params.mailbox from the
+  // reply path. Taking it literally asked for a Calendar client keyed
+  // "leo@taiv.tv" when only the owner's calendar is wired — invisible while
+  // calendars waited to be ticked, fatal once auto-creation shipped.
+  it("falls back to the configured calendar when the asked-for mailbox has none", () => {
+    _setIdentityForTest({ primaryEmail: "leo@taiv.tv", calendarMailbox: "owner@gmail.com" });
+    try {
+      expect(resolveCalendarMailbox(act("leo@taiv.tv"), ["owner@gmail.com"])).toBe("owner@gmail.com");
+    } finally {
+      _resetIdentity();
+    }
+  });
+
+  it("honours an explicit mailbox that IS wired — that is a real choice", () => {
+    _setIdentityForTest({ primaryEmail: "leo@taiv.tv", calendarMailbox: "owner@gmail.com" });
+    try {
+      expect(resolveCalendarMailbox(act("work@corp.com"), ["owner@gmail.com", "work@corp.com"])).toBe("work@corp.com");
+    } finally {
+      _resetIdentity();
+    }
+  });
+
+  it("uses the configured calendar when the card names none", () => {
+    _setIdentityForTest({ primaryEmail: "leo@taiv.tv", calendarMailbox: "owner@gmail.com" });
+    try {
+      expect(resolveCalendarMailbox(act(), ["owner@gmail.com"])).toBe("owner@gmail.com");
+    } finally {
+      _resetIdentity();
+    }
   });
 });
