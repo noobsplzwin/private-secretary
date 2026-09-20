@@ -3,12 +3,13 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "description": "Personal Secretary relay \u2014 bridges Slack, Gmail, and WeChat. MVP runs inside Claude Code; relay/core is the pure, shared decision logic.",
+  "description": "Personal Secretary relay — bridges Slack, Gmail, and WeChat. MVP runs inside Claude Code; relay/core is the pure, shared decision logic.",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "relay": "tsx relay/cli.ts"
+    "relay": "tsx relay/cli.ts",
+    "eval": "tsx scripts/eval-judge.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.30.0",
