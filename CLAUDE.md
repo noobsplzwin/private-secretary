@@ -82,6 +82,12 @@ call, 2026-09-12.
 - **Messages are never text-only.** READ image/file attachments before deciding
   intent — the point is often in a screenshot, and missing it inverts the
   intent (the GST25A12 lesson). `InboundMessage.attachments` carries them.
+- **A decode failure must not become a to-do** (owner, 2026-09-20). When an
+  attachment fails to decode, the drafter is told so — and a card that merely
+  tells Leo to go look at it is dropped by `core/unreadable-gate.ts`, because
+  the prompt rule alone did not hold. Narrow by design: it fires only when
+  something really was unreadable, and only on a headline that opens with a
+  consumption verb AND names the medium.
 - **A message involving a third party** → cross-check recent Slack/Gmail history
   with that person first; the back-story often changes the right action.
 - **`reply` language mirrors the SENDER's language.** relay/forward use the

@@ -29,6 +29,7 @@ import { machineTimeZone } from "../io/settings.js";
 import { buildDraftRequest, type DraftedAction } from "./draft-prompt.js";
 import { selectProjects, renderProjectContext, renderProjectCatalog, type Project } from "../core/project.js";
 import { detectMentions } from "../core/mentions.js";
+import { isConsumeUnreadableCard } from "../core/unreadable-gate.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
 import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
@@ -304,6 +305,18 @@ export async function draftActions(
       const claimed: string = s.action_type;
       if (claimed === "reply" || claimed === "relay" || claimed === "forward") {
         senderErrors.push(`dropped ${claimed}: message drafting is retired — emit a task instead`);
+        continue;
+      }
+      // DECODE FAILED → NO CARD (owner, 2026-09-20). When this batch carried
+      // something the pipeline could not read, a card that just tells Leo to go
+      // look at it is the engine handing him its own failure. The prompt
+      // already forbids this and the model does it anyway — four of the first
+      // ten rows he threw away with 🚫 were exactly this shape.
+      // Narrow on purpose: see core/unreadable-gate.ts.
+      if (unreadable.length > 0 && isConsumeUnreadableCard(s.headline ?? "")) {
+        senderErrors.push(
+          `dropped "${s.headline}": decode failed (${unreadable.join("; ")}), so this card only asks Leo to read what the engine could not`,
+        );
         continue;
       }
       const target = s.target ?? {};
