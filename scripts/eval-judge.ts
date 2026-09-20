@@ -68,6 +68,19 @@ const pairs: ScoredPair[] = [...truth.entries()].map(([actionId, owner]) => ({
 
 const card = scoreJudge(pairs);
 
+// --check: machine-readable readiness, for the scheduled watcher. Exit 0 the
+// moment BOTH classes have enough owner labels to score a judge against, exit 1
+// while they do not. Says the counts either way so a log line is never mute.
+if (process.argv.includes("--check")) {
+  const counts = VERDICTS.map((v) => `${v}=${card.perClass[v].n}/${MIN_PER_CLASS}`).join(" ");
+  if (card.enoughData) {
+    console.log(`READY ${counts}`);
+    process.exit(0);
+  }
+  console.log(`WAITING ${counts}`);
+  process.exit(1);
+}
+
 console.log("");
 console.log("═══ 裁判成绩单 ═══");
 console.log(`裁判：BASELINE（闭眼全判 "${majority}"）— 真裁判尚未实现`);
