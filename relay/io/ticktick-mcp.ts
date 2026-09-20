@@ -130,9 +130,14 @@ export function createTickTickReader(opts: TickTickToolOptions): TickTickReader 
         if (typeof o.id !== "string") return [];
         const items = Array.isArray(o.items)
           ? o.items.flatMap((i) => {
-              const it = i as { id?: unknown; status?: unknown };
+              const it = i as { id?: unknown; status?: unknown; title?: unknown };
               return typeof it.id === "string"
-                ? [{ id: it.id, status: typeof it.status === "number" ? it.status : 0 }]
+                ? [{
+                    id: it.id,
+                    status: typeof it.status === "number" ? it.status : 0,
+                    // The dismissal line is recognised by title (see readback).
+                    ...(typeof it.title === "string" ? { title: it.title } : {}),
+                  }]
                 : [];
             })
           : [];

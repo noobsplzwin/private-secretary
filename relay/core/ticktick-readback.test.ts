@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { diffTickTickReadback, type RemoteTask } from "./ticktick-readback.js";
 import type { SyncMap } from "./ticktick-sync.js";
+import { DISMISS_LINE } from "./ticktick-plan.js";
 
 const map: SyncMap = {
   u1: {
@@ -15,10 +16,10 @@ const map: SyncMap = {
   u2: { ticktickId: "tt2", projectId: "p", hash: "h" },
 };
 
-const task = (id: string, items: Array<[string, number]> = []): RemoteTask => ({
+const task = (id: string, items: Array<[string, number, string?]> = []): RemoteTask => ({
   id,
   status: 0,
-  items: items.map(([i, status]) => ({ id: i, status })),
+  items: items.map(([i, status, title]) => ({ id: i, status, ...(title ? { title } : {}) })),
 });
 
 describe("diffTickTickReadback", () => {
@@ -39,12 +40,8 @@ describe("diffTickTickReadback", () => {
   // dismissed task's other ticks are whatever he clicked on the way out, and
   // executing one would send something he has just called a mistake.
   it("reports a dismissal and suppresses that task's other ticks", () => {
-    const withDismiss: SyncMap = {
-      ...map,
-      u1: { ...map.u1!, dismissItemId: "ix" },
-    };
-    const r = diffTickTickReadback(withDismiss, [
-      task("tt1", [["i1", 1], ["i2", 0], ["ix", 1]]),
+    const r = diffTickTickReadback(map, [
+      task("tt1", [["i1", 1], ["i2", 0], ["ix", 1, DISMISS_LINE]]),
       task("tt2"),
     ]);
     expect(r.dismissedUnitKeys).toEqual(["u1"]);
@@ -55,9 +52,8 @@ describe("diffTickTickReadback", () => {
   // Untouched, it is inert — the row behaves exactly as it did before the line
   // existed, so adding it to every task changes nothing until it is ticked.
   it("is inert while the dismissal line is unticked", () => {
-    const withDismiss: SyncMap = { ...map, u1: { ...map.u1!, dismissItemId: "ix" } };
-    const r = diffTickTickReadback(withDismiss, [
-      task("tt1", [["i1", 1], ["ix", 0]]),
+    const r = diffTickTickReadback(map, [
+      task("tt1", [["i1", 1], ["ix", 0, DISMISS_LINE]]),
       task("tt2"),
     ]);
     expect(r.dismissedUnitKeys).toEqual([]);

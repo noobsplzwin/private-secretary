@@ -17,13 +17,14 @@
 // specs/ticktick-migration.md §1), not something to slip in behind a checkbox.
 
 import type { SyncMap } from "./ticktick-sync.js";
+import { DISMISS_LINE } from "./ticktick-plan.js";
 
 /** The shape we read back — TickTick's task, narrowed to what matters. */
 export interface RemoteTask {
   id: string;
   /** 0 active, 2 completed. */
   status: number;
-  items?: ReadonlyArray<{ id: string; status: number }>;
+  items?: ReadonlyArray<{ id: string; status: number; title?: string }>;
   // For ORPHAN reconciliation (core/ticktick-sync.ts): a live remote task no map
   // record references. The map has lost its memory three separate ways now — a
   // regeneration wiping state, the readback deleting tombstones (a same-day bug
@@ -86,9 +87,15 @@ export function diffTickTickReadback(
       continue;
     }
     const itemStatus = new Map((task.items ?? []).map((i) => [i.id, i.status]));
-    // Checked FIRST and exclusively: a dismissed task's other ticks are not
-    // approvals, they are whatever the owner clicked on the way out.
-    if (rec.dismissItemId && itemStatus.get(rec.dismissItemId) === 1) {
+    // Matched by TITLE, not by a remembered id. Our own sync replaces the
+    // checklist on every update, which MINTS NEW ITEM IDS (the same reason a
+    // tracked id going missing is not treated as done, below), so an id
+    // recorded at write time goes stale on the next push — and TickTick's
+    // create/update response does not reliably echo the items at all, so there
+    // was often no id to record. DISMISS_LINE is a constant we control, so the
+    // title is the stable handle, and it works on tasks already carrying the
+    // line without waiting for a re-sync.
+    if ((task.items ?? []).some((i) => i.title === DISMISS_LINE && i.status === 1)) {
       dismissedUnitKeys.push(unitKey);
       continue;
     }

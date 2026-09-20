@@ -188,12 +188,6 @@ export async function syncToTickTick(
       .filter((e) => e.sortOrder < itemIds.length)
       .map((e) => ({ itemId: itemIds[e.sortOrder]!, actionId: e.actionId }));
 
-  // buildTaskPayload appends DISMISS_LINE last on every task, so the final slot
-  // is it. Undefined only if TickTick returned no items at all, in which case
-  // there is nothing to tick and the readback simply finds no dismissal.
-  const dismissIdFrom = (itemIds: readonly string[]): string | undefined =>
-    itemIds.length > 0 ? itemIds[itemIds.length - 1] : undefined;
-
   for (const op of ops) {
     if (op.kind === "skip") continue;
     try {
@@ -203,7 +197,6 @@ export async function syncToTickTick(
           ticktickId: created.id,
           projectId: created.projectId,
           items: trackedFrom(op.unitKey, created.itemIds),
-          dismissItemId: dismissIdFrom(created.itemIds),
         };
       } else if (op.kind === "update") {
         // reopen: the task is completed in TickTick and the list wants it back —
@@ -215,7 +208,6 @@ export async function syncToTickTick(
           ticktickId: op.ticktickId,
           projectId: op.projectId,
           items: trackedFrom(op.unitKey, written.itemIds),
-          dismissItemId: dismissIdFrom(written.itemIds),
         };
       }
     } catch (e) {
