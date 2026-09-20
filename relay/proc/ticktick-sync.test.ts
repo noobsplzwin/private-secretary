@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readbackFromTickTick, syncToTickTick, cardRows, taskUnitsFrom, type TickTickWriter } from "./ticktick-sync.js";
+import { DISMISS_LINE } from "../core/ticktick-plan.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { LoopState } from "../io/state.js";
@@ -153,6 +154,27 @@ describe("syncToTickTick", () => {
     expect(r.closed).toEqual([]);
     expect(r.unitsClosed).toBe(0);
     expect(r.map).toEqual(map);
+  });
+
+  // REGRESSION: dismissal must NOT tombstone. A tombstone says "settled with
+  // TickTick", and a dismissed task is still sitting on the owner's list —
+  // tombstoning it first stranded 24 rows visible-but-ignored, because the
+  // readback skips tombstones and the diff no longer wants them, so no complete
+  // op was ever sent and a second tick did nothing.
+  it("read-back reports a dismissal WITHOUT tombstoning the task", () => {
+    const st = grouped();
+    const map = { T1: { ticktickId: "tt1", projectId: "p", hash: "h" } };
+    const active = [{
+      id: "tt1",
+      status: 0,
+      items: [{ id: "ix", status: 1, title: DISMISS_LINE }],
+    }];
+    const r = readbackFromTickTick(st, map, active);
+    expect(r.dismissed).toEqual(st.actions.map((a) => a.id));
+    expect(r.closed).toEqual([]);
+    expect(r.ticked).toEqual([]);
+    // The ordinary complete path tombstones it, once the row is actually gone.
+    expect(r.map.T1!.done).toBeUndefined();
   });
 
   it("read-back leaves an active task alone", () => {

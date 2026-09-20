@@ -284,9 +284,17 @@ export function readbackFromTickTick(
   const dismissed = new Set<string>();
 
   const tossed = new Set(dismissedUnitKeys);
-  const gone = new Set([...doneUnitKeys, ...dismissedUnitKeys]);
+  // Dismissed units are closed here but NOT tombstoned. The tombstone means
+  // "this row is settled with TickTick", and for a dismissal it is not: the
+  // task is still sitting on the owner's list. Tombstoning it first was a real
+  // bug — a tombstoned record is skipped by the readback and no longer wanted
+  // by the diff, so the task was stranded visible forever and a second tick did
+  // nothing. Left un-tombstoned, its members go `rejected`, the unit drops out
+  // of the desired list, and the ORDINARY complete path removes it from
+  // TickTick and tombstones it then, once the row is actually gone.
+  const gone = new Set(doneUnitKeys);
   for (const unit of taskUnitsFrom(state)) {
-    if (!gone.has(unit.unitKey)) continue;
+    if (!gone.has(unit.unitKey) && !tossed.has(unit.unitKey)) continue;
     const sink = tossed.has(unit.unitKey) ? dismissed : closed;
     for (const m of unit.members) {
       if (m.status === "suggested" || m.status === "approved") sink.add(m.id);
