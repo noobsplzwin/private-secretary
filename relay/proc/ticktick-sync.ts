@@ -267,7 +267,7 @@ export function readbackFromTickTick(
   state: LoopState,
   map: SyncMap,
   remote: readonly RemoteTask[],
-): { ticked: string[]; closed: string[]; dismissed: string[]; map: SyncMap; unitsClosed: number } {
+): { ticked: string[]; closed: string[]; dismissed: string[]; closedUnitKeys: string[]; map: SyncMap; unitsClosed: number } {
   const { doneActionIds, doneUnitKeys, dismissedUnitKeys } = diffTickTickReadback(map, remote);
   // TWO different owner gestures, kept apart because they mean different things:
   //   ticked — the owner checked an EXECUTABLE line (invite/tool; only those are
@@ -311,6 +311,10 @@ export function readbackFromTickTick(
     ticked: [...ticked],
     closed: [...closed],
     dismissed: [...dismissed],
+    // The KEYS, not the action ids: a ledger row has no ActionItem behind it,
+    // so its only handle is the unitKey, and the caller needs it to mark the
+    // underlying commitment done (core/ledger-list.ts parseLedgerUnitKey).
+    closedUnitKeys: [...doneUnitKeys],
     map: next,
     unitsClosed: gone.size,
   };

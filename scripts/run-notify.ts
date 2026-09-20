@@ -783,6 +783,9 @@ console.log(
       try {
         const r: ScanLoopResult = await runScanTick({
           statePath,
+          // So a finished LEDGER row closes its commitment instead of being
+          // re-derived and reopened next tick (proc/ledger-close.ts).
+          personaDir,
           // No drafter → nothing to do with inbound messages, and polling would
           // advance cursors past them. See noDraft above.
           sources: noDraft ? [] : [source],

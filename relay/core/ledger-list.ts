@@ -258,3 +258,31 @@ export function deriveLedgerTasks(
   }
   return out;
 }
+
+// ── the inverse, for read-back ──────────────────────────────────────────
+//
+// A ledger row carries NO ActionItem, so when the owner finished one in
+// TickTick there was nothing to mark done: the commitment stayed `open`, the
+// next tick re-derived the row, and the diff reopened the task. Measured on the
+// real account, 50-70 rows resurrected every single tick — which is why the
+// owner kept re-closing the same work and said the list "keeps updating itself".
+//
+// Lives here, beside the unitKey it decodes, so the two cannot drift apart.
+
+const LEDGER_PREFIX = "ledger_";
+
+export function parseLedgerUnitKey(unitKey: string): { personaKey: string; hash: string } | null {
+  if (!unitKey.startsWith(LEDGER_PREFIX)) return null;
+  const cut = unitKey.lastIndexOf("_");
+  if (cut < LEDGER_PREFIX.length) return null;
+  const personaKey = unitKey.slice(LEDGER_PREFIX.length, cut);
+  const hash = unitKey.slice(cut + 1);
+  // A personaKey may itself contain "_", which is why the LAST "_" splits.
+  return personaKey !== "" && hash !== "" ? { personaKey, hash } : null;
+}
+
+/** Both spellings, because a chase row hashes its "chase:"-prefixed text. */
+export function commitmentMatchesHash(what: string, hash: string): boolean {
+  const w = what.trim();
+  return stableHash(w) === hash || stableHash("chase:" + w) === hash;
+}

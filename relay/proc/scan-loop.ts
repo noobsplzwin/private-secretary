@@ -46,6 +46,7 @@ import { clusterKey, unitKey, inheritSupersededTaskIds } from "../core/unit-key.
 import { executeAction, type ExecuteDeps } from "./execute.js";
 import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
+import { markLedgerCommitmentsDone } from "./ledger-close.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks } from "../core/ledger-list.js";
 import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
@@ -68,6 +69,11 @@ export interface ScanLoopOptions {
   // Absolute path to loop-state.json. The scan-loop owns lock acquire +
   // atomic save; callers shouldn't poke this file mid-scan.
   statePath: string;
+  // Where the persona YAMLs live. Needed so a LEDGER row the owner finished in
+  // TickTick can mark its commitment done — without it the row is re-derived
+  // and reopened on the next tick (proc/ledger-close.ts). Omitted in tests that
+  // do not exercise the read-back.
+  personaDir?: string;
   // Optional Slack client; if omitted, built from Keychain.
   slackClient?: SlackClient;
   // Optional filter for which Slack channels to poll. By default we
@@ -1094,7 +1100,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     try {
       const remote = await opts.ticktickReader.listActive();
       const snapshot = loadState(opts.statePath);
-      const { ticked, closed, dismissed, map, unitsClosed } = readbackFromTickTick(
+      const { ticked, closed, dismissed, closedUnitKeys, map, unitsClosed } = readbackFromTickTick(
         snapshot,
         loadSyncMap(opts.statePath),
         remote,
@@ -1156,6 +1162,23 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       //
       // Written BEFORE the status change, per the labels.jsonl contract: if the
       // append throws, the rows stay as they are and the next tick retries.
+      // CLOSE THE LOOP ON LEDGER ROWS. A ledger row is derived fresh from a
+      // persona commitment every tick, so finishing it in TickTick settled
+      // nothing: the commitment stayed `open`, the next tick re-derived the
+      // row, and the diff REOPENED the task. 50-70 rows came back every tick
+      // this way, which is why the same work kept reappearing after the owner
+      // had already closed it. The completion has to land on the commitment.
+      //
+      // actor "human": this is the owner's own gesture, not an inference.
+      const ledgerDone =
+        closedUnitKeys.length > 0 && opts.personaDir
+          ? markLedgerCommitmentsDone(closedUnitKeys, {
+              personaDir: opts.personaDir,
+              onError: (k, e) => console.error(`[ticktick] ledger close FAILED for ${k}: ${errString(e)}`),
+            })
+          : 0;
+      if (ledgerDone > 0) console.log(`[ticktick] ${ledgerDone} ledger commitment(s) marked done`);
+
       const dismissedSet = new Set(dismissed);
       if (dismissedSet.size > 0) {
         const rows = snapshot.actions.filter((a) => dismissedSet.has(a.id));
@@ -1172,6 +1195,44 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           ),
         );
         console.log(`[ticktick] ${rows.length} row(s) dismissed by owner → not_a_thing`);
+      }
+
+      // THE OTHER HALF OF THE VERDICT. Before DISMISS_LINE existed, completing
+      // a row meant nothing — it was also the only way to clear noise, which is
+      // the owner's own account of why he completed 353 engine rows without
+      // meaning any of them. Now that a bad row has its own exit, a completion
+      // with the dismissal line UNTICKED says what it always should have: this
+      // was real work and it is finished. That is the positive class the label
+      // corpus never had (131 negative / 4 positive before this).
+      //
+      // Honest limit: a DELETED task is indistinguishable from a completed one
+      // here — both are simply absent from the active list. The owner does not
+      // delete (that absence is exactly why the dismissal line had to be built),
+      // so this is read as completion.
+      //
+      // Ledger rows are not labelled: they carry no ActionItem to snapshot, and
+      // their positive signal lands as `status: done` on the commitment above.
+      const closedSet = new Set(closed);
+      if (closedSet.size > 0) {
+        const rows = snapshot.actions.filter((a) => closedSet.has(a.id));
+        try {
+          appendLabels(
+            labelsPathFor(opts.statePath),
+            rows.map((a) =>
+              buildLabel({
+                action: a,
+                decision: "executed",
+                existence: "confirmed",
+                decided_at: new Date().toISOString(),
+                note: "owner completed without dismissing",
+              }),
+            ),
+          );
+        } catch (e) {
+          // A lost positive label is not worth failing the tick over; the row
+          // still closes. Loud, so a systematic failure cannot hide.
+          console.error(`[ticktick] confirmed-label append FAILED: ${errString(e)}`);
+        }
       }
 
       // The MAP is saved on its own signal. `done` counts card-derived actions,

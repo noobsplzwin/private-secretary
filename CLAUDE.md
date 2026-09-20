@@ -36,6 +36,12 @@ The layout is discoverable from the tree; what is NOT discoverable:
   says nothing, while ticking this says the row should never have been minted.
   It closes the row as `rejected` and writes an `existence: not_a_thing` label.
   Never give it an `actionId` — a tracked line is an execution approval.
+- **A finished LEDGER row must close its COMMITMENT** (`relay/proc/ledger-close.ts`).
+  A ledger row is re-derived from a persona commitment every tick and carries no
+  ActionItem, so completing it in TickTick used to settle nothing: the
+  commitment stayed `open`, the row came back, the diff reopened the task —
+  50-70 resurrections per tick. The unitKey decodes back to the commitment
+  (`parseLedgerUnitKey`); keep the two in the same file so they cannot drift.
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 
