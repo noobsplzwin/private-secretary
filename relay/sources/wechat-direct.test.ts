@@ -100,6 +100,7 @@ describe("scanWechatInbox", () => {
       fetchHistory: async () => "[2026-06-14 21:00] Renesas瑞萨电子: [链接] 招聘",
       nowMs: NOW,
       officialNames: new Set(["Renesas瑞萨电子"]),
+      book: { "Renesas瑞萨电子": { lastSeenMs: 0 } },
     });
     expect(inbound).toHaveLength(0);
   });
@@ -114,19 +115,70 @@ describe("scanWechatInbox", () => {
 [2026-06-14 20:00] me: 在路上
 [2026-06-14 21:10] 陈古龙: 毕竟`,
   };
+  // lastSeenMs 0 = "known, and everything since is new". An ABSENT entry would
+  // mean first contact, which seeds the cursor and mints nothing on purpose.
   const opts = {
     fetchSessions: async () => SESSIONS,
     fetchHistory: async (name: string) => history[name] ?? `${name} 无消息记录`,
     nowMs: NOW,
+    book: {
+      "金小奇 芯联集成": { lastSeenMs: 0 },
+      陈古龙: { lastSeenMs: 0 },
+      坦丁: { lastSeenMs: 0 },
+      乐乐: { lastSeenMs: 0 },
+    },
   };
 
-  it("surfaces only unread 1:1 (drops Leo's own/unread=0, groups, family)", async () => {
+  it("surfaces moved 1:1 chats; drops groups and family", async () => {
     const { inbound } = await scanWechatInbox(opts);
     const names = inbound.map((m) => m.senderHandle);
-    // 金小奇(2) + 陈古龙(5) only. 坦丁(unread 0 = Leo's own send) DROPPED — the bug.
-    // Hypervisor (group) + 乐乐 (family) dropped.
+    // 坦丁's fixture has no history, so it contributes nothing — but it IS
+    // fetched now, which unread-gating would never have done.
     expect(names.sort()).toEqual(["金小奇 芯联集成", "陈古龙"].sort());
-    expect(names).not.toContain("坦丁");
+  });
+
+  // THE REGRESSION. Under unread-gating this chat was invisible: 王凤壮 proposed
+  // a meeting, Leo answered 好的！within four minutes, unread went to zero, and
+  // the meeting never reached the calendar. A cursor still sees it.
+  it("surfaces a chat Leo has already READ and replied to", async () => {
+    const { inbound } = await scanWechatInbox({
+      ...opts,
+      fetchSessions: async () =>
+        "最近 1 个会话:\n\n[09-20 14:13] 王凤壮\n  文本: B510",
+      fetchHistory: async () =>
+        "[2026-09-20 14:07] 王凤壮: 周二上午9点到9点30 B510\n[2026-09-20 14:11] me: 好的！",
+      book: { 王凤壮: { lastSeenMs: 0 } },
+    });
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0]!.text).toBe("周二上午9点到9点30 B510");
+    // Leo's own line is context, never the trigger.
+    expect(inbound[0]!.threadContext).toContain("我: 好的！");
+  });
+
+  // Direction, not unread, is what keeps Leo from being drafted a reply to
+  // himself — and it never depended on the unread count.
+  it("mints nothing when only Leo spoke since the cursor", async () => {
+    const { inbound, book } = await scanWechatInbox({
+      ...opts,
+      fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:52] 坦丁\n  文本: 到了说一声",
+      fetchHistory: async () => "[2026-06-14 21:52] me: 到了说一声",
+      book: { 坦丁: { lastSeenMs: 1 } },
+    });
+    expect(inbound).toHaveLength(0);
+    // The cursor still advances, or this chat is re-fetched every tick forever.
+    expect(book.坦丁!.lastSeenMs).toBeGreaterThan(1);
+  });
+
+  // First sight must not pour a contact's whole backlog into the queue.
+  it("seeds a first-seen chat and mints nothing", async () => {
+    const { inbound, book } = await scanWechatInbox({
+      ...opts,
+      fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] 新朋友 (3条未读)\n  文本: 你好",
+      fetchHistory: async () => "[2026-06-14 21:00] 新朋友: 你好",
+      book: {},
+    });
+    expect(inbound).toHaveLength(0);
+    expect(book.新朋友!.lastSeenMs).toBeGreaterThan(0);
   });
 
   it("combines multiple incoming messages; drops Leo's outgoing lines", async () => {
@@ -152,6 +204,7 @@ describe("scanWechatInbox", () => {
       ...opts,
       fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:11] 老王 (1条未读)\n  图片: (无内容)",
       fetchHistory: async () => "[2026-06-14 21:11] 老王: [图片] (local_id=99, ts=1)",
+      book: { 老王: { lastSeenMs: 0 } },
     });
     expect(inbound).toHaveLength(1);
     expect(inbound[0]!.attachments).toEqual([

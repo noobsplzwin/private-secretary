@@ -71,6 +71,7 @@ import {
 } from "./core/tasks.js";
 import type { InboundMessage } from "./core/types.js";
 import { getSource, SOURCES, type SourceContext } from "./sources/index.js";
+import { loadDirectBook, saveDirectBook } from "./io/wechat-direct-store.js";
 import { loadPersonas } from "./io/personas.js";
 import { acquireLock, loadState, releaseLock, saveState } from "./io/state.js";
 import { migrateMechanical, mergeContacts, isV3 } from "./core/persona-v3.js";
@@ -216,7 +217,8 @@ try {
   } else if (cmd === "wechat-scan") {
     // WeChat's normalize equivalent: fetch + parse are coupled (the source owns
     // its reads), so it can't ride the generic `normalize <key>` path. Mirrors
-    // the daemon's detection exactly: get_recent_sessions (unread trigger) +
+    // the daemon's detection exactly: get_recent_sessions + a per-chat CURSOR
+    // (arg1 = state path, so the book is shared with the daemon) +
     // get_chat_history (incoming, direction-marked, full context). Emits
     // {messages} ready for cursor-check -> filter -> round-commit. cursor-check
     // against loop-state marks dedups; groups + family are dropped in the source.
@@ -224,12 +226,17 @@ try {
       const officialNames = parseOfficialAccountNames(
         await wechatRaw("get_contacts", { query: "", limit: 1000 }),
       );
-      const { inbound } = await scanWechatInbox({
+      // Same book the daemon keeps, so a manual scan does not re-surface what
+      // the daemon already consumed — and advances it for the same reason.
+      const statePath = arg1 ?? "state/loop-state.json";
+      const { inbound, book } = await scanWechatInbox({
         fetchSessions: () => wechatSessions({ limit: 30 }),
         fetchHistory: (name, limit) => wechatHistory(name, { limit }),
         officialNames,
         nowMs: Date.now(),
+        book: loadDirectBook(statePath),
       });
+      saveDirectBook(statePath, book);
       out({ messages: inbound });
     })().catch((err: Error) => fail(err.message));
   } else if (cmd === "filter") {

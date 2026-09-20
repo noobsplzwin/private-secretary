@@ -31,6 +31,7 @@ import { acquireLock, loadState, releaseLock, saveState, type LoopState } from "
 import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { GroupBook } from "../core/wechat-groups.js";
+import type { DirectBook } from "../core/wechat-direct-cursor.js";
 import type { ActionItem } from "../core/action-item.js";
 import { canAutoExecute, isSystemicExecuteFailure } from "../core/executors.js";
 import {
@@ -154,6 +155,11 @@ export interface ScanLoopOptions {
    * recomputed.
    */
   wechatGroups?: { load: () => GroupBook; save: (b: GroupBook) => void };
+  /**
+   * Cursor book for 1:1 chats. Without it every direct chat reads as first
+   * contact and nothing is ever minted — so the daemon must pass it.
+   */
+  wechatDirect?: { load: () => DirectBook; save: (b: DirectBook) => void };
   wechatFetchSessions?: () => Promise<string>;
   wechatFetchHistory?: (name: string, limit: number) => Promise<string>;
   // get_contacts text, for filtering out 公众号/服务号. Defaults to a cached
@@ -595,11 +601,15 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         fetchHistory,
         officialNames,
         nowMs: startedAtMs,
+        book: opts.wechatDirect?.load() ?? {},
       });
-      // GROUPS (2026-09-12). 1:1 above is unread-driven; a group cannot be,
-      // because the owner reads his working groups the moment they buzz. The
-      // group pass runs off a per-group cursor instead, over an allowlist he
-      // confirms plus an auto-admit for small groups — core/wechat-groups.ts.
+      // Saved even when the pass minted nothing: the cursor moved for every chat
+      // that was read, and losing that means re-reading them on the next tick.
+      opts.wechatDirect?.save(r.book);
+      // GROUPS (2026-09-12) run off the same kind of per-group cursor, over an
+      // allowlist the owner confirms plus an auto-admit for small groups
+      // (core/wechat-groups.ts). 1:1 joined them on 2026-09-20: unread-gating
+      // lost every commitment the owner handled on the spot.
       if (opts.wechatGroups) {
         try {
           const g = await scanWechatGroups({

@@ -2,11 +2,17 @@
 //
 // DETECTION MODEL (the get_new_messages digest was RETIRED — it was lossy and
 // direction-blind, which produced four separate bugs; see specs / git history):
-//   1. get_recent_sessions gives every session WITH ITS UNREAD COUNT. unread>0
-//      means the contact sent messages Leo hasn't read = awaiting Leo. Leo's OWN
-//      sends never raise unread, so they never trigger (fixes "drafted a reply to
-//      my own message"). Already-read messages don't trigger either — that's the
-//      intent: unread IS the open ask.
+//   1. get_recent_sessions gives every session with its latest-message time. A
+//      chat is scanned when it MOVED since the last look — a cursor, not the
+//      unread count (core/wechat-direct-cursor.ts). Unread was the trigger until
+//      2026-09-20, and it silently lost every commitment Leo handled on the
+//      spot: 王凤壮 proposed 周二上午9点到9点30 B510, Leo answered 好的！four
+//      minutes later, unread hit zero, and the meeting never reached the
+//      calendar. "Unread is the open ask" holds for work waiting on him and is
+//      exactly backwards for work he has already agreed to.
+//      Leo's OWN sends still never draft: the direction filter below keeps only
+//      incoming lines (that is what fixes "drafted a reply to my own message" —
+//      it never depended on the unread count).
 //   2. For each unread 1:1, get_chat_history pulls the ACTUAL recent messages,
 //      which are DIRECTION-MARKED (the sender label is the contact for incoming,
 //      Leo for outgoing) and give full multi-message context (not just the latest
@@ -24,6 +30,7 @@
 // follow-up; decoding without a vision path would be wasted work.
 
 import type { Attachment, InboundMessage } from "../core/types.js";
+import { advanceCursor, planDirectScan, type DirectBook } from "../core/wechat-direct-cursor.js";
 import {
   ADMIT_SAMPLE_SIZE,
   classifyGroup,
@@ -155,6 +162,8 @@ export interface WechatInboxOptions {
   // parseOfficialAccountNames(get_contacts). Their broadcasts aren't 1:1 work.
   officialNames?: Set<string>;
   historyCap?: number; // max messages to pull per session (default 20)
+  /** Cursor book: how far each chat has been scanned. */
+  book: DirectBook;
 }
 
 // One InboundMessage per unread 1:1 session, carrying the combined incoming
@@ -162,28 +171,40 @@ export interface WechatInboxOptions {
 // only ids that are new vs the persisted marks).
 export async function scanWechatInbox(
   opts: WechatInboxOptions,
-): Promise<{ inbound: InboundMessage[]; sessions: RecentSession[] }> {
+): Promise<{ inbound: InboundMessage[]; sessions: RecentSession[]; book: DirectBook }> {
   const sessions = parseRecentSessions(await opts.fetchSessions(), opts.nowMs);
   const exclude = opts.excludeNames ?? WECHAT_FAMILY;
   const cap = opts.historyCap ?? 20;
-  const candidates = sessions.filter(
-    (s) =>
-      !s.isGroup &&
-      s.unread > 0 &&
-      !exclude.some((f) => s.name.includes(f)) &&
-      !opts.officialNames?.has(s.name),
-  );
+  const plan = planDirectScan(sessions, opts.book, {
+    exclude,
+    ...(opts.officialNames ? { official: opts.officialNames } : {}),
+  });
+  let book = opts.book;
+  // First contact seeds its cursor and mints nothing — otherwise the first sight
+  // of a chat would pour its whole backlog into the queue as if it arrived now.
+  for (const name of plan.seed) {
+    const s = sessions.find((x) => x.name === name);
+    if (s) book = advanceCursor(book, name, s.tsMs);
+  }
+  const byName = new Map(sessions.map((s) => [s.name, s]));
   const inbound: InboundMessage[] = [];
-  for (const s of candidates) {
-    // Pull the unread PLUS a few prior messages for conversation context (so the
-    // draft isn't a reply to a lone line ripped out of its thread).
+  for (const name of plan.fetch) {
+    const s = byName.get(name)!;
+    const since = opts.book[name]?.lastSeenMs ?? 0;
+    // Enough to cover what is new PLUS a few prior messages for conversation
+    // context (so the draft isn't a reply to a lone line ripped from its thread).
     const limit = Math.min(cap, Math.max(s.unread + CONTEXT_LOOKBACK, 6));
     const history = parseChatHistory(await opts.fetchHistory(s.name, limit), s.name);
-    const incoming = history.filter((m) => m.isIncoming);
-    if (incoming.length === 0) continue; // latest run was Leo's own → nothing to do
-    const unread = incoming.slice(-s.unread);
-    const combined = unread.map((m) => m.text).filter(Boolean).join("\n");
+    // The cursor advances on the whole session, Leo's own lines included:
+    // otherwise a chat where he spoke last would be re-fetched every tick
+    // forever. What he SAID is context, never a trigger.
+    const newestSeen = history.reduce((mx, m) => Math.max(mx, m.tsMs), since);
+    book = advanceCursor(book, name, Math.max(newestSeen, s.tsMs));
+    const fresh = history.filter((m) => m.isIncoming && m.tsMs > since);
+    if (fresh.length === 0) continue; // only Leo spoke → context, not an ask
+    const combined = fresh.map((m) => m.text).filter(Boolean).join("\n");
     if (!combined) continue; // image/voice-only with no text → nothing to draft from yet
+    const unread = fresh;
     const latest = unread[unread.length - 1]!;
     // Background context: the recent thread, both sides, labelled (我 = Leo).
     const threadContext = history
@@ -209,7 +230,7 @@ export async function scanWechatInbox(
       ...(attachments.length ? { attachments } : {}),
     });
   }
-  return { inbound, sessions };
+  return { inbound, sessions, book };
 }
 
 // ─── groups ───────────────────────────────────────────────────────────

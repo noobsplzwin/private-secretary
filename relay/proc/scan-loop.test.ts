@@ -106,6 +106,14 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
+// Every chat reads as ALREADY KNOWN, so these tests exercise scanning and
+// drafting rather than the first-contact seeding rule (which has its own tests
+// in core/wechat-direct-cursor.test.ts and sources/wechat-direct.test.ts).
+const ALL_KNOWN = {
+  load: () => new Proxy({}, { get: () => ({ lastSeenMs: 0 }) }) as Record<string, { lastSeenMs: number }>,
+  save: () => undefined,
+};
+
 describe("runScanTick", () => {
   it("pulls Slack + Gmail, runs trigger filter, persists shadow record + state", async () => {
     const slack = slackStub(
@@ -603,6 +611,7 @@ describe("runScanTick", () => {
       statePath,
       sources: ["wechat"],
       wechatFetchContacts: async () => "",
+      wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () =>
         "最近 1 个会话:\n\n[06-14 21:39] 金小奇 芯联集成 (1条未读)\n  文本: 那很好啊",
       wechatFetchHistory: async () => "[2026-06-14 21:39] 金小奇 芯联集成: 那很好啊",
@@ -631,6 +640,7 @@ describe("runScanTick", () => {
     // Tick 1: 金小奇 unread=1 surfaces; 坦丁 has unread 0 (Leo's own send) → never carded.
     const r1 = await runScanTick({
       statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+      wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => SESSIONS1,
       wechatFetchHistory: async () => HIST1,
       draft,
@@ -641,6 +651,7 @@ describe("runScanTick", () => {
     // Tick 2 = same unread set re-polled. Persisted marks dedup it → no re-draft.
     const r2 = await runScanTick({
       statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+      wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => SESSIONS1,
       wechatFetchHistory: async () => HIST1,
       draft,
@@ -655,6 +666,7 @@ describe("runScanTick", () => {
     const HIST3 = "[2026-06-14 21:39] 金小奇 芯联集成: 那很好啊\n[2026-06-14 21:45] 金小奇 芯联集成: 还有个问题";
     const r3 = await runScanTick({
       statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+      wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => SESSIONS3,
       wechatFetchHistory: async () => HIST3,
       draft,
@@ -685,6 +697,7 @@ describe("runScanTick", () => {
     const tick = (ts: string, unread: number, text: string, hist: string) =>
       runScanTick({
         statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+        wechatDirect: ALL_KNOWN,
         wechatFetchSessions: async () => SESS(ts, unread, text),
         wechatFetchHistory: async () => hist,
         draft,
@@ -727,6 +740,7 @@ describe("runScanTick", () => {
     const tick = (ts: string, unread: number, text: string, hist: string) =>
       runScanTick({
         statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+        wechatDirect: ALL_KNOWN,
         wechatFetchSessions: async () => SESS(ts, unread, text),
         wechatFetchHistory: async () => hist,
         draft,
@@ -786,6 +800,7 @@ describe("runScanTick", () => {
     ]);
     const r = await runScanTick({
       statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+      wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:45] 金小奇 芯联集成 (1条未读)\n  文本: 还有个问题",
       wechatFetchHistory: async () => "[2026-06-14 21:45] 金小奇 芯联集成: 还有个问题",
       draft: { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
@@ -829,6 +844,7 @@ describe("runScanTick", () => {
     ]);
     await runScanTick({
       statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
+      wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:45] 金小奇 芯联集成 (1条未读)\n  文本: 还有个问题",
       wechatFetchHistory: async () => "[2026-06-14 21:45] 金小奇 芯联集成: 还有个问题",
       draft: { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },

@@ -82,6 +82,13 @@ call, 2026-09-12.
 - **Messages are never text-only.** READ image/file attachments before deciding
   intent — the point is often in a screenshot, and missing it inverts the
   intent (the GST25A12 lesson). `InboundMessage.attachments` carries them.
+- **WeChat 1:1 runs on a CURSOR, not the unread count** (owner, 2026-09-20).
+  Unread-gating lost every commitment Leo handled on the spot: he reads and
+  answers, unread hits zero, and the conversation becomes invisible — which is
+  exactly the shape of a meeting he just agreed to. `core/wechat-direct-cursor.ts`
+  now scans any chat that MOVED, read or not; direction (not unread) is what
+  keeps him from being drafted a reply to himself. First contact seeds the
+  cursor and mints nothing. Poll interval is 2 minutes.
 - **A decode failure must not become a to-do** (owner, 2026-09-20). When an
   attachment fails to decode, the drafter is told so — and a card that merely
   tells Leo to go look at it is dropped by `core/unreadable-gate.ts`, because

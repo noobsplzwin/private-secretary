@@ -34,6 +34,7 @@ import { runScanTick, type ScanLoopResult } from "../relay/proc/scan-loop.js";
 import { notify } from "../relay/proc/notify.js";
 import { loadPersonas } from "../relay/io/personas.js";
 import { loadGroupBook, saveGroupBook } from "../relay/io/wechat-group-store.js";
+import { loadDirectBook, saveDirectBook } from "../relay/io/wechat-direct-store.js";
 import { readPersonaV3File } from "../relay/io/persona-store.js";
 import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
@@ -142,7 +143,9 @@ async function slackIntervalMs(): Promise<number> {
 }
 
 const intervals: Record<Source, number> = {
-  wechat: num("--wechat-ms", 10_000),
+  // 2 minutes (owner, 2026-09-20). The 10s poll was pointless work: a tick's
+  // own draft+assess takes 40-290s, so ticks queued behind each other anyway.
+  wechat: num("--wechat-ms", 120_000),
   gmail: num("--gmail-ms", 180_000),
   slack: await slackIntervalMs(),
 };
@@ -794,6 +797,10 @@ console.log(
           wechatGroups: {
             load: () => loadGroupBook(statePath),
             save: (b) => saveGroupBook(statePath, b),
+          },
+          wechatDirect: {
+            load: () => loadDirectBook(statePath),
+            save: (b) => saveDirectBook(statePath, b),
           },
           ownerTimeZone,
           ...(ticktickWriter ? { ticktickWriter } : {}),
