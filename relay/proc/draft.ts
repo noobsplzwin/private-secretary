@@ -253,6 +253,26 @@ export async function draftActions(
       for (const match of m.text.matchAll(/\[语音\s*([\d.]+)s\]/g)) {
         unreadable.push(`语音 ${match[1]}s（未转写）`);
       }
+      // WeChat renders a document inline as 「[文件] name (local_id=N, ts=…)」,
+      // never as an Attachment, so it used to reach the model as plain text with
+      // nothing saying the contents were missing.
+      for (const match of m.text.matchAll(/\[文件\]\s*([^(\n]+)/g)) {
+        const name = match[1]?.trim();
+        if (name) unreadable.push(`${name}（文件，未读取）`);
+      }
+    }
+    // EVERY non-image attachment. There is no file reader in this pipeline at
+    // all — resolveImages handles images and nothing handles anything else — so
+    // a .zip, .ics or .pdf is unreadable by construction, and saying so is the
+    // difference between the model knowing it is blind and the model guessing.
+    // Measured: 「审核并确认 FCC ID 报告草稿」 (step 1: 下载 FCC ID草稿.zip 审核内容)
+    // and 「Review Vario BOM, confirm call time」 (step 1: open the .ics to find
+    // the proposed time) were both thrown away by the owner. Neither attachment
+    // was ever read, and neither was ever declared.
+    for (const m of batch) {
+      for (const a of m.attachments ?? []) {
+        if (a.kind !== "image") unreadable.push(`${a.name}（附件，未读取）`);
+      }
     }
     const req = buildDraftRequest({
       persona,

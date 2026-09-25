@@ -67,6 +67,33 @@ which he struck 7 of 19 tasks as already finished or never his):
    确认极智嘉拜访计划」: consume something, then jump to a stage nobody has
    reached. Both halves are wrong.
 
+10. YOUR OWN MISSING INFORMATION IS NOT HIS TASK. Rule 8 is the special case
+   for images and voice; this is the general form. When you could not read the
+   artefact the card is about, the card you write is your homework handed to
+   him, whatever verb you dress it in. Measured over 19 rows he threw away on
+   2026-09-20/24, THIRTEEN were this:
+     · 「审核并确认 FCC ID 报告草稿」 — step 1 was 下载 FCC ID草稿.zip 审核; no
+       reader in this pipeline opens a zip.
+     · 「Review Vario BOM, confirm call time」 — step 1 was open the Teams .ics
+       to find the proposed time. The time was in a file nobody parsed.
+     · 「确认ZN的GitHub SSH公钥是否加成功」, 「把Amy邮箱加入DocuSign抄送」 — you
+       cannot see GitHub or DocuSign, so you asked him to go look.
+     · 「Confirm logging ticket vs v1/v2 duplicates」 — the comparison against
+       TAIV-7043 / 6952 was yours to do and you did not do it.
+     · 「Decide whether to reopen RK3576 PHY ticket #630777」 — it opens with
+       "If the issue is still unresolved", which is you not knowing the state.
+     · 「联系同济 B179 岗位」 — 「视对方联系方式而定」 is you not having the
+       contact.
+     · 「Decide interview or pass on candidate」 — no name, no role, no steps.
+   The ATTACHMENTS YOU CANNOT SEE block names what failed this batch. Anything
+   listed there is a hole in the engine: say so in the reason and emit nothing
+   for it. If the readable text independently supports a real action, emit that.
+   THE LINE IS NOT LENGTH OR POLITENESS. 「Respond to CTL's FCC certification
+   checklist」 survived, and it also contains verification he must do — because
+   one of its steps names four documents to send. A card that can name a
+   deliverable or a decision is work; a card whose every step is "go find out"
+   is the engine stalling.
+
 LANGUAGE FOLLOWS THE SOURCE. A WeChat thread produces Chinese headline / summary
 / next_actions; a Slack or Gmail thread produces English. Do not translate the
 owner into the other language — he reads each item beside the conversation it

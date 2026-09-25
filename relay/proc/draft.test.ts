@@ -867,6 +867,33 @@ describe("what the pipeline could not read is named, not handed back", () => {
     expect(g.seen()).toContain("语音 16.2s");
   });
 
+  // REAL DISMISSALS, 2026-09-20/24. Both cards' first step was "go open the
+  // thing" — the .zip and the .ics — and neither attachment was ever read or
+  // ever declared, so the model had no way to know it was blind.
+  it("names a WeChat document, which no reader in this pipeline can open", async () => {
+    const g = grab();
+    await draftActions(
+      [msg({ text: "麻烦确认一下 [文件] FCC ID草稿.zip (local_id=230, ts=1789825496)" })],
+      deps(g.llm),
+    );
+    expect(g.seen()).toContain("ATTACHMENTS YOU CANNOT SEE");
+    expect(g.seen()).toContain("FCC ID草稿.zip");
+  });
+
+  it("names every NON-image attachment — there is no file reader at all", async () => {
+    const g = grab();
+    const withIcs = msg({
+      attachments: [
+        { id: "a1", kind: "file", name: "Teams invite.ics" },
+        { id: "a2", kind: "file", name: "PI-2026.pdf" },
+      ],
+    });
+    await draftActions([withIcs], deps(g.llm));
+    expect(g.seen()).toContain("ATTACHMENTS YOU CANNOT SEE");
+    expect(g.seen()).toContain("Teams invite.ics");
+    expect(g.seen()).toContain("PI-2026.pdf");
+  });
+
   it("says nothing when every image decoded", async () => {
     const g = grab();
     const withImage = msg({ attachments: [{ id: "1", kind: "image", name: "img" }] });
