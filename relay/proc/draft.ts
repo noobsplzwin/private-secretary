@@ -30,6 +30,7 @@ import { buildDraftRequest, type DraftedAction } from "./draft-prompt.js";
 import { selectProjects, renderProjectContext, renderProjectCatalog, type Project } from "../core/project.js";
 import { detectMentions } from "../core/mentions.js";
 import { isConsumeUnreadableCard } from "../core/unreadable-gate.js";
+import type { FileText } from "../core/file-text.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
 import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
@@ -64,6 +65,12 @@ export interface DraftDeps {
   // stays I/O-free. A decode that throws is skipped — the draft still proceeds
   // text-only rather than failing. Absent = no vision (text refs only).
   resolveImages?: (m: InboundMessage) => Promise<string[]>;
+  /**
+   * Attached documents, read into text. Returns only what it actually read —
+   * anything it could not becomes an unreadable declaration instead, which is
+   * the behaviour that already existed.
+   */
+  resolveFiles?: (m: InboundMessage) => Promise<FileText[]>;
   // 3-layer RAG (optional). `projects` = the project layer; per sender/message,
   // draftActions selects the relevant ones and injects their goal/state/open-gaps.
   // `leoProfile` = how Leo decides (conditions the analysis). Absent = persona-only.
@@ -235,6 +242,16 @@ export async function draftActions(
     // had been stale since June, so EVERY image had failed for three months in
     // silence and produced 「查看X的图片」 cards.
     const unreadable: string[] = [];
+    // READ what can be read. 股权方案.svg — a finished three-stage equity plan
+    // the owner had just agreed with five people — reached the model as the six
+    // characters 「[文件] 股权方案.svg」, so no card was ever minted for it.
+    // Whatever comes back here is content; whatever does not stays declared
+    // unreadable below, so a reader failure degrades to the old honest state.
+    const readFiles: FileText[] = deps.resolveFiles
+      ? (await Promise.all(batch.map((m) => deps.resolveFiles!(m).catch(() => [] as FileText[])))).flat()
+      : [];
+    const readNames = new Set(readFiles.map((f) => f.name));
+
     let imagePaths: string[] = [];
     const imageAttachments = batch.flatMap((m) => (m.attachments ?? []).filter((a) => a.kind === "image"));
     if (deps.resolveImages && imageAttachments.length > 0) {
@@ -258,7 +275,7 @@ export async function draftActions(
       // nothing saying the contents were missing.
       for (const match of m.text.matchAll(/\[文件\]\s*([^(\n]+)/g)) {
         const name = match[1]?.trim();
-        if (name) unreadable.push(`${name}（文件，未读取）`);
+        if (name && !readNames.has(name)) unreadable.push(`${name}（文件，未读取）`);
       }
     }
     // EVERY non-image attachment. There is no file reader in this pipeline at
@@ -271,7 +288,7 @@ export async function draftActions(
     // was ever read, and neither was ever declared.
     for (const m of batch) {
       for (const a of m.attachments ?? []) {
-        if (a.kind !== "image") unreadable.push(`${a.name}（附件，未读取）`);
+        if (a.kind !== "image" && !readNames.has(a.name)) unreadable.push(`${a.name}（附件，未读取）`);
       }
     }
     const req = buildDraftRequest({
@@ -289,6 +306,7 @@ export async function draftActions(
       projectCatalog,
       relatedContext,
       ...(unreadable.length > 0 ? { unreadableAttachments: unreadable } : {}),
+      ...(readFiles.length > 0 ? { attachedFiles: readFiles } : {}),
       now: nowIso,
       nowLocal,
     });

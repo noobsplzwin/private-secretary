@@ -97,6 +97,11 @@ call, 2026-09-12.
   whole-call failure names nobody, so nothing advances. Slack/Gmail marks do
   NOT have this yet: they are one bucket per source with a shared high-water
   mark, so rewinding one sender would re-surface the others.
+- **Attached documents are READ, not just declared** (`core/file-text.ts`).
+  Text-shaped formats only (svg, md, csv, json, source files) and no new
+  dependency: a PDF or .docx parser is not worth becoming this repo's third
+  runtime package. An SVG is reduced to its <text> nodes — a 35KB diagram is
+  mostly path data. Anything unread stays on the declared-unreadable path.
 - **A decode failure must not become a to-do** (owner, 2026-09-20). When an
   attachment fails to decode, the drafter is told so — and a card that merely
   tells Leo to go look at it is dropped by `core/unreadable-gate.ts`, because

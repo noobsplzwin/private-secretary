@@ -35,6 +35,7 @@ import { notify } from "../relay/proc/notify.js";
 import { loadPersonas } from "../relay/io/personas.js";
 import { loadGroupBook, saveGroupBook } from "../relay/io/wechat-group-store.js";
 import { loadDirectBook, saveDirectBook } from "../relay/io/wechat-direct-store.js";
+import { fileToText, isReadableFile, type FileText } from "../relay/core/file-text.js";
 import { readPersonaV3File } from "../relay/io/persona-store.js";
 import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
@@ -47,7 +48,8 @@ import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
 import { loadState } from "../relay/io/state.js";
 import { createDeepseekLlmCaller, createDeepseekJsonCaller } from "../relay/proc/llm-deepseek.js";
 import type { PersonaUpdateDeps } from "../relay/proc/persona-update.js";
-import { wechatDecodeImage, wechatHistory } from "../relay/io/wechat-cli.js";
+import { wechatDecodeImage,
+  wechatDecodeFile, wechatHistory } from "../relay/io/wechat-cli.js";
 import { createSlackClientFromKeychain, SLACK_ACCOUNTS, type SlackClient } from "../relay/io/slack-api.js";
 import { resolveSlackCredential } from "../relay/io/slack-oauth.js";
 import { GmailClient, getHeader } from "../relay/io/gmail-api.js";
@@ -86,6 +88,40 @@ async function resolveImages(m: InboundMessage): Promise<string[]> {
     }
   }
   return paths;
+}
+
+// Read a message's attached DOCUMENTS into text. WeChat renders them inline as
+// 「[文件] name (local_id=N, ts=T)」 and never as an Attachment, so the ids come
+// from the text; decode_file_message then hands back a real local path with an
+// md5 check. Gmail attachments already have a byte fetch (messages.attachments
+// .get) but are not wired here yet — they stay on the declared-unreadable path.
+//
+// A file this cannot read is NOT an error: draft.ts declares it unreadable, and
+// that was the whole behaviour before this existed.
+async function resolveFiles(m: InboundMessage): Promise<FileText[]> {
+  if (m.platform !== "wechat") return [];
+  const out: FileText[] = [];
+  for (const match of m.text.matchAll(/\[文件\]\s*([^(\n]+)\(local_id=(\d+)(?:,\s*ts=(\d+))?/g)) {
+    const name = match[1]!.trim();
+    const localId = Number(match[2]);
+    if (!isReadableFile(name)) continue; // binary — the unreadable path owns it
+    try {
+      const res = await wechatDecodeFile(m.senderHandle, localId, Number(match[3] ?? 0));
+      const path = res.match(/^\s*路径:\s*(.+)$/m)?.[1]?.trim();
+      if (!path || !existsSync(path)) {
+        console.log(`[file] decode returned no path — ${m.senderHandle} local_id=${localId} (${name})`);
+        continue;
+      }
+      const parsed = fileToText(name, readFileSync(path, "utf8"));
+      if (parsed) out.push(parsed);
+      else console.log(`[file] no usable text — ${name}`);
+    } catch (e) {
+      // Loud, like the image path: a silent reader failure is how the stale
+      // image DB hid for three months.
+      console.log(`[file] decode FAILED — ${m.senderHandle} local_id=${localId} (${name}): ${((e as Error).message.split("\n")[0] ?? "").slice(0, 120)}`);
+    }
+  }
+  return out;
 }
 
 type Source = "wechat" | "gmail" | "slack";
@@ -276,7 +312,9 @@ async function buildDraft(): Promise<DraftDeps | undefined> {
     // via Read; the API caller has no image blocks yet). Off by default because
     // decode_image can HANG to its full timeout, and that stalls the whole tick
     // (and holds the state lock) — only enable once decode is reliable.
-    const vision = visionEnabled && llmMode === "cli" ? { resolveImages } : {};
+    // resolveFiles is NOT gated on vision: reading a text document needs no
+    // image support, and it is the half that was missing entirely.
+    const vision = visionEnabled && llmMode === "cli" ? { resolveImages, resolveFiles } : { resolveFiles };
     if (visionEnabled && llmMode === "cli") console.log("[notify] image vision ENABLED (cli)");
     return { llm, resolvePersona, knownPersonaKeys: keys, projects, leoProfile: leoProfile.trim() || undefined, personas, fetchRelatedThread, ownerTimeZone, ...vision };
   } catch (e) {

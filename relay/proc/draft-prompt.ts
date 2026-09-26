@@ -458,6 +458,8 @@ export function buildDraftRequest(opts: {
    * reading back to the owner.
    */
   unreadableAttachments?: string[];
+  /** Attached documents that WERE read. Their contents are part of the message. */
+  attachedFiles?: Array<{ name: string; text: string }>;
 }): DraftRequest {
   const personaBlock = describePersona(opts.persona);
   const msgBlock = opts.messages.map(describeMessage).join("\n\n");
@@ -503,7 +505,13 @@ inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.
   // userText carries ONLY per-call content. Every stable block (catalog,
   // known people, date rules, Leo profile) is in `system` so the prefix is
   // byte-identical between calls and reads from cache instead of rewriting.
-  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}${unreadableBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
+  // Files come BEFORE the messages: an attached plan is usually the substance
+  // and the message is the covering note ("大家好" / "就按这个方案吧").
+  const filesBlock =
+    opts.attachedFiles && opts.attachedFiles.length > 0
+      ? `\n\nATTACHED FILES — these arrived in the conversation and their contents are below. Treat them as part of what the sender said, not as something for Leo to go open.\n${opts.attachedFiles.map((f) => `--- ${f.name} ---\n${f.text}`).join("\n\n")}`
+      : "";
+  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}${unreadableBlock}${filesBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
   // The connected MCP tools the model may route a tool card to.
   const toolHint =
     opts.toolKeys && opts.toolKeys.length > 0

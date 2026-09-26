@@ -894,6 +894,35 @@ describe("what the pipeline could not read is named, not handed back", () => {
     expect(g.seen()).toContain("PI-2026.pdf");
   });
 
+  // THE OTHER HALF. Declaring a file unreadable stopped the engine handing its
+  // blindness back as a to-do; reading it is what makes the content usable.
+  // 股权方案.svg reached the model as six characters and a finished three-stage
+  // equity plan was never minted.
+  it("puts a READ file's contents in the prompt, and stops calling it unreadable", async () => {
+    const g = grab();
+    await draftActions([msg({ text: "[文件] 股权方案.svg (local_id=51, ts=1790390357)" })], {
+      ...deps(g.llm),
+      resolveFiles: async () => [
+        { name: "股权方案.svg", text: "老出资回收 → 工商变更 → 增资", truncated: false },
+      ],
+    });
+    expect(g.seen()).toContain("ATTACHED FILES");
+    expect(g.seen()).toContain("老出资回收 → 工商变更 → 增资");
+    // It was read, so it must NOT also be declared missing.
+    expect(g.seen()).not.toContain("股权方案.svg（文件，未读取）");
+  });
+
+  // A reader failure degrades to the honest pre-existing state, never to silence.
+  it("still declares a file the reader could not handle", async () => {
+    const g = grab();
+    await draftActions([msg({ text: "[文件] FCC ID草稿.zip (local_id=230)" })], {
+      ...deps(g.llm),
+      resolveFiles: async () => [],
+    });
+    expect(g.seen()).toContain("ATTACHMENTS YOU CANNOT SEE");
+    expect(g.seen()).toContain("FCC ID草稿.zip");
+  });
+
   it("says nothing when every image decoded", async () => {
     const g = grab();
     const withImage = msg({ attachments: [{ id: "1", kind: "image", name: "img" }] });
