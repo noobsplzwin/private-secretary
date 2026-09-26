@@ -249,6 +249,12 @@ async function buildDraft(): Promise<DraftDeps | undefined> {
             })
           : createClaudeCliLlmCaller({
               model: draftModel,
+              // 420s, same ceiling the assess pass needed (2026-09-13). The
+              // drafter sat on the 180s default until 2026-09-27, when the
+              // Osyx-浦软 group timed out at exactly 180000ms and took the
+              // whole 股权变更 discussion with it — the 12/06 deadline, the
+              // three-stage plan, and a direct request for the 财务报表.
+              timeoutMs: 420_000,
               // Same evidence trail the deepseek path has kept all along — the
               // scan loop's llm:draft-empty message names this file.
               rawLogPath: join(dirname(statePath), "llm-draft-raw.jsonl"),

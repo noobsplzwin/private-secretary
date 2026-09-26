@@ -89,6 +89,14 @@ call, 2026-09-12.
   now scans any chat that MOVED, read or not; direction (not unread) is what
   keeps him from being drafted a reply to himself. First contact seeds the
   cursor and mints nothing. Poll interval is 2 minutes.
+- **A cursor advances only AFTER the drafter has had its turn.** Committing it
+  at scan time turns any draft failure into permanent data loss: the messages
+  are marked read and nothing looks at them again. Measured 2026-09-24 — the
+  Osyx-浦软 group timed out at 180s and took the whole 股权变更 discussion with
+  it. Rollback is per-sender (the WeChat books are keyed by chat name); a
+  whole-call failure names nobody, so nothing advances. Slack/Gmail marks do
+  NOT have this yet: they are one bucket per source with a shared high-water
+  mark, so rewinding one sender would re-surface the others.
 - **A decode failure must not become a to-do** (owner, 2026-09-20). When an
   attachment fails to decode, the drafter is told so — and a card that merely
   tells Leo to go look at it is dropped by `core/unreadable-gate.ts`, because

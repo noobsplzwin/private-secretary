@@ -353,6 +353,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // tick can never fail with "another tick is running" just because the cockpit
   // (or a prior commit) briefly held the lock — that was the source of the
   // intermittent contention noise.
+  // WeChat cursors, held between the scan and the drafter. A cursor committed
+  // before drafting turns any draft failure into permanent data loss: the
+  // messages are marked read and nothing ever looks at them again.
+  type PendingBook<T> = { prev: T; next: T };
+  let pendingWechatDirect: PendingBook<DirectBook> | undefined;
+  let pendingWechatGroups: PendingBook<GroupBook> | undefined;
+
   let state: LoopState;
   try {
     state = loadState(opts.statePath);
@@ -596,29 +603,36 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       }
       const fetchHistory =
         opts.wechatFetchHistory ?? ((name: string, limit: number) => wechatHistory(name, { limit }));
+      const directBefore = opts.wechatDirect?.load() ?? {};
       const r = await scanWechatInbox({
         fetchSessions: opts.wechatFetchSessions ?? (() => wechatSessions({ limit: 30 })),
         fetchHistory,
         officialNames,
         nowMs: startedAtMs,
-        book: opts.wechatDirect?.load() ?? {},
+        book: directBefore,
       });
-      // Saved even when the pass minted nothing: the cursor moved for every chat
-      // that was read, and losing that means re-reading them on the next tick.
-      opts.wechatDirect?.save(r.book);
+      // NOT saved yet. The cursor is held until the drafter has had its turn:
+      // a chat whose draft FAILS must be re-read next tick, or its messages are
+      // gone for good. Measured 2026-09-24: the Osyx-浦软 group timed out at
+      // 180s and the advance had already been committed, so the whole 股权变更
+      // discussion — a 12/06 deadline, a three-stage plan, and a direct request
+      // for the 财务报表 — was never seen again by anything.
+      pendingWechatDirect = { prev: directBefore, next: r.book };
       // GROUPS (2026-09-12) run off the same kind of per-group cursor, over an
       // allowlist the owner confirms plus an auto-admit for small groups
       // (core/wechat-groups.ts). 1:1 joined them on 2026-09-20: unread-gating
       // lost every commitment the owner handled on the spot.
       if (opts.wechatGroups) {
         try {
+          const groupsBefore = opts.wechatGroups.load();
           const g = await scanWechatGroups({
             sessions: r.sessions,
-            book: opts.wechatGroups.load(),
+            book: groupsBefore,
             fetchHistory,
             now: () => new Date(startedAtMs).toISOString(),
           });
-          opts.wechatGroups.save(g.book);
+          // Held for the same reason as the 1:1 book above.
+          pendingWechatGroups = { prev: groupsBefore, next: g.book };
           r.inbound.push(...g.inbound);
         } catch (e) {
           // A group-pass failure must never cost the 1:1 scan its tick.
@@ -792,6 +806,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // ── PHASE 2 (UNLOCKED): the slow LLM drafting (+ vision decode). No lock is
   // held, so the cockpit stays responsive even through a long or hung draft.
   let draftedActions: ActionItem[] = [];
+  /** Senders whose draft call errored. Their cursors are NOT advanced. */
+  let draftFailedSenders: string[] = [];
   let llmDraftError: string | undefined;
   // Every sender failed — a systemic outage, not a per-sender fault.
   let llmDraftOutage = false;
@@ -804,6 +820,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       const r = await draftActions(draftInput, opts.draft);
       draftedActions = r.actions;
       draftEmpty = r.empty;
+      draftFailedSenders = r.errors.map((e) => e.sender);
       if (r.errors.length > 0) {
         // The DENOMINATOR is the whole point. "陈古龙: claude -p exit 1: …" is
         // what an expired subscription session looked like for two days
@@ -827,6 +844,40 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       }
     } catch (e) {
       llmDraftError = errString(e);
+    }
+  }
+
+  // COMMIT THE CURSORS — every chat except the ones whose draft failed. A
+  // failed sender keeps its OLD cursor so the next tick reads those messages
+  // again; everything else advances as normal, or one slow contact would make
+  // the whole account re-read itself every tick.
+  //
+  // The book is keyed by chat name and `sender` IS that name, so the rollback
+  // is exact. A whole-call failure (the catch above) names no sender, so
+  // nothing advances — the safe direction when we cannot tell who was hurt.
+  {
+    const failed = new Set(draftFailedSenders);
+    const wholeCallFailed = llmDraftError !== undefined && failed.size === 0;
+    const commit = <T extends Record<string, unknown>>(p: PendingBook<T>): T => {
+      if (wholeCallFailed) return p.prev;
+      if (failed.size === 0) return p.next;
+      const out: Record<string, unknown> = { ...p.next };
+      for (const name of failed) {
+        if (name in p.prev) out[name] = p.prev[name];
+        else delete out[name];
+      }
+      return out as T;
+    };
+    if (pendingWechatDirect && opts.wechatDirect) {
+      opts.wechatDirect.save(commit(pendingWechatDirect));
+    }
+    if (pendingWechatGroups && opts.wechatGroups) {
+      opts.wechatGroups.save(commit(pendingWechatGroups));
+    }
+    if (failed.size > 0 || wholeCallFailed) {
+      console.log(
+        `[wechat] cursor held for ${wholeCallFailed ? "ALL chats (whole draft call failed)" : [...failed].join(", ")} — will re-read next tick`,
+      );
     }
   }
 

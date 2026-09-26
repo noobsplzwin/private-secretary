@@ -597,6 +597,64 @@ describe("runScanTick", () => {
     expect(JSON.parse(shadow).filtered).toEqual([{ id: "gmail:GM1", reason: "gmail:promotions" }]);
   });
 
+  // REGRESSION — DATA LOSS. 2026-09-24: the Osyx-浦软 group's draft call timed
+  // out at 180s. The cursor had already been committed, so the whole 股权变更
+  // discussion (a 12/06 deadline, a three-stage plan, a direct request for the
+  // 财务报表) was marked read and nothing ever looked at it again. A chat whose
+  // draft FAILS must keep its old cursor and be re-read next tick.
+  it("holds the cursor for a sender whose draft failed, and advances the rest", async () => {
+    const saved: Array<Record<string, { lastSeenMs: number }>> = [];
+    const before = { 金小奇: { lastSeenMs: 1 }, 陈古龙: { lastSeenMs: 1 } };
+    await runScanTick({
+      statePath,
+      sources: ["wechat"],
+      wechatFetchContacts: async () => "",
+      wechatDirect: { load: () => before, save: (b) => void saved.push(b as never) },
+      wechatFetchSessions: async () =>
+        "最近 2 个会话:\n\n[06-14 21:39] 金小奇 (1条未读)\n  文本: a\n\n[06-14 21:40] 陈古龙 (1条未读)\n  文本: b",
+      wechatFetchHistory: async (name: string) =>
+        name === "金小奇" ? "[2026-06-14 21:39] 金小奇: a" : "[2026-06-14 21:40] 陈古龙: b",
+      draft: {
+        llm: async (req) => {
+          if (req.userText.includes("陈古龙")) throw new Error("claude -p timed out after 420000ms");
+          return [];
+        },
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+        now: () => "2026-06-14T12:00:00Z",
+      },
+    });
+    const book = saved.at(-1)!;
+    // 陈古龙 failed → untouched, so next tick reads those messages again.
+    expect(book.陈古龙).toEqual({ lastSeenMs: 1 });
+    // 金小奇 drafted fine (empty is fine) → advanced.
+    expect(book.金小奇!.lastSeenMs).toBeGreaterThan(1);
+  });
+
+  // A failure with no sender attached (the whole call died) tells us nothing
+  // about who was hurt, so NOTHING advances — the safe direction.
+  it("holds every cursor when the whole draft call fails", async () => {
+    const saved: Array<Record<string, { lastSeenMs: number }>> = [];
+    const before = { 金小奇: { lastSeenMs: 7 } };
+    await runScanTick({
+      statePath,
+      sources: ["wechat"],
+      wechatFetchContacts: async () => "",
+      wechatDirect: { load: () => before, save: (b) => void saved.push(b as never) },
+      wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:39] 金小奇 (1条未读)\n  文本: a",
+      wechatFetchHistory: async () => "[2026-06-14 21:39] 金小奇: a",
+      draft: {
+        llm: async () => {
+          throw new Error("boom");
+        },
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+        now: () => "2026-06-14T12:00:00Z",
+      },
+    });
+    expect(saved.at(-1)!.金小奇).toEqual({ lastSeenMs: 7 });
+  });
+
   it("sources:[wechat] drafts a new 1:1 WeChat message into the queue", async () => {
     const llm = vi.fn(async () => [
       {
