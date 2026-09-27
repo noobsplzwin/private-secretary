@@ -267,8 +267,10 @@ export function readbackFromTickTick(
   state: LoopState,
   map: SyncMap,
   remote: readonly RemoteTask[],
+  /** False when a project could not be listed — then absence proves nothing. */
+  coversEveryProject = true,
 ): { ticked: string[]; closed: string[]; dismissed: string[]; closedUnitKeys: string[]; map: SyncMap; unitsClosed: number } {
-  const { doneActionIds, doneUnitKeys, dismissedUnitKeys } = diffTickTickReadback(map, remote);
+  const { doneActionIds, doneUnitKeys, dismissedUnitKeys } = diffTickTickReadback(map, remote, coversEveryProject);
   // TWO different owner gestures, kept apart because they mean different things:
   //   ticked — the owner checked an EXECUTABLE line (invite/tool; only those are
   //            tracked). Per specs/ticktick-migration.md §1 that tick is the

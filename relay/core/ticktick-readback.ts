@@ -52,8 +52,10 @@ export interface ReadbackResult {
 /**
  * What the owner finished in TickTick since the last poll.
  *
- * `remote` is the project's ACTIVE tasks. A tracked task missing from it was
- * completed or deleted, and both mean the same thing here: stop resurfacing it.
+ * `remote` is the ACTIVE tasks of every project the caller could read. A
+ * tracked task missing from it was completed or deleted, and both mean the same
+ * thing here: stop resurfacing it — but ONLY when the caller confirms it read
+ * everywhere (see coversEveryProject; a partial read concludes nothing).
  *
  * Status is the only signal read. completedTime is NOT: a task in the live
  * project came back carrying completedTime "2026-08-13T17:02:29+0000" with
@@ -67,6 +69,24 @@ export interface ReadbackResult {
 export function diffTickTickReadback(
   map: SyncMap,
   remote: readonly RemoteTask[],
+  /**
+   * Did `remote` cover EVERY project this map writes to?
+   *
+   * Absence is the only evidence this function has for "the owner finished
+   * it", so absence must mean absence — not "we did not look there". It meant
+   * the second thing for weeks: the readback listed only the Work project
+   * while sunk rows are created in 待办池, so a row that sank was invisible on
+   * the very next tick and read as completed. Measured 2026-09-27: 95 of 95
+   * pool rows had been tombstoned here and marked `done` on their commitments,
+   * and all 95 were still sitting OPEN in TickTick — the owner had never
+   * touched one of them. 94 commitments were closed behind his back, 77 of
+   * them his own, including 「设立三个持股平台…目前尚未启动」.
+   *
+   * So the caller says whether it managed to read everywhere. When it did not,
+   * nothing is concluded from absence. Ticks and dismissals still land: those
+   * are positive observations on tasks we DID see.
+   */
+  coversEveryProject = true,
 ): ReadbackResult {
   const active = new Map<string, RemoteTask>();
   for (const t of remote) if (t.status === 0) active.set(t.id, t);
@@ -83,7 +103,7 @@ export function diffTickTickReadback(
     if (rec.done) continue;
     const task = active.get(rec.ticktickId);
     if (!task) {
-      doneUnitKeys.push(unitKey);
+      if (coversEveryProject) doneUnitKeys.push(unitKey);
       continue;
     }
     const itemStatus = new Map((task.items ?? []).map((i) => [i.id, i.status]));

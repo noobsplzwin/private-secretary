@@ -55,6 +55,19 @@ The layout is discoverable from the tree; what is NOT discoverable:
   keeps the wording key and still re-mints — 「归属判不准就新开一张」 (owner,
   2026-09-27). Never add a fuzzy matcher here: gluing the wrong conversation
   onto a live ticket is worse than one extra card (`core/unit-key.ts`).
+- **The readback must list EVERY project the engine writes to** — the Work list
+  AND 待办池 (`proc/scan-loop.ts`). Absence from `remote` is the only evidence
+  the readback has for "the owner finished it", so it has to mean absence, not
+  "we did not look there". It meant the second thing for weeks: sunk rows are
+  created in 待办池 while the readback listed only Work, so a row that sank was
+  invisible on the very next tick and read as completed. Measured 2026-09-27:
+  95 of 95 tracked pool rows tombstoned and their commitments marked `done`,
+  all 95 still sitting OPEN in TickTick — 94 commitments closed behind the
+  owner's back, 77 his own, including 「设立三个持股平台…目前尚未启动」. The
+  ledger was left with ONE open who=me commitment out of 360. A project that
+  cannot be read passes `coversEveryProject: false` and closes NOTHING that
+  tick. Do NOT widen the ORPHAN list the same way: 121 pool tasks are untracked,
+  and orphan reconciliation completes engine-tagged tasks nothing desires.
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 

@@ -49,7 +49,8 @@ import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone } from "./ledger-close.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
-import { deriveLedgerTasks } from "../core/ledger-list.js";
+import { deriveLedgerTasks, POOL_LIST } from "../core/ledger-list.js";
+import type { RemoteTask } from "../core/ticktick-readback.js";
 import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
@@ -1159,12 +1160,29 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // Non-fatal, like the push: TickTick being unreachable must never stop a scan.
   if (!opts.dryRun && opts.ticktickReader) {
     try {
-      const remote = await opts.ticktickReader.listActive();
+      // BOTH PROJECTS. The engine writes to two — the Work list and 待办池 for
+      // sunk rows — and this only ever read the first, so every row that sank
+      // went missing from `remote` on the next tick and was read as finished.
+      // 95 of 95 pool rows were closed that way, all of them still open in
+      // TickTick (core/ticktick-readback.ts has the numbers).
+      //
+      // A pool read that THROWS must not re-open the same hole, so the failure
+      // is carried into the readback rather than swallowed: absence only counts
+      // as completion when we managed to look everywhere.
+      const remoteWork = await opts.ticktickReader.listActive();
+      let remotePool: RemoteTask[] | undefined;
+      try {
+        remotePool = await opts.ticktickReader.listActive(POOL_LIST);
+      } catch (e) {
+        console.error(`[ticktick] 待办池 unreadable — closing nothing this tick: ${errString(e)}`);
+      }
+      const remote = [...remoteWork, ...(remotePool ?? [])];
       const snapshot = loadState(opts.statePath);
       const { ticked, closed, dismissed, closedUnitKeys, map, unitsClosed } = readbackFromTickTick(
         snapshot,
         loadSyncMap(opts.statePath),
         remote,
+        remotePool !== undefined,
       );
 
       // TICK-TO-EXECUTE (specs/ticktick-migration.md §1): a ticked EXECUTABLE

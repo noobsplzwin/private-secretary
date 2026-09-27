@@ -88,3 +88,45 @@ describe("diffTickTickReadback", () => {
     expect(r.doneUnitKeys).toEqual(["u1"]);
   });
 });
+
+// REGRESSION 2026-09-27 — the false-close that emptied the ledger.
+//
+// The readback listed only the Work project while SUNK rows are created in
+// 待办池. A row that sank went missing from `remote` on the very next tick and
+// was read as "the owner finished it": 95 of 95 pool rows tombstoned, all 95
+// still open in TickTick, 94 commitments closed behind his back.
+describe("absence only means done when we looked everywhere", () => {
+  const map = {
+    work_row: { ticktickId: "tt-work", projectId: "P-work", hash: "h" },
+    pool_row: { ticktickId: "tt-pool", projectId: "P-pool", hash: "h" },
+  };
+
+  it("closes nothing from absence when a project could not be read", () => {
+    // Only the Work project came back, and the caller says so.
+    const r = diffTickTickReadback(map, [{ id: "tt-work", status: 0 }], false);
+    expect(r.doneUnitKeys).toEqual([]);
+  });
+
+  it("still closes what is genuinely absent once both projects are read", () => {
+    // Both listed; the pool row is gone from it, so the owner really did finish it.
+    const r = diffTickTickReadback(map, [{ id: "tt-work", status: 0 }], true);
+    expect(r.doneUnitKeys).toEqual(["pool_row"]);
+  });
+
+  it("a partial read still lands ticks and dismissals — those are positive", () => {
+    const withDismiss = {
+      pool_row: {
+        ticktickId: "tt-pool",
+        projectId: "P-pool",
+        hash: "h",
+        items: [{ itemId: "i1", actionId: "a1" }],
+      },
+    };
+    const r = diffTickTickReadback(
+      withDismiss,
+      [{ id: "tt-pool", status: 0, items: [{ id: "i1", status: 1 }] }],
+      false,
+    );
+    expect(r.doneActionIds).toEqual(["a1"]);
+  });
+});
