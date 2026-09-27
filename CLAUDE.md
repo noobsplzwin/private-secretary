@@ -42,6 +42,19 @@ The layout is discoverable from the tree; what is NOT discoverable:
   commitment stayed `open`, the row came back, the diff reopened the task —
   50-70 resurrections per tick. The unitKey decodes back to the commitment
   (`parseLedgerUnitKey`); keep the two in the same file so they cannot drift.
+- **A row's identity is its MATTER, never its wording** (`core/ledger-list.ts`).
+  The model rewords a commitment as a conversation sharpens it, and a matter's
+  lead link moves as the work advances — under a wording-derived key either one
+  reads as a NEW to-do. Measured 2026-09-27 over the week after the
+  resurrection fix: 169 TickTick creates against 9 updates, with 「约Alger定本周
+  OH3时间」→「约 Alger 定周四下午OH具体时间」→「敲定周四下午与Alger的OH时间」
+  sitting in the map as three rows for one job. A commitment carrying a
+  `matter_id` keys by `stableHash("matter:" + id)`, so new links UPDATE the same
+  task and its note re-renders (「直接更新目前ticket的Description区域」); the task
+  auto-completes exactly when every link in the chain is settled. Unfiled work
+  keeps the wording key and still re-mints — 「归属判不准就新开一张」 (owner,
+  2026-09-27). Never add a fuzzy matcher here: gluing the wrong conversation
+  onto a live ticket is worse than one extra card (`core/unit-key.ts`).
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 

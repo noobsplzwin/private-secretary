@@ -26,6 +26,12 @@ export interface LedgerCloseDeps {
  * Returns how many commitments were marked done. A key that matches no
  * commitment is skipped silently: the row may predate a persona rewrite, and a
  * miss must never be worth failing the tick over.
+ *
+ * ONE ROW MAY CLOSE SEVERAL COMMITMENTS. A matter's row stands for the whole
+ * chain (core/ledger-list.ts), so finishing it closes every open link in that
+ * matter — which is what the owner means by ticking it. Settled links are left
+ * alone by the `status !== "open"` guard below, so a `dropped` decision he
+ * already made is never overwritten with `done`.
  */
 export function markLedgerCommitmentsDone(
   closedUnitKeys: readonly string[],
@@ -55,7 +61,7 @@ export function markLedgerCommitmentsDone(
         // owner already made, and overwriting it with `done` would claim work
         // happened that never did.
         if (c.status !== "open") return c;
-        if (!hashes.some((h) => commitmentMatchesHash(c.what, h))) return c;
+        if (!hashes.some((h) => commitmentMatchesHash(c, h))) return c;
         hit++;
         return { ...c, status: "done" as const };
       });

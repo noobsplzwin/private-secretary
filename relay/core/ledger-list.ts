@@ -60,6 +60,14 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * a name and throws rather than inventing a list. */
 export const POOL_LIST = "待办池";
 
+/**
+ * Namespace for a MATTER row's hash, so it cannot be confused with a
+ * commitment's. Both live in the same `ledger_<persona>_<hash>` key shape —
+ * one key format, one parser, and ledger-close tells them apart by asking the
+ * commitment (commitmentMatchesHash) rather than by re-parsing the string.
+ */
+const MATTER_TAG = "matter:";
+
 // Priority is MECHANICAL, from the deadline alone — the ranking pass that used
 // to assign tiers is retired. Overdue or imminent work is high; dated work is
 // medium; undated work carries no flag, matching the house rule that TickTick's
@@ -140,6 +148,12 @@ function itemFor(
   nowMs: number,
   sunk: boolean,
   chase = false,
+  /**
+   * Set when this row stands for a whole MATTER rather than one commitment.
+   * `all` is every link the matter has ever had, open and settled, so the note
+   * can state progress.
+   */
+  matter?: { id: string; all: readonly Commitment[] },
 ): DesiredTask {
   const steps = chain
     .map((c) => c.assessment?.next_step?.trim())
@@ -153,6 +167,7 @@ function itemFor(
       ? `${displayName ?? personaKey} 欠这件事` +
         (recentlyOverdue(lead.due, nowMs) ? `,${lead.due} 已过期。` : ",你在等它。")
       : "",
+    matter ? matterProgress(matter.all, lead, displayName ?? personaKey) : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
     displayName ? `— ${displayName}` : `— ${personaKey}`,
   ].filter(Boolean);
@@ -174,12 +189,57 @@ function itemFor(
     ...(due ? { ...due, timeZone: zone } : {}),
   };
   return {
-    // Keyed by persona + the commitment's own wording. A reworded `what` mints
-    // a new key, and the sync's title-match adoption then updates the same
-    // TickTick task in place instead of creating a twin.
-    unitKey: `ledger_${personaKey}_${stableHash((chase ? "chase:" : "") + lead.what.trim())}`,
+    // A MATTER keys by the matter, an unfiled commitment by its own wording.
+    //
+    // WHY THE DIFFERENCE MATTERS: wording is not identity. The model rewords a
+    // commitment as the conversation sharpens it, and a matter's LEAD moves
+    // from link to link as the work advances — either one mints a new key,
+    // which the sync reads as a new to-do. Measured 2026-09-27 over the seven
+    // days after the resurrection fix: 169 creates against 9 updates, with
+    // 「约Alger定本周OH3时间」→「约 Alger 定周四下午OH具体时间」→「敲定周四下午与
+    // Alger的OH时间」 sitting in the map as three separate rows for one job.
+    // 「不要新卡顶替旧卡」 (owner, 2026-09-27).
+    //
+    // matter_id is the identity the ledger already has: the model assigns it
+    // behind the same quote gate as everything else, and it does not move when
+    // the chain grows. A commitment with NO matter_id keeps the old wording key
+    // — unfiled work has nothing to attach to, and inventing an attachment is
+    // how one contact's card ends up swallowing everything they ever said
+    // (core/unit-key.ts). 「归属判不准就新开一张」.
+    unitKey: matter
+      ? `ledger_${personaKey}_${stableHash(MATTER_TAG + matter.id.trim())}`
+      : `ledger_${personaKey}_${stableHash((chase ? "chase:" : "") + lead.what.trim())}`,
     payload,
   };
+}
+
+/**
+ * Where a matter stands right now, for the row's note.
+ *
+ * THIS IS THE SELF-UPDATING PART. The row's key no longer moves, so every new
+ * link the conversation adds — and every link that closes — re-renders this
+ * block and the sync writes it over the SAME TickTick task. 「后续有新的
+ * information更新，直接更新目前ticket的Description区域」 (owner, 2026-09-27).
+ *
+ * It re-renders rather than appends: 「我不是要不断叠加」. Settled links are a
+ * COUNT, not a list — the ledger records no completion date, so any "recently
+ * finished" ordering would be array order dressed up as chronology.
+ */
+function matterProgress(all: readonly Commitment[], lead: Commitment, them: string): string {
+  const open = all.filter((c) => c.status === "open");
+  const settled = all.length - open.length;
+  // The LEAD is already the row's title; repeating it here just made the note
+  // open with the sentence above it.
+  const rest = open.filter((c) => c !== lead);
+  const mine = rest.filter((c) => c.who === "me").map((c) => c.what.trim());
+  const theirs = rest.filter((c) => c.who !== "me").map((c) => c.what.trim());
+  return [
+    `进度: 共 ${all.length} 项,已了结 ${settled} 项。`,
+    mine.length > 0 ? `我这边还有:\n${mine.map((w) => `  · ${w}`).join("\n")}` : "",
+    theirs.length > 0 ? `等 ${them}:\n${theirs.map((w) => `  · ${w}`).join("\n")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 /**
@@ -202,8 +262,18 @@ export function deriveLedgerTasks(
     const open = (p.commitments ?? []).filter((c) => c.status === "open");
 
     // Matters first: all open links sharing a matter_id are one unit of work.
+    // `all` carries the SETTLED links too — they are not rows, but they are how
+    // the note states progress, and progress is what makes the row worth
+    // re-reading a week later.
     const inMatter = new Set<Commitment>();
     const matters = new Map<string, Commitment[]>();
+    const allByMatter = new Map<string, Commitment[]>();
+    for (const c of p.commitments ?? []) {
+      if (!c.matter_id) continue;
+      const a = allByMatter.get(c.matter_id) ?? [];
+      a.push(c);
+      allByMatter.set(c.matter_id, a);
+    }
     for (const c of open) {
       if (!c.matter_id) continue;
       inMatter.add(c);
@@ -212,13 +282,13 @@ export function deriveLedgerTasks(
       matters.set(c.matter_id, m);
     }
     for (const [matterId, chain] of matters) {
-      // The ACTIVE link is the one where the work sits with Leo. A chain whose
-      // open links all sit with others is tracked but owes no row — exactly how
-      // the owner adjudicated the antenna matter by hand.
+      const all = allByMatter.get(matterId) ?? chain;
+      const as = { id: matterId, all };
+      // The ACTIVE link is the one where the work sits with Leo.
       const closed = closedMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (lead) {
-        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs)));
+        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs), false, as));
         continue;
       }
       const sunk = closed || !activeMatters.has(matterId);
@@ -230,7 +300,7 @@ export function deriveLedgerTasks(
         (c) => c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo),
       );
       if (late) {
-        out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true));
+        out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true, as));
         continue;
       }
       // Still open, just not now. The owner's rule is that only done or dropped
@@ -238,8 +308,17 @@ export function deriveLedgerTasks(
       // matter with nothing live sinks to the floor instead of vanishing.
       // Vanishing is what the sync reads as "finished", and on 2026-09-06 that
       // was one push away from closing three live to-dos.
+      //
+      // ONLY a who=me link holds the floor, which is narrower than it looks: a
+      // matter whose open links all sit with OTHERS renders nothing at all, and
+      // under a stable matter key "nothing" is how the sync spells finished.
+      // 金小奇's equity matter is live proof — twelve links, six still open, the
+      // whole 股权变更 inside it, and zero rows on 2026-09-27. Left as it was on
+      // purpose: promotion is the owner's rule (six tests pin "stays silent"),
+      // and widening it here would change what reaches his list under cover of
+      // a keying change. Flagged to him instead.
       const dormant = chain.find((c) => c.who === "me");
-      if (dormant) out.push(itemFor(p.key, p.display_name, dormant, chain, zone, nowMs, true));
+      if (dormant) out.push(itemFor(p.key, p.display_name, dormant, chain, zone, nowMs, true, false, as));
     }
 
     for (const c of open) {
@@ -281,8 +360,22 @@ export function parseLedgerUnitKey(unitKey: string): { personaKey: string; hash:
   return personaKey !== "" && hash !== "" ? { personaKey, hash } : null;
 }
 
-/** Both spellings, because a chase row hashes its "chase:"-prefixed text. */
-export function commitmentMatchesHash(what: string, hash: string): boolean {
-  const w = what.trim();
-  return stableHash(w) === hash || stableHash("chase:" + w) === hash;
+/**
+ * Does this commitment sit behind that row?
+ *
+ * Three spellings, because one key shape serves three kinds of row: its own
+ * wording, its "chase:"-prefixed wording, and — for a MATTER row — its
+ * matter_id. The matter case is why this takes the commitment rather than the
+ * `what` string: finishing a matter's row means the MATTER is finished, so
+ * every open link in it closes, not just whichever one happened to be the
+ * lead when the owner ticked it.
+ */
+export function commitmentMatchesHash(
+  c: { what: string; matter_id?: string },
+  hash: string,
+): boolean {
+  const w = c.what.trim();
+  if (stableHash(w) === hash || stableHash("chase:" + w) === hash) return true;
+  const m = c.matter_id?.trim();
+  return m !== undefined && m !== "" && stableHash(MATTER_TAG + m) === hash;
 }

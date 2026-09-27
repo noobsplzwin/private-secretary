@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { deriveLedgerTasks, POOL_LIST } from "./ledger-list.js";
+import { applySyncOps, diffTickTickSync, summarize } from "./ticktick-sync.js";
 import type { Commitment } from "./persona-v3.js";
 
 const NOW = Date.parse("2026-08-22T12:00:00Z");
@@ -65,10 +66,23 @@ describe("the floor: what a row falls to when nothing promotes it", () => {
   });
 
   it("sinks — never drops: the row still exists and keeps its key", () => {
-    const sunk = derive([persona([c({ ...assessed(true) })])]);
+    // Same work, same identity, different shelf. The shelf is `project`;
+    // sinking must never re-key, or the sync reads it as a new to-do.
     const live = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])]);
+    const sunk = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])], ZONE, NOW, LIVE, new Set(["fcc"]));
     expect(sunk).toHaveLength(1);
-    expect(sunk[0]!.unitKey).toBe(live[0]!.unitKey); // same work, same identity, different shelf
+    expect(sunk[0]!.payload.project).toBe(POOL_LIST);
+    expect(live[0]!.payload.project).toBeUndefined();
+    expect(sunk[0]!.unitKey).toBe(live[0]!.unitKey);
+  });
+
+  // REVISED 2026-09-27. This used to assert that FILING work under a matter
+  // left its key alone. It no longer does, on purpose: a matter is the durable
+  // identity a self-updating row needs, and wording is not.
+  it("filed work keys by its MATTER, unfiled work by its wording", () => {
+    const filed = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])]);
+    const unfiled = derive([persona([c({ ...assessed(true) })])]);
+    expect(filed[0]!.unitKey).not.toBe(unfiled[0]!.unitKey);
   });
 
   it("an unreadable registry no longer silences judged work", () => {
@@ -475,5 +489,136 @@ describe("a date-anchored occasion sinks once it is long past", () => {
   it("sinks but does NOT remove — a commitment still ends only by done or dropped", () => {
     const rows = derive([persona([c({ due: days(60), ...assessed(true) })])]);
     expect(rows).toHaveLength(1);
+  });
+});
+
+// ── the self-updating row (owner, 2026-09-27) ───────────────────────────
+//
+// 「1. 后续有新的information更新，直接更新目前ticket的Description区域
+//   2. 如果这个ticket后续information更新中已经被resolve了，那这个卡就可以自动
+//      mark结束」 — and 「不要新卡顶替旧卡」.
+//
+// Measured that morning over the seven days since the resurrection fix: 169
+// TickTick creates against 9 updates. Every new turn of a conversation minted
+// a fresh card, because identity was the row's own wording. The sync has done
+// create-or-update by unitKey all along; what it never got was a key that
+// stays still.
+describe("a matter's row updates in place instead of re-minting", () => {
+  const link = (what: string, over: Partial<Commitment> = {}): Commitment =>
+    c({ what, matter_id: "fcc", ...over });
+
+  it("keeps ONE key while the conversation adds links", () => {
+    const day1 = derive([persona([link("约 Alger 定本周 OH 时间", assessed(true))])]);
+    const day2 = derive([
+      persona([
+        link("约 Alger 定本周 OH 时间", { status: "done" }),
+        link("敲定周四下午与 Alger 的 OH 具体时间", assessed(true)),
+      ]),
+    ]);
+    expect(day1).toHaveLength(1);
+    expect(day2).toHaveLength(1);
+    expect(day2[0]!.unitKey).toBe(day1[0]!.unitKey);
+  });
+
+  // The key holding still is only half of it — the note has to actually CHANGE,
+  // or the hash gate reports "in sync" and the owner reads yesterday's ticket.
+  it("re-renders the note, so the row's payload really is different", () => {
+    const before = derive([persona([link("寄样品给客户", assessed(true))])]);
+    const after = derive([
+      persona([link("寄样品给客户", assessed(true)), link("等客户回测试报告", { who: "them" })]),
+    ]);
+    const note = (r: (typeof after)[number]): string =>
+      String(r.payload.desc ?? r.payload.content ?? "");
+    expect(note(after[0]!)).not.toBe(note(before[0]!));
+    expect(note(after[0]!)).toContain("等客户回测试报告");
+    expect(note(after[0]!)).toContain("进度: 共 2 项,已了结 0 项");
+    // the lead is the TITLE, so the note lists what is left beside it
+    expect(note(after[0]!)).not.toContain("我这边还有");
+  });
+
+  // 「我不是要不断叠加」 — settled links are a count, not an ever-growing list.
+  // The ledger records no completion DATE, so listing them "most recent first"
+  // would be array order wearing a chronology it does not have.
+  it("counts settled links rather than listing them", () => {
+    const [row] = derive([
+      persona([
+        link("第一步", { status: "done" }),
+        link("第二步", { status: "done" }),
+        link("第三步", assessed(true)),
+      ]),
+    ]);
+    const note = String(row!.payload.desc ?? row!.payload.content ?? "");
+    expect(note).toContain("进度: 共 3 项,已了结 2 项");
+    expect(note).not.toContain("第一步");
+    expect(note).not.toContain("第二步");
+    // 第三步 is the lead, so it is the row's TITLE rather than a note line.
+    expect(row!.payload.title).toBe("第三步");
+  });
+
+  // Logic 2. Nothing open anywhere in the chain → no row → the sync's
+  // ordinary complete path closes the task. Auto-close is the ABSENCE of a
+  // row, which is why the key had to stop moving first: a row that re-keys
+  // itself looks exactly like a row that finished.
+  it("produces no row once every link is settled", () => {
+    expect(
+      derive([persona([link("寄样品给客户", { status: "done" }), link("等回执", { who: "them", status: "done" })])]),
+    ).toEqual([]);
+  });
+
+  // 「归属判不准就新开一张」. Unfiled work has nothing durable to attach to, so
+  // it keeps the wording key — a new card, which is the honest failure.
+  it("unfiled work still re-keys when it is reworded", () => {
+    const a = derive([persona([c({ what: "回复茉莉昨晚住哪", ...assessed(true) })])]);
+    const b = derive([persona([c({ what: "回复茉莉昨晚住在哪（是否石家庄）", ...assessed(true) })])]);
+    expect(b[0]!.unitKey).not.toBe(a[0]!.unitKey);
+  });
+});
+
+// The end-to-end claim, because every piece above can be right while the thing
+// the owner sees is still a second card. This runs the real diff over two days
+// of one conversation.
+describe("end to end: a day-2 message updates the day-1 task", () => {
+  const link = (what: string, over: Partial<Commitment> = {}): Commitment =>
+    c({ what, matter_id: "fcc", ...over });
+
+  const sync = (rows: ReturnType<typeof deriveLedgerTasks>, map = {}) => {
+    const ops = diffTickTickSync(rows, map);
+    const results = Object.fromEntries(
+      ops.filter((o) => o.kind !== "skip").map((o) => [o.unitKey, { ticktickId: "tt-1", projectId: "p" }]),
+    );
+    return { ops, map: applySyncOps(map, ops, results), counts: summarize(ops) };
+  };
+
+  it("creates once, then updates the SAME TickTick task", () => {
+    const day1 = sync(derive([persona([link("约 Alger 定本周 OH 时间", assessed(true))])]));
+    expect(day1.counts).toMatchObject({ create: 1, update: 0, complete: 0 });
+
+    const day2 = sync(
+      derive([
+        persona([
+          link("约 Alger 定本周 OH 时间", { status: "done" }),
+          link("敲定周四下午与 Alger 的 OH 具体时间", assessed(true)),
+        ]),
+      ]),
+      day1.map,
+    );
+    // The row that matters: ONE update, and nothing created or completed.
+    expect(day2.counts).toMatchObject({ create: 0, update: 1, complete: 0 });
+    const op = day2.ops.find((o) => o.kind === "update")!;
+    expect(op).toMatchObject({ ticktickId: "tt-1" });
+    expect(op.kind === "update" && op.payload.title).toBe("敲定周四下午与 Alger 的 OH 具体时间");
+
+    // Day 3: the matter finishes. The task completes itself.
+    const day3 = sync(
+      derive([
+        persona([
+          link("约 Alger 定本周 OH 时间", { status: "done" }),
+          link("敲定周四下午与 Alger 的 OH 具体时间", { status: "done" }),
+        ]),
+      ]),
+      day2.map,
+    );
+    expect(day3.counts).toMatchObject({ create: 0, update: 0, complete: 1 });
+    expect(day3.ops[0]).toMatchObject({ kind: "complete", ticktickId: "tt-1" });
   });
 });
