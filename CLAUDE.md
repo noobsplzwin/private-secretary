@@ -70,8 +70,10 @@ The layout is discoverable from the tree; what is NOT discoverable:
   owner's back, 77 his own, including 「设立三个持股平台…目前尚未启动」. The
   ledger was left with ONE open who=me commitment out of 360. A project that
   cannot be read passes `coversEveryProject: false` and closes NOTHING that
-  tick. Do NOT widen the ORPHAN list the same way: 121 pool tasks are untracked,
-  and orphan reconciliation completes engine-tagged tasks nothing desires.
+  tick. Orphan reconciliation reads both projects too — but only since the
+  owner approved completing the 159 strays that had piled up in 待办池
+  (2026-09-28). Widening it with untracked engine tasks still in a project
+  would mass-complete them on the first tick.
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 

@@ -1395,8 +1395,22 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       console.log(`[ticktick] desired: ${ledger.length} ledger row(s) + ${rows.length - ledger.length} card row(s)`);
       // Live remote list for orphan reconciliation — non-fatal: without it the
       // sync still works, it just cannot see its own strays this tick.
+      //
+      // BOTH projects. It read only Work, so strays in 待办池 were never seen
+      // and piled up: 121 untracked engine tasks from 9/5–9/20, plus 38 left
+      // stranded by the absence bug, all sitting in the owner's pool (and 34 of
+      // them in his Today / Next 7 Days). Those 159 were completed by hand on
+      // 2026-09-28 with his approval, which is what made widening this safe —
+      // before that, the first tick would have mass-completed them unasked.
+      //
+      // Unlike the readback, a PARTIAL read is harmless here: orphan
+      // reconciliation only acts on tasks it actually saw, so a pool read that
+      // fails just means the pool's strays wait a tick.
       const remoteActive = opts.ticktickReader
-        ? await opts.ticktickReader.listActive().catch(() => undefined)
+        ? await opts.ticktickReader.listActive().then(
+            async (work) => [...work, ...(await opts.ticktickReader!.listActive(POOL_LIST).catch(() => []))],
+            () => undefined,
+          )
         : undefined;
       const { map, report } = await syncToTickTick(rows, loadSyncMap(opts.statePath), opts.ticktickWriter, remoteActive);
       saveSyncMap(opts.statePath, map);
