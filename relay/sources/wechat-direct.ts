@@ -180,17 +180,31 @@ export async function scanWechatInbox(
     ...(opts.officialNames ? { official: opts.officialNames } : {}),
   });
   let book = opts.book;
-  // First contact seeds its cursor and mints nothing — otherwise the first sight
-  // of a chat would pour its whole backlog into the queue as if it arrived now.
+  // First contact drops a chat's BACKLOG, not the message that brought it here.
+  // Seeding at the newest message kept a first sight from pouring months of
+  // history into the queue, but it also threw away the one line that made the
+  // chat appear — the same flaw that lost the 「29号茂名行程」 meeting on the
+  // group side (scanWechatGroups). A chat whose newest message is inside the
+  // wake window is read this tick from the window's edge; an older one is
+  // seeded exactly as before.
+  const woke: string[] = [];
   for (const name of plan.seed) {
     const s = sessions.find((x) => x.name === name);
-    if (s) book = advanceCursor(book, name, s.tsMs);
+    if (!s) continue;
+    if (opts.nowMs - s.tsMs <= WAKE_WINDOW_MS) {
+      book = advanceCursor(book, name, opts.nowMs - WAKE_WINDOW_MS);
+      woke.push(name);
+    } else {
+      book = advanceCursor(book, name, s.tsMs);
+    }
   }
   const byName = new Map(sessions.map((s) => [s.name, s]));
   const inbound: InboundMessage[] = [];
-  for (const name of plan.fetch) {
+  for (const name of [...plan.fetch, ...woke]) {
     const s = byName.get(name)!;
-    const since = opts.book[name]?.lastSeenMs ?? 0;
+    // From `book`, not `opts.book`: a chat that just woke has its cursor only
+    // there, and reading 0 instead would take its whole fetched history as new.
+    const since = book[name]?.lastSeenMs ?? 0;
     // Enough to cover what is new PLUS a few prior messages for conversation
     // context (so the draft isn't a reply to a lone line ripped from its thread).
     const limit = Math.min(cap, Math.max(s.unread + CONTEXT_LOOKBACK, 6));
@@ -299,6 +313,15 @@ export interface WechatGroupScanOptions {
  * the model can read them and no code pretends to know who they are; a group
  * resolves to no persona, so its work reaches the owner through the card path.
  */
+/**
+ * How far back first contact with a group still counts as NEW. A day: a group
+ * is classified the first tick it shows a fresh message (every two minutes)
+ * and fetched the next, so the messages that woke it are minutes old — a day
+ * also covers the daemon having been down for a night. Anything older is the
+ * history the «Lucky» rule exists to keep out.
+ */
+export const WAKE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export async function scanWechatGroups(
   opts: WechatGroupScanOptions,
 ): Promise<{ inbound: InboundMessage[]; book: GroupBook }> {
@@ -330,17 +353,34 @@ export async function scanWechatGroups(
     }
     if (msgs.length === 0) continue;
     const newest = msgs[msgs.length - 1]!.tsMs;
-    // FIRST CONTACT seeds the cursor and mints nothing. A group admitted with no
-    // cursor used to read as "everything is new", so its whole recent history
-    // came through as fresh work: on 2026-09-12 the two-message group «Lucky»
-    // produced 「回复茉莉：是否需要装空调」 from a message dated 2025-06-13 — a
-    // reply the owner was asked to make to a question fifteen months old.
-    // Coverage starts at admission; history before it is not a to-do.
+    // FIRST CONTACT drops HISTORY — not the messages that woke the group up.
+    //
+    // A group admitted with no cursor used to read as "everything is new": on
+    // 2026-09-12 the two-message group «Lucky» produced 「回复茉莉：是否需要装空
+    // 调」 from a message dated 2025-06-13, fifteen months old. So first contact
+    // seeded the cursor at the NEWEST message and minted nothing.
+    //
+    // That threw away the wrong thing too. A group only reaches classify when
+    // it has a fresh message, so the messages that made it appear are by
+    // definition new work. 2026-09-27: 「29号茂名行程」, quiet since 9/08, woke up
+    // at 10:50 with 「明天有时间吗？我们仨约个线上会议」 → 「那就上午 10 点？」 →
+    // 「可以的」. It was admitted at 10:54, first-contacted a tick later, and the
+    // whole agreed meeting was seeded past — no card, no calendar event.
+    //
+    // So first contact now keeps the last WAKE_WINDOW_MS and drops only what is
+    // older: Lucky's fifteen-month-old question still never becomes a to-do,
+    // and the meeting does. An unparseable clock falls back to the old seed.
+    let cursor: number;
     if (entry.lastSeenMs === undefined) {
-      book[name] = { ...entry, lastSeenMs: newest };
-      continue;
+      const nowMs = Date.parse(at);
+      if (Number.isNaN(nowMs)) {
+        book[name] = { ...entry, lastSeenMs: newest };
+        continue;
+      }
+      cursor = nowMs - WAKE_WINDOW_MS;
+    } else {
+      cursor = entry.lastSeenMs;
     }
-    const cursor = entry.lastSeenMs;
     const unseen = msgs.filter((m) => m.tsMs > cursor && m.speaker !== OWN_LABEL);
     // The cursor advances over Leo's OWN messages too — they are seen, just not
     // work for him — otherwise a group where he speaks last re-reads every tick.

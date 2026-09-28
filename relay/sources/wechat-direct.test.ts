@@ -169,16 +169,34 @@ describe("scanWechatInbox", () => {
     expect(book.坦丁!.lastSeenMs).toBeGreaterThan(1);
   });
 
-  // First sight must not pour a contact's whole backlog into the queue.
-  it("seeds a first-seen chat and mints nothing", async () => {
+  // First sight must not pour a contact's whole BACKLOG into the queue — a
+  // chat whose newest message is days old is seeded and mints nothing.
+  it("seeds a first-seen chat with an OLD backlog and mints nothing", async () => {
     const { inbound, book } = await scanWechatInbox({
       ...opts,
-      fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] 新朋友 (3条未读)\n  文本: 你好",
-      fetchHistory: async () => "[2026-06-14 21:00] 新朋友: 你好",
+      fetchSessions: async () => "最近 1 个会话:\n\n[06-10 21:00] 新朋友 (3条未读)\n  文本: 你好",
+      fetchHistory: async () => "[2026-06-10 21:00] 新朋友: 你好",
       book: {},
     });
     expect(inbound).toHaveLength(0);
     expect(book.新朋友!.lastSeenMs).toBeGreaterThan(0);
+  });
+
+  // REVISED 2026-09-28. This used to pin the opposite: a chat first seen with
+  // a message an hour old minted NOTHING. That is the flaw that lost the
+  // 「29号茂名行程」 meeting on the group side — the message that makes a chat
+  // appear is the newest thing in it, not backlog.
+  it("reads the message that brought a first-seen chat here", async () => {
+    const { inbound, book } = await scanWechatInbox({
+      ...opts,
+      fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] 新朋友 (1条未读)\n  文本: 明天上午10点开个会？",
+      fetchHistory: async () =>
+        "[2026-06-10 09:00] 新朋友: 很久以前的一句\n[2026-06-14 21:00] 新朋友: 明天上午10点开个会？",
+      book: {},
+    });
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0]!.text).toBe("明天上午10点开个会？"); // the 6/10 line is backlog
+    expect(book.新朋友!.lastSeenMs).toBe(new Date("2026-06-14T21:00:00").getTime());
   });
 
   it("combines multiple incoming messages; drops Leo's outgoing lines", async () => {
@@ -332,7 +350,7 @@ describe("ownerLastSpokeIn (an answered WeChat thread never reaches the engine)"
   });
 });
 
-describe("first contact with a group seeds the cursor and mints nothing", () => {
+describe("first contact with a group drops history, not the messages that woke it", () => {
   // REGRESSION: an admitted group with no cursor read its whole recent history
   // as new — «Lucky» produced a reply card from a 2025-06-13 message on
   // 2026-09-12. Coverage begins at admission; older history is not a to-do.
@@ -350,6 +368,42 @@ describe("first contact with a group seeds the cursor and mints nothing", () => 
     });
     expect(r.inbound).toEqual([]);
     expect(r.book.Lucky!.lastSeenMs).toBe(Date.parse("2025-06-13T21:18:00"));
+  });
+
+  // REGRESSION 2026-09-27 — 「29号茂名行程」. A group quiet since 9/08 woke up
+  // with a meeting being agreed; first contact seeded past all of it, and the
+  // meeting never became a card. The wake-up messages are new; only history is not.
+  it("keeps the messages that WOKE a group up, and still drops old history", async () => {
+    const maoming = H([
+      ["2026-09-08 20:34", "C.Y - 诚哥 沉香", "好像导出的有些问题"],
+      ["2026-09-27 10:50", "金小奇 芯联集成", "诚哥，明天有时间吗？我们仨约个线上会议？"],
+      ["2026-09-27 10:51", "金小奇 芯联集成", "那就上午 10 点？"],
+      ["2026-09-27 10:51", "C.Y - 诚哥 沉香", "OK"],
+      ["2026-09-27 10:53", "我", "可以的"],
+    ]);
+    const r = await scanWechatGroups({
+      sessions: [{ name: "29号茂名行程", isGroup: true, unread: 0, tsMs: Date.parse("2026-09-27T10:53:00") }],
+      book: { "29号茂名行程": { decision: "allow", by: "auto", at: "2026-09-27T10:54:53+08:00", speakers: 4 } },
+      fetchHistory: async () => maoming,
+      now: () => "2026-09-27T11:00:00+08:00",
+    });
+    expect(r.inbound).toHaveLength(1);
+    expect(r.inbound[0]!.text).toContain("那就上午 10 点？");
+    expect(r.inbound[0]!.text).not.toContain("好像导出的有些问题"); // 9/08 is history
+    expect(r.book["29号茂名行程"]!.lastSeenMs).toBe(Date.parse("2026-09-27T10:53:00"));
+  });
+
+  it("an ancient group still mints nothing on first contact, with a real clock", async () => {
+    const r = await scanWechatGroups({
+      sessions,
+      book: { Lucky: { decision: "allow", by: "auto", at: "2026-09-12T11:00:00+08:00", speakers: 1 } },
+      fetchHistory: async () => hist,
+      now: () => "2026-09-12T11:02:00+08:00",
+    });
+    expect(r.inbound).toEqual([]);
+    // The cursor lands at the window's edge, past the 2025 message: it can
+    // never be read as new again.
+    expect(r.book.Lucky!.lastSeenMs).toBeGreaterThan(Date.parse("2025-06-13T21:18:00"));
   });
 
   it("then only messages newer than that cursor become inbound", async () => {

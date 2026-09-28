@@ -133,8 +133,14 @@ call, 2026-09-12.
   answers, unread hits zero, and the conversation becomes invisible — which is
   exactly the shape of a meeting he just agreed to. `core/wechat-direct-cursor.ts`
   now scans any chat that MOVED, read or not; direction (not unread) is what
-  keeps him from being drafted a reply to himself. First contact seeds the
-  cursor and mints nothing. Poll interval is 2 minutes.
+  keeps him from being drafted a reply to himself. Poll interval is 2 minutes.
+- **First contact drops BACKLOG, not the message that woke the chat**
+  (`WAKE_WINDOW_MS`, 24h, `sources/wechat-direct.ts`; groups and 1:1 alike). A
+  chat or group first seen is read from 24h ago; only older history is skipped.
+  Seeding at the NEWEST message kept «Lucky»'s fifteen-month-old question out,
+  but it also discarded the lines that made the chat appear — measured
+  2026-09-28: 21 groups, ~100 messages over two weeks, including
+  「29号茂名行程」's agreed 10:00 meeting, which never became a card.
 - **A cursor advances only AFTER the drafter has had its turn.** Committing it
   at scan time turns any draft failure into permanent data loss: the messages
   are marked read and nothing looks at them again. Measured 2026-09-24 — the
