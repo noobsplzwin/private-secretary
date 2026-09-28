@@ -54,6 +54,9 @@ export interface LedgerPersona {
   commitments?: Commitment[];
 }
 
+/** How a row reads — see itemFor's `mode`. */
+type RowMode = "own" | "chase" | "waiting";
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Where sunk rows go. The list must exist in TickTick — the io layer resolves
@@ -147,7 +150,19 @@ function itemFor(
   zone: string,
   nowMs: number,
   sunk: boolean,
-  chase = false,
+  /**
+   * Whose move it is, which decides how the row READS.
+   *
+   *   own     — Leo's work. The title is the commitment.
+   *   chase   — they are late, or the verdict says he is the one waiting, so
+   *             his to-do is the phone call: 「催: …」.
+   *   waiting — the matter is live but nothing is his right now. Neither of the
+   *             above is honest: it is not his task, and nobody is late.
+   *
+   * A boolean could not tell the last two apart, and conflating them is how a
+   * parked matter would start shouting 催 at him.
+   */
+  mode: RowMode = "own",
   /**
    * Set when this row stands for a whole MATTER rather than one commitment.
    * `all` is every link the matter has ever had, open and settled, so the note
@@ -162,11 +177,14 @@ function itemFor(
   // The evidence is the row's provenance — the reader can see WHY this is on
   // the list without opening the conversation. Source language is preserved
   // because the quote is verbatim by construction.
+  const who = displayName ?? personaKey;
   const noteLines = [
-    chase
-      ? `${displayName ?? personaKey} 欠这件事` +
+    mode === "chase"
+      ? `${who} 欠这件事` +
         (recentlyOverdue(lead.due, nowMs) ? `,${lead.due} 已过期。` : ",你在等它。")
-      : "",
+      : mode === "waiting"
+        ? `这件事还没完,但眼下不用你动——在等 ${who}。`
+        : "",
     matter ? matterProgress(matter.all, lead, displayName ?? personaKey) : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
     displayName ? `— ${displayName}` : `— ${personaKey}`,
@@ -176,7 +194,8 @@ function itemFor(
   const payload: TickTickTaskPayload = {
     // The owner's action on someone else's missed deadline is to chase it. The
     // row names that action, not their work — his to-do is the phone call.
-    title: chase ? `催: ${lead.what}` : lead.what,
+    title:
+      mode === "chase" ? `催: ${lead.what}` : mode === "waiting" ? `等: ${lead.what}` : lead.what,
     kind: steps.length > 0 ? "CHECKLIST" : "TEXT",
     // A sunk row carries no urgency by construction — priority is what pulls a
     // row into the owner's day, and nothing outside a live matter may do that.
@@ -208,7 +227,7 @@ function itemFor(
     // (core/unit-key.ts). 「归属判不准就新开一张」.
     unitKey: matter
       ? `ledger_${personaKey}_${stableHash(MATTER_TAG + matter.id.trim())}`
-      : `ledger_${personaKey}_${stableHash((chase ? "chase:" : "") + lead.what.trim())}`,
+      : `ledger_${personaKey}_${stableHash((mode === "chase" ? "chase:" : "") + lead.what.trim())}`,
     payload,
   };
 }
@@ -288,7 +307,7 @@ export function deriveLedgerTasks(
       const closed = closedMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (lead) {
-        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs), false, as));
+        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs), "own", as));
         continue;
       }
       const sunk = closed || !activeMatters.has(matterId);
@@ -300,7 +319,7 @@ export function deriveLedgerTasks(
         (c) => c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo),
       );
       if (late) {
-        out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, true, as));
+        out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, "chase", as));
         continue;
       }
       // Still open, just not now. The owner's rule is that only done or dropped
@@ -309,22 +328,31 @@ export function deriveLedgerTasks(
       // Vanishing is what the sync reads as "finished", and on 2026-09-06 that
       // was one push away from closing three live to-dos.
       //
-      // ONLY a who=me link holds the floor, which is narrower than it looks: a
-      // matter whose open links all sit with OTHERS renders nothing at all, and
-      // under a stable matter key "nothing" is how the sync spells finished.
-      // 金小奇's equity matter is live proof — twelve links, six still open, the
-      // whole 股权变更 inside it, and zero rows on 2026-09-27. Left as it was on
-      // purpose: promotion is the owner's rule (six tests pin "stays silent"),
-      // and widening it here would change what reaches his list under cover of
-      // a keying change. Flagged to him instead.
+      // ANY open link holds the floor — not just a who=me one (owner,
+      // 2026-09-28: 「补上，沉到待办池，不升顶」).
+      //
+      // The old rule asked for a dormant commitment of MINE and rendered
+      // NOTHING when it found none, which was survivable only while a row's key
+      // moved on its own. Under a stable matter key, no row in `desired` is
+      // exactly how the sync spells "finished", so a live matter auto-completed
+      // its own ticket. Both halves were measured on the real account the same
+      // week: 金小奇's equity matter — twelve links, six open, the whole 股权变更
+      // inside it — produced zero rows on 2026-09-27; and on 2026-09-28 the
+      // 大众VW cascade matter had its ticket completed with two links still
+      // open, because the chase window expired and nothing else held it.
+      //
+      // ALWAYS SUNK, never promoted. The floor is the whole point: 「不升顶」.
+      // What reaches the top of the list is unchanged — a verdict promotes, and
+      // nothing here fakes one.
       const dormant = chain.find((c) => c.who === "me");
-      if (dormant) out.push(itemFor(p.key, p.display_name, dormant, chain, zone, nowMs, true, false, as));
+      if (dormant) out.push(itemFor(p.key, p.display_name, dormant, chain, zone, nowMs, true, "own", as));
+      else if (chain[0]) out.push(itemFor(p.key, p.display_name, chain[0], chain, zone, nowMs, true, "waiting", as));
     }
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
       if (c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo)) {
-        out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, true));
+        out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, "chase"));
         continue;
       }
       if (c.who !== "me") continue;

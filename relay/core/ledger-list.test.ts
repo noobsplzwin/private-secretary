@@ -256,16 +256,41 @@ describe("they owe me, and they are late", () => {
     expect(row!.payload.priority).toBe(5); // past its date — overdue counts as urgent
   });
 
-  it("a commitment of theirs that is NOT yet due stays silent", () => {
-    expect(derive([persona([late({ due: "2026-12-01" })])])).toEqual([]);
+  // REVISED 2026-09-28 by owner ruling 「补上，沉到待办池，不升顶」. These three
+  // used to assert SILENCE — no row at all. Silence was survivable only while a
+  // row's key moved on its own; under a stable matter key, no row in `desired`
+  // is exactly how the sync spells "finished", so a live matter completed its
+  // own ticket. The 大众VW cascade matter did it that day with two links open.
+  //
+  // What the block still pins is the half that was always right: none of these
+  // is a CHASE, and none of them earns a place in his day.
+  const sunkNotChased = (rows: ReturnType<typeof deriveLedgerTasks>): void => {
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload.project).toBe(POOL_LIST);
+    expect(rows[0]!.payload.priority).toBe(0);
+    expect(rows[0]!.payload.title).not.toContain("催");
+    expect(rows[0]!.payload.title).toContain("等: ");
+  };
+
+  it("a commitment of theirs that is NOT yet due sinks, and is not chased", () => {
+    sunkNotChased(derive([persona([late({ due: "2026-12-01" })])]));
   });
 
-  it("an undated commitment of theirs stays silent — lateness must be evidenced", () => {
-    expect(derive([persona([late({ due: undefined })])])).toEqual([]);
+  it("an undated commitment of theirs sinks — lateness must be evidenced", () => {
+    sunkNotChased(derive([persona([late({ due: undefined })])]));
   });
 
-  it("a free-text due is not a deadline and mints nothing", () => {
-    expect(derive([persona([late({ due: "end of weekend" })])])).toEqual([]);
+  it("a free-text due is not a deadline, so the row sinks instead of chasing", () => {
+    sunkNotChased(derive([persona([late({ due: "end of weekend" })])]));
+  });
+
+  // The row exists so the matter does not auto-complete itself, and its note
+  // has to say why it is parked — 「等: 」 alone reads like a task he is late on.
+  it("says plainly that the move is theirs, not his", () => {
+    const [row] = derive([persona([late({ due: undefined })])]);
+    const note = String(row!.payload.desc ?? row!.payload.content ?? "");
+    expect(note).toContain("眼下不用你动");
+    expect(note).toContain("Zech Noiseux");
   });
 
   it("my own live link wins the matter — no chasing myself", () => {
@@ -293,8 +318,10 @@ describe("they owe me, and the verdict says I am waiting", () => {
     expect(row!.payload.title).toBe("催: Arrange the 承兑汇票 payment");
   });
 
-  it("needs_leo=false on their commitment stays silent", () => {
-    expect(derive([persona([owed({ ...assessed(false) })])])).toEqual([]);
+  it("needs_leo=false on their commitment sinks rather than chasing", () => {
+    const [row] = derive([persona([owed({ ...assessed(false) })])]);
+    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.title).toBe("等: Arrange the 承兑汇票 payment");
   });
 
   it("my own live link still wins the matter", () => {
@@ -553,6 +580,31 @@ describe("a matter's row updates in place instead of re-minting", () => {
     expect(note).not.toContain("第二步");
     // 第三步 is the lead, so it is the row's TITLE rather than a note line.
     expect(row!.payload.title).toBe("第三步");
+  });
+
+  // THE HOLE, closed 2026-09-28. A matter whose open links all sit with others
+  // used to render nothing — and under a stable key, nothing is how the sync
+  // spells "finished", so the ticket completed itself with the work still live.
+  // Production proof: the 大众VW cascade matter, two links open, task closed.
+  it("keeps a row while ANY link is open, even when none of them is mine", () => {
+    const rows = derive([
+      persona([
+        link("金小奇确定级联商务报价", { who: "them" }),
+        link("把 SoW+MSA 发给杜伟", { who: "them" }),
+      ]),
+    ]);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.payload.project).toBe(POOL_LIST); // 「不升顶」
+    expect(rows[0]!.payload.priority).toBe(0);
+  });
+
+  // ...and that row must survive the diff, or closing the hole achieved
+  // nothing: the whole point is that the task is NOT completed.
+  it("the surviving row stops the sync completing the ticket", () => {
+    const live = derive([persona([link("等对方回价", { who: "them" })])]);
+    const map = { [live[0]!.unitKey]: { ticktickId: "tt-1", projectId: "p", hash: "stale" } };
+    const ops = diffTickTickSync(live, map);
+    expect(ops.some((o) => o.kind === "complete")).toBe(false);
   });
 
   // Logic 2. Nothing open anywhere in the chain → no row → the sync's

@@ -51,7 +51,11 @@ The layout is discoverable from the tree; what is NOT discoverable:
   sitting in the map as three rows for one job. A commitment carrying a
   `matter_id` keys by `stableHash("matter:" + id)`, so new links UPDATE the same
   task and its note re-renders (「直接更新目前ticket的Description区域」); the task
-  auto-completes exactly when every link in the chain is settled. Unfiled work
+  auto-completes exactly when every link in the chain is settled — which only
+  holds because a matter with ANY open link keeps a row: when nothing in it is
+  Leo's, it sinks to 待办池 as 「等: …」 at priority 0 and is never promoted
+  (「补上，沉到待办池，不升顶」, 2026-09-28). Without that floor a live matter
+  rendered nothing and completed its own ticket. Unfiled work
   keeps the wording key and still re-mints — 「归属判不准就新开一张」 (owner,
   2026-09-27). Never add a fuzzy matcher here: gluing the wrong conversation
   onto a live ticket is worse than one extra card (`core/unit-key.ts`).
