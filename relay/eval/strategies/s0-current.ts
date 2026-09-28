@@ -51,7 +51,7 @@ function seed(dir: string, p: EvalInput["persons"][number]): string {
 
 /** The 依据 line the derive writes into every row — the row's own provenance. */
 function evidenceOf(payload: { content?: string; desc?: string }): string[] {
-  const note = payload.content ?? payload.desc ?? "";
+  const note = payload.content || payload.desc || "";
   const m = note.match(/依据:\s*"([^"]+)"/);
   return m?.[1] ? [m[1]] : [];
 }

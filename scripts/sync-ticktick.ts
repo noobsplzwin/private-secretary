@@ -86,7 +86,7 @@ if (dryRun) {
     console.log(`\n[priority ${p.priority}] ${p.title}`);
     if (p.dueDate) console.log(`  due: ${p.dueDate}`);
     for (const i of p.items ?? []) console.log(`  ☐ ${i.title}`);
-    const note = p.desc ?? p.content;
+    const note = p.desc || p.content;
     if (note) console.log(`  note: ${note.split("\n")[0]}`);
   }
   console.log("\n--dry-run: nothing written.");

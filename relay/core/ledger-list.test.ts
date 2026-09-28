@@ -288,7 +288,7 @@ describe("they owe me, and they are late", () => {
   // has to say why it is parked — 「等: 」 alone reads like a task he is late on.
   it("says plainly that the move is theirs, not his", () => {
     const [row] = derive([persona([late({ due: undefined })])]);
-    const note = String(row!.payload.desc ?? row!.payload.content ?? "");
+    const note = String(row!.payload.desc || row!.payload.content || "");
     expect(note).toContain("眼下不用你动");
     expect(note).toContain("Zech Noiseux");
   });
@@ -555,7 +555,7 @@ describe("a matter's row updates in place instead of re-minting", () => {
       persona([link("寄样品给客户", assessed(true)), link("等客户回测试报告", { who: "them" })]),
     ]);
     const note = (r: (typeof after)[number]): string =>
-      String(r.payload.desc ?? r.payload.content ?? "");
+      String(r.payload.desc || r.payload.content || "");
     expect(note(after[0]!)).not.toBe(note(before[0]!));
     expect(note(after[0]!)).toContain("等客户回测试报告");
     expect(note(after[0]!)).toContain("进度: 共 2 项,已了结 0 项");
@@ -574,7 +574,7 @@ describe("a matter's row updates in place instead of re-minting", () => {
         link("第三步", assessed(true)),
       ]),
     ]);
-    const note = String(row!.payload.desc ?? row!.payload.content ?? "");
+    const note = String(row!.payload.desc || row!.payload.content || "");
     expect(note).toContain("进度: 共 3 项,已了结 2 项");
     expect(note).not.toContain("第一步");
     expect(note).not.toContain("第二步");
@@ -672,5 +672,26 @@ describe("end to end: a day-2 message updates the day-1 task", () => {
     );
     expect(day3.counts).toMatchObject({ create: 0, update: 0, complete: 1 });
     expect(day3.ops[0]).toMatchObject({ kind: "complete", ticktickId: "tt-1" });
+  });
+});
+
+// REGRESSION 2026-09-28. update_task is a partial patch, and the ledger path
+// sent only the note field of its current kind — so a row that flipped
+// TEXT ↔ CHECKLIST kept the stale note in the field TickTick displays.
+describe("a ledger row always overwrites BOTH note fields", () => {
+  it("a checklist row blanks `content`", () => {
+    const [row] = derive([persona([c({ ...assessed(true, { next_step: "打电话" }) })])]);
+    expect(row!.payload.kind).toBe("CHECKLIST");
+    expect(row!.payload.content).toBe("");
+    expect(row!.payload.desc).not.toBe("");
+  });
+
+  it("a text row blanks `desc` and sends an EMPTY checklist", () => {
+    const [row] = derive([persona([c({ ...assessed(true) })])]);
+    expect(row!.payload.kind).toBe("TEXT");
+    expect(row!.payload.desc).toBe("");
+    expect(row!.payload.content).not.toBe("");
+    // omitted `items` would leave last week's checklist on the task
+    expect(row!.payload.items).toEqual([]);
   });
 });

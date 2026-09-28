@@ -201,9 +201,18 @@ function itemFor(
     // row into the owner's day, and nothing outside a live matter may do that.
     priority: sunk ? 0 : priorityFor(due, nowMs),
     ...(sunk ? { project: POOL_LIST } : {}),
-    ...(steps.length > 0
-      ? { desc: note, items: steps.map((title, i) => ({ title, status: 0 as const, sortOrder: i })) }
-      : { content: note }),
+    // BOTH note fields and `items`, ALWAYS — the rule card rows already follow
+    // (core/ticktick-plan.ts), which this path never did. update_task is a
+    // PARTIAL patch: a field we omit keeps whatever TickTick already holds. Once
+    // matter rows started re-rendering their note, a row that flipped between
+    // TEXT and CHECKLIST wrote the fresh note into the field TickTick was NOT
+    // showing and left the old one visible. Seen 2026-09-28 on the WiFi-patch
+    // row: `content` carried the new 「进度: 共 3 项」 note, `desc` — the one a
+    // checklist task displays — still carried the week-old quote. The
+    // self-updating description was updating somewhere he could not see.
+    desc: steps.length > 0 ? note : "",
+    content: steps.length > 0 ? "" : note,
+    items: steps.map((title, i) => ({ title, status: 0 as const, sortOrder: i })),
     tags: ["secretary"],
     ...(due ? { ...due, timeZone: zone } : {}),
   };
