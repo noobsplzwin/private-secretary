@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveLedgerTasks, POOL_LIST } from "./ledger-list.js";
+import { deriveLedgerTasks } from "./ledger-list.js";
 import { applySyncOps, diffTickTickSync, summarize } from "./ticktick-sync.js";
 import type { Commitment } from "./persona-v3.js";
 
@@ -44,7 +44,7 @@ describe("the floor: what a row falls to when nothing promotes it", () => {
     // The date does not promote it — only a verdict does. Undecided work waits
     // on the floor rather than claiming his day.
     const [row] = derive([persona([c({ due: "2026-08-23" })])]);
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
     expect(row!.payload.priority).toBe(0);
   });
 
@@ -56,7 +56,7 @@ describe("the floor: what a row falls to when nothing promotes it", () => {
       LIVE,
       new Set(["maoming-trip"]),
     );
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
   });
 
   it("promotes a commitment in a live matter, keeping its deadline priority", () => {
@@ -71,8 +71,8 @@ describe("the floor: what a row falls to when nothing promotes it", () => {
     const live = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])]);
     const sunk = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])], ZONE, NOW, LIVE, new Set(["fcc"]));
     expect(sunk).toHaveLength(1);
-    expect(sunk[0]!.payload.project).toBe(POOL_LIST);
-    expect(live[0]!.payload.project).toBeUndefined();
+    expect(sunk[0]!.payload.priority).toBe(0);
+    expect(live[0]!.payload.priority).toBeGreaterThan(0);
     expect(sunk[0]!.unitKey).toBe(live[0]!.unitKey);
   });
 
@@ -123,7 +123,7 @@ describe("deriveLedgerTasks", () => {
     );
     // REVISED with the ruling: the judged one promotes even unfiled; the rest
     // are undecided and stay on the floor.
-    const promoted = rows.filter((r) => !r.payload.project).map((r) => r.payload.title);
+    const promoted = rows.filter((r) => r.payload.priority !== 0).map((r) => r.payload.title);
     expect(promoted).toEqual(["签署高通 NDA 并回传给李冰"]);
     // done stays out, and so does their commitment — only Leo's own open work.
     expect(rows.some((r) => r.payload.title === "done thing")).toBe(false);
@@ -150,7 +150,11 @@ describe("deriveLedgerTasks", () => {
 
   // Priority is mechanical, from the deadline alone. Never invented: an undated
   // commitment carries no flag, so TickTick's date views stay meaningful.
-  it("prioritises by deadline proximity and never invents a date", () => {
+  // REVISED 2026-09-28 (one list, and 「回看日」). A promoted row is at least 3
+  // now — the list no longer says "his move", so priority has to. And an
+  // undated row carries a REVIEW date, said as one in its note. What this still
+  // pins: only a REAL deadline sets 5, and free text is never parsed into one.
+  it("prioritises by deadline proximity and never invents a DEADLINE", () => {
     const rows = derive(
       [
         persona([
@@ -172,10 +176,17 @@ describe("deriveLedgerTasks", () => {
     const by = (t: string) => rows.find((r) => r.payload.title === t)!.payload;
     expect(by("imminent").priority).toBe(5);
     expect(by("this week").priority).toBe(3);
-    expect(by("far off").priority).toBe(0);
+    expect(by("far off").priority).toBe(3); // his move, deadline or not
     expect(by("overdue").priority).toBe(5); // unpaid work is MORE urgent past its date
-    expect(by("undated").dueDate).toBeUndefined();
-    expect(by("free-text date").dueDate).toBeUndefined(); // never parsed into an invented date
+    // Verdict 8/22 + 3 days → a review date of 8/25, and never the priority of
+    // a deadline.
+    expect(by("undated").dueDate).toMatch(/^2026-08-25T00:00:00/);
+    expect(by("undated").priority).toBe(3);
+    expect(String(by("undated").desc || by("undated").content)).toContain("不是截止");
+    // The free text is ignored, not parsed: its date is the same review date.
+    expect(by("free-text date").dueDate).toBe(by("undated").dueDate);
+    expect(rows.find((r) => r.payload.title === "undated")!.deadline).toBeUndefined();
+    expect(rows.find((r) => r.payload.title === "imminent")!.deadline).toMatch(/^2026-08-23/);
     expect(by("imminent").timeZone).toBe(ZONE);
   });
 
@@ -232,7 +243,7 @@ describe("deriveLedgerTasks", () => {
       // was explicit that it stays one: 「不需要任何我做的事情，但是还是要算作一个
       // commitment」. So it sits on the floor, not nowhere.
       expect(rows).toHaveLength(1);
-      expect(rows[0]!.payload.project).toBe(POOL_LIST);
+      expect(rows[0]!.payload.priority).toBe(0);
       expect(rows[0]!.payload.title).toBe("找供应商采购天线");
     });
   });
@@ -266,7 +277,7 @@ describe("they owe me, and they are late", () => {
   // is a CHASE, and none of them earns a place in his day.
   const sunkNotChased = (rows: ReturnType<typeof deriveLedgerTasks>): void => {
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.payload.project).toBe(POOL_LIST);
+    expect(rows[0]!.payload.priority).toBe(0);
     expect(rows[0]!.payload.priority).toBe(0);
     expect(rows[0]!.payload.title).not.toContain("催");
     expect(rows[0]!.payload.title).toContain("等: ");
@@ -320,7 +331,7 @@ describe("they owe me, and the verdict says I am waiting", () => {
 
   it("needs_leo=false on their commitment sinks rather than chasing", () => {
     const [row] = derive([persona([owed({ ...assessed(false) })])]);
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
     expect(row!.payload.title).toBe("等: Arrange the 承兑汇票 payment");
   });
 
@@ -342,13 +353,13 @@ describe("still open, just not now — the floor is the pool", () => {
   it("sinks a who=me commitment the verdict says he need not act on", () => {
     const [row] = derive([persona([c({ matter_id: "fcc", ...assessed(false, { blocked_on: "them" }) })])]);
     expect(row).toBeDefined();
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
     expect(row!.payload.priority).toBe(0);
   });
 
   it("sinks one that has never been assessed at all", () => {
     const [row] = derive([persona([c({ matter_id: "fcc" })])]);
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
   });
 
   it("a matter still shows at most ONCE when it sinks", () => {
@@ -406,7 +417,7 @@ describe("chasing has a memory, not an archive", () => {
   it("the stale one is not lost either — it sinks", () => {
     // Still their commitment, still open. It just stops shouting.
     const rows = derive([persona([owed("2026-07-27")])], ZONE, NOW_MS);
-    expect(rows.every((r) => r.payload.project === POOL_LIST || rows.length === 0)).toBe(true);
+    expect(rows.every((r) => r.payload.priority === 0 || rows.length === 0)).toBe(true);
   });
 
   it("still chases on a verdict even when the date is ancient", () => {
@@ -453,7 +464,7 @@ describe("the verdict promotes, the matter only files", () => {
       LIVE,
       new Set(["retired"]),
     );
-    expect(row!.payload.project).toBe(POOL_LIST);
+    expect(row!.payload.priority).toBe(0);
   });
 
   it("an unregistered matter id is unfiled, not closed", () => {
@@ -470,8 +481,8 @@ describe("the verdict promotes, the matter only files", () => {
   });
 
   it("no verdict still means the floor, matter or not", () => {
-    expect(derive([persona([c({ matter_id: "fcc" })])])[0]!.payload.project).toBe(POOL_LIST);
-    expect(derive([persona([c({})])])[0]!.payload.project).toBe(POOL_LIST);
+    expect(derive([persona([c({ matter_id: "fcc" })])])[0]!.payload.priority).toBe(0);
+    expect(derive([persona([c({})])])[0]!.payload.priority).toBe(0);
   });
 });
 
@@ -494,13 +505,13 @@ describe("a date-anchored occasion sinks once it is long past", () => {
 
   it("sinks it to the pool once its date is more than the window past", () => {
     const row = derive([persona([c({ due: days(20), ...assessed(true) })])])[0]!;
-    expect(row.payload.project).toBe(POOL_LIST);
+    expect(row.payload.priority).toBe(0);
     expect(row.payload.priority).toBe(0);
   });
 
   it("sinks the lead of a LIVE matter too — the occasion passed either way", () => {
     const row = derive([persona([c({ matter_id: "m1", due: days(30), ...assessed(true) })])])[0]!;
-    expect(row.payload.project).toBe(POOL_LIST);
+    expect(row.payload.priority).toBe(0);
   });
 
   it("never sinks on an unparseable due — prose is not a date", () => {
@@ -510,7 +521,7 @@ describe("a date-anchored occasion sinks once it is long past", () => {
 
   it("leaves a commitment with no due exactly as the verdict decided", () => {
     expect(derive([persona([c({ ...assessed(true) })])])[0]!.payload.project).toBeUndefined();
-    expect(derive([persona([c({ ...assessed(false) })])])[0]!.payload.project).toBe(POOL_LIST);
+    expect(derive([persona([c({ ...assessed(false) })])])[0]!.payload.priority).toBe(0);
   });
 
   it("sinks but does NOT remove — a commitment still ends only by done or dropped", () => {
@@ -594,7 +605,7 @@ describe("a matter's row updates in place instead of re-minting", () => {
       ]),
     ]);
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.payload.project).toBe(POOL_LIST); // 「不升顶」
+    expect(rows[0]!.payload.priority).toBe(0); // 「不升顶」
     expect(rows[0]!.payload.priority).toBe(0);
   });
 
@@ -693,5 +704,97 @@ describe("a ledger row always overwrites BOTH note fields", () => {
     expect(row!.payload.content).not.toBe("");
     // omitted `items` would leave last week's checklist on the task
     expect(row!.payload.items).toEqual([]);
+  });
+});
+
+// ── one list, and 「回看日」 (owner, 2026-09-28) ──────────────────────────
+//
+// 「取消待办池，全进 Work」: weight lives in priority now, because a list is
+// sticky and a priority updates in place. And every row carries a date — a
+// real deadline when one exists, otherwise a REVIEW date that says it is one.
+describe("one list: weight is priority, and every row gets a date", () => {
+  const DAY = 864e5;
+  const spoke = (daysAgo: number) => ({ zech: NOW - daysAgo * DAY });
+  const waitingOn = (over: Partial<Commitment> = {}): Commitment =>
+    c({ who: "them", what: "回测试报告", matter_id: "fcc", ...over });
+  const deriveSpoke = (cs: Commitment[], daysAgo: number) =>
+    deriveLedgerTasks([persona(cs)], ZONE, NOW, LIVE, new Set(), spoke(daysAgo));
+  const note = (r: ReturnType<typeof deriveLedgerTasks>[number]) => String(r.payload.desc || r.payload.content);
+
+  it("no row names a list — there is only Work", () => {
+    const rows = derive([persona([c({ ...assessed(true) }), c({ what: "x" }), waitingOn()])]);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.payload.project === undefined)).toBe(true);
+  });
+
+  it("waiting: review date is their last word + 7 days, and the row stays light", () => {
+    const [row] = deriveSpoke([waitingOn()], 2);
+    expect(row!.payload.title).toBe("等: 回测试报告");
+    expect(row!.payload.priority).toBe(0);
+    expect(row!.payload.dueDate).toMatch(/^2026-08-27T00:00:00/); // 8/20 + 7
+    expect(note(row!)).toContain("Zech Noiseux 最后一次说话");
+    expect(note(row!)).toContain("不是截止");
+  });
+
+  // 「到了还没动就变成催」 — same matter key, so it UPDATES into a 催.
+  it("waiting past its review date becomes a 催, on the same row", () => {
+    const [before] = deriveSpoke([waitingOn()], 2);
+    const [after] = deriveSpoke([waitingOn()], 9);
+    expect(after!.unitKey).toBe(before!.unitKey);
+    expect(after!.payload.title).toBe("催: 回测试报告");
+    expect(after!.payload.priority).toBe(3);
+    expect(after!.payload.dueDate).toMatch(/^2026-08-20T00:00:00/); // 8/13 + 7, overdue on purpose
+    expect(note(after!)).toContain("已过回看日");
+  });
+
+  // A silence older than the mint window is history, not someone running late.
+  it("a silence older than 14 days stays 等 and ROLLS, instead of shouting", () => {
+    const [row] = deriveSpoke([waitingOn()], 30);
+    expect(row!.payload.title).toBe("等: 回测试报告");
+    expect(row!.payload.priority).toBe(0);
+    expect(Date.parse(row!.payload.dueDate!)).toBeGreaterThan(NOW);
+    expect(note(row!)).toContain("每 7 天回看一次");
+  });
+
+  it("his own live work does NOT roll — overdue is the signal there", () => {
+    const [row] = derive([persona([c({ ...assessed(true, { at: "2026-08-10T00:00:00Z" }) })])]);
+    expect(row!.payload.priority).toBe(3);
+    expect(row!.payload.dueDate).toMatch(/^2026-08-13T00:00:00/); // verdict 8/10 + 3, left overdue
+  });
+
+  it("with nothing to time it from, no date is invented — and the note says so", () => {
+    const [row] = derive([persona([c({ what: "never assessed" })])]);
+    expect(row!.payload.dueDate).toBeUndefined();
+    expect(note(row!)).toContain("暂不挂日期");
+  });
+
+  it("a real deadline is still the date, and is the only thing reported as one", () => {
+    const [row] = derive([persona([c({ due: "2026-08-23", ...assessed(true) })])]);
+    expect(row!.payload.dueDate).toMatch(/^2026-08-23/);
+    expect(row!.deadline).toBe(row!.payload.dueDate);
+    expect(note(row!)).not.toContain("回看日");
+  });
+});
+
+describe("a light row never piles up in Today", () => {
+  it("rolls a light row past its REAL deadline, keeping the deadline itself", () => {
+    // 8/1 is three weeks gone and the matter is closed → light.
+    const [row] = derive(
+      [persona([c({ due: "2026-08-01", matter_id: "done-m", ...assessed(true) })])],
+      ZONE,
+      NOW,
+      LIVE,
+      new Set(["done-m"]),
+    );
+    expect(row!.payload.priority).toBe(0);
+    expect(Date.parse(row!.payload.dueDate!)).toBeGreaterThan(NOW);
+    expect(row!.deadline).toMatch(/^2026-08-01/); // the fact survives
+    expect(String(row!.payload.desc || row!.payload.content)).toContain("原定截止 8/1 已过");
+  });
+
+  it("his own live work past its deadline stays overdue", () => {
+    const [row] = derive([persona([c({ due: "2026-08-20", matter_id: "fcc", ...assessed(true) })])]);
+    expect(row!.payload.priority).toBe(5);
+    expect(row!.payload.dueDate).toMatch(/^2026-08-20/);
   });
 });

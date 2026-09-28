@@ -49,8 +49,9 @@ import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone } from "./ledger-close.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
-import { deriveLedgerTasks, POOL_LIST } from "../core/ledger-list.js";
+import { deriveLedgerTasks } from "../core/ledger-list.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
+import type { SyncMap } from "../core/ticktick-sync.js";
 import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
@@ -297,6 +298,46 @@ async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200)
     await new Promise((r) => setTimeout(r, delayMs));
   }
   return false;
+}
+
+/**
+ * Every ACTIVE task in every list the engine has a live task in.
+ *
+ * Absence is the readback's only evidence that the owner finished something,
+ * so the set of lists read must be exactly the set the tracked tasks LIVE in.
+ * It used to be a hard-coded name list, and that list was wrong twice: first
+ * it held only Work while sunk rows lived in 待办池 (94 commitments closed
+ * behind the owner's back), then it named 待办池 explicitly — which would have
+ * turned into a permanent "read failed, close nothing" the day he deleted that
+ * list. Deriving it from the map is right by construction: a list stops being
+ * read when nothing lives in it, and a new one is read the moment something does.
+ *
+ * `complete` is false when any of those lists could not be read; the readback
+ * then concludes nothing from absence (core/ticktick-readback.ts).
+ */
+export async function readAllActive(
+  reader: TickTickReader,
+  map: SyncMap,
+): Promise<{ tasks: RemoteTask[]; complete: boolean }> {
+  const work = await reader.listActive();
+  const seen = new Set(work.map((t) => t.projectId).filter((x): x is string => !!x));
+  const elsewhere = [
+    ...new Set(Object.values(map).filter((r) => !r.done && r.projectId && !seen.has(r.projectId)).map((r) => r.projectId)),
+  ];
+  // A reader that can only list by name is a single-list reader (the test
+  // stubs, and the shape before this existed): Work is all there is to read.
+  if (!reader.listActiveIn || elsewhere.length === 0) return { tasks: work, complete: true };
+  const tasks = [...work];
+  let complete = true;
+  for (const id of elsewhere) {
+    try {
+      tasks.push(...(await reader.listActiveIn(id)));
+    } catch (e) {
+      complete = false;
+      console.error(`[ticktick] list ${id} unreadable — closing nothing this tick: ${errString(e)}`);
+    }
+  }
+  return { tasks, complete };
 }
 
 export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
@@ -1160,29 +1201,16 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // Non-fatal, like the push: TickTick being unreachable must never stop a scan.
   if (!opts.dryRun && opts.ticktickReader) {
     try {
-      // BOTH PROJECTS. The engine writes to two — the Work list and 待办池 for
-      // sunk rows — and this only ever read the first, so every row that sank
-      // went missing from `remote` on the next tick and was read as finished.
-      // 95 of 95 pool rows were closed that way, all of them still open in
-      // TickTick (core/ticktick-readback.ts has the numbers).
-      //
-      // A pool read that THROWS must not re-open the same hole, so the failure
-      // is carried into the readback rather than swallowed: absence only counts
-      // as completion when we managed to look everywhere.
-      const remoteWork = await opts.ticktickReader.listActive();
-      let remotePool: RemoteTask[] | undefined;
-      try {
-        remotePool = await opts.ticktickReader.listActive(POOL_LIST);
-      } catch (e) {
-        console.error(`[ticktick] 待办池 unreadable — closing nothing this tick: ${errString(e)}`);
-      }
-      const remote = [...remoteWork, ...(remotePool ?? [])];
+      // EVERY list a tracked task lives in — see readAllActive for why this is
+      // derived from the map rather than named.
+      const syncMap = loadSyncMap(opts.statePath);
+      const { tasks: remote, complete } = await readAllActive(opts.ticktickReader, syncMap);
       const snapshot = loadState(opts.statePath);
       const { ticked, closed, dismissed, closedUnitKeys, map, unitsClosed } = readbackFromTickTick(
         snapshot,
-        loadSyncMap(opts.statePath),
+        syncMap,
         remote,
-        remotePool !== undefined,
+        complete,
       );
 
       // TICK-TO-EXECUTE (specs/ticktick-migration.md §1): a ticked EXECUTABLE
@@ -1379,6 +1407,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             nowMs,
             opts.activeMatters?.() ?? new Set(),
             opts.closedMatters?.() ?? new Set(),
+            // The waiting clock: when each person last spoke.
+            snapshot.personTraffic ?? {},
           )
         : [];
       const personaLess = (unit: TaskUnit): boolean =>
@@ -1396,19 +1426,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // Live remote list for orphan reconciliation — non-fatal: without it the
       // sync still works, it just cannot see its own strays this tick.
       //
-      // BOTH projects. It read only Work, so strays in 待办池 were never seen
-      // and piled up: 121 untracked engine tasks from 9/5–9/20, plus 38 left
-      // stranded by the absence bug, all sitting in the owner's pool (and 34 of
-      // them in his Today / Next 7 Days). Those 159 were completed by hand on
-      // 2026-09-28 with his approval, which is what made widening this safe —
-      // before that, the first tick would have mass-completed them unasked.
-      //
-      // Unlike the readback, a PARTIAL read is harmless here: orphan
-      // reconciliation only acts on tasks it actually saw, so a pool read that
-      // fails just means the pool's strays wait a tick.
+      // Live remote list for orphan reconciliation — non-fatal: without it the
+      // sync still works, it just cannot see its own strays this tick. Same set
+      // of lists as the readback. A partial read is harmless HERE (orphan
+      // reconciliation only acts on tasks it saw), unlike in the readback.
       const remoteActive = opts.ticktickReader
-        ? await opts.ticktickReader.listActive().then(
-            async (work) => [...work, ...(await opts.ticktickReader!.listActive(POOL_LIST).catch(() => []))],
+        ? await readAllActive(opts.ticktickReader, loadSyncMap(opts.statePath)).then(
+            (r) => r.tasks,
             () => undefined,
           )
         : undefined;

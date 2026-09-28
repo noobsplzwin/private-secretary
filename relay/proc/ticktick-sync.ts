@@ -40,6 +40,12 @@ import type { LoopState } from "../io/state.js";
 export interface TickTickReader {
   /** The project's ACTIVE tasks, with their checklist items' status. */
   listActive(project?: string): Promise<RemoteTask[]>;
+  /**
+   * The same, by project ID. This is how the readback reads every list a
+   * tracked task actually LIVES in, instead of a hard-coded set of names —
+   * the hard-coded set is what missed 待办池 for weeks.
+   */
+  listActiveIn?(projectId: string): Promise<RemoteTask[]>;
 }
 
 export interface TickTickWriter {
@@ -49,12 +55,16 @@ export interface TickTickWriter {
     projectId: string;
     itemIds: string[];
   }>;
-  /** Update one task in place; returns the (possibly new) checklist item ids. */
+  /**
+   * Update one task in place, MOVING it first when it is not in the list the
+   * payload names. Returns the (possibly new) checklist item ids and the list
+   * the task is in now, so the map stops pointing at the old one.
+   */
   updateTask(
     taskId: string,
     projectId: string,
     payload: TickTickTaskPayload,
-  ): Promise<{ itemIds: string[] }>;
+  ): Promise<{ itemIds: string[]; projectId?: string }>;
   /** Mark tasks complete, batched by the caller to TICKTICK_BATCH_MAX. */
   completeTasks(tasks: ReadonlyArray<{ id: string; projectId: string }>): Promise<void>;
 }
@@ -206,7 +216,7 @@ export async function syncToTickTick(
         const written = await writer.updateTask(op.ticktickId, op.projectId, sent);
         results[op.unitKey] = {
           ticktickId: op.ticktickId,
-          projectId: op.projectId,
+          projectId: written.projectId ?? op.projectId,
           items: trackedFrom(op.unitKey, written.itemIds),
         };
       }

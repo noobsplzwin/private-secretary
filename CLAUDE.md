@@ -53,14 +53,15 @@ The layout is discoverable from the tree; what is NOT discoverable:
   task and its note re-renders (「直接更新目前ticket的Description区域」); the task
   auto-completes exactly when every link in the chain is settled — which only
   holds because a matter with ANY open link keeps a row: when nothing in it is
-  Leo's, it sinks to 待办池 as 「等: …」 at priority 0 and is never promoted
-  (「补上，沉到待办池，不升顶」, 2026-09-28). Without that floor a live matter
+  Leo's, it sinks as 「等: …」 at priority 0 and is never promoted (「补上，沉到
+  待办池，不升顶」, 2026-09-28). Without that floor a live matter
   rendered nothing and completed its own ticket. Unfiled work
   keeps the wording key and still re-mints — 「归属判不准就新开一张」 (owner,
   2026-09-27). Never add a fuzzy matcher here: gluing the wrong conversation
   onto a live ticket is worse than one extra card (`core/unit-key.ts`).
-- **The readback must list EVERY project the engine writes to** — the Work list
-  AND 待办池 (`proc/scan-loop.ts`). Absence from `remote` is the only evidence
+- **The readback reads every list a tracked task LIVES in** — derived from the
+  map (`readAllActive`, `proc/scan-loop.ts`), never a hard-coded name list.
+  Absence from `remote` is the only evidence
   the readback has for "the owner finished it", so it has to mean absence, not
   "we did not look there". It meant the second thing for weeks: sunk rows are
   created in 待办池 while the readback listed only Work, so a row that sank was
@@ -70,10 +71,23 @@ The layout is discoverable from the tree; what is NOT discoverable:
   owner's back, 77 his own, including 「设立三个持股平台…目前尚未启动」. The
   ledger was left with ONE open who=me commitment out of 360. A project that
   cannot be read passes `coversEveryProject: false` and closes NOTHING that
-  tick. Orphan reconciliation reads both projects too — but only since the
-  owner approved completing the 159 strays that had piled up in 待办池
-  (2026-09-28). Widening it with untracked engine tasks still in a project
-  would mass-complete them on the first tick.
+  tick. Orphan reconciliation reads the same set — safe only because the owner
+  approved completing the 159 strays that had piled up in 待办池 (2026-09-28);
+  pointing it at a list full of untracked engine tasks mass-completes them.
+- **ONE list: every engine row lives in Work** (owner, 2026-09-28: 「取消待办池，
+  全进 Work」). Weight is PRIORITY — 5 real deadline ≤2 days or past, 3 his
+  move (verdict or 催), 0 light — because a list is sticky and a priority
+  updates in place. The writer MOVES a task whose list differs from the
+  payload's (`updateTask` → `move_task`); before that it silently kept a task
+  in the list it was born in, and the week's most important row sat in 待办池.
+- **Every ledger row carries a date; without a real deadline it is a REVIEW
+  date, and its note says 「回看日…不是截止」** (owner, 2026-09-28). His move:
+  verdict +3 days. Waiting on them: their last word (`state.personTraffic`)
+  +7; past that and inside the 14-day mint window it becomes a 催 on the same
+  row. A LIGHT row past its review — or past a real deadline — ROLLS to its
+  next review instead of piling up overdue in Today; his own live work does
+  not roll. Nothing to time it from → no date, said in the note. Anything that
+  reasons about DEADLINES reads `DesiredTask.deadline`, never `dueDate`.
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 

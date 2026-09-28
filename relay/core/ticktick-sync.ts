@@ -46,6 +46,12 @@ export type SyncMap = Record<string, SyncRecord>;
 export interface DesiredTask {
   unitKey: string;
   payload: TickTickTaskPayload;
+  /**
+   * The REAL deadline, when there is one. `payload.dueDate` can also be a
+   * review date (core/ledger-list.ts), which is a when-to-look-again, not a
+   * deadline — anything that scores or reasons about deadlines reads this.
+   */
+  deadline?: string;
 }
 
 export type SyncOp =

@@ -123,15 +123,17 @@ export function s0Current(json: JsonCaller): L2AStrategy {
           new Set(input.closedMatters ?? []),
         );
 
-        // Only the WORKING list is a proposal. A sunk row is the floor — still
-        // tracked, deliberately not being asked of him today — and counting the
-        // pool would score the bench on work the owner was never shown.
-        return rows.filter((r) => !r.payload.project).map((row) => {
+        // Only the WORKING list is a proposal. A light row (priority 0 — what
+        // 待办池 held until the lists merged) is the floor: still tracked,
+        // deliberately not asked of him today, and counting it would score the
+        // bench on work the owner was never shown.
+        return rows.filter((r) => r.payload.priority !== 0).map((row) => {
           const key = row.unitKey.replace(/^ledger_/, "").replace(/_[0-9a-f]+$/, "");
           return {
             personaKey: key,
             title: row.payload.title,
-            ...(row.payload.dueDate ? { due: row.payload.dueDate } : {}),
+            // The DEADLINE, never the review date that may share dueDate.
+            ...(row.deadline ? { due: row.deadline } : {}),
             evidence: evidenceOf(row.payload),
           };
         });

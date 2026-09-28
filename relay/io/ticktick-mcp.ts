@@ -115,11 +115,14 @@ export function clearTickTickProjectCache(): void {
  * ~20 round trips per poll for the same answer.
  */
 export function createTickTickReader(opts: TickTickToolOptions): TickTickReader {
-  return {
+  const reader: TickTickReader = {
     async listActive(project?: string) {
       const name = project ?? opts.project;
       const projectId = name ? await resolveProjectId(opts.url, opts.authService, name) : undefined;
       if (!projectId) throw new Error("ticktick: cannot read back without a project");
+      return reader.listActiveIn!(projectId);
+    },
+    async listActiveIn(projectId: string) {
       const res = await callMcpTool(opts.url, opts.authService, "get_project_with_undone_tasks", {
         project_id: projectId,
       });
@@ -152,6 +155,7 @@ export function createTickTickReader(opts: TickTickToolOptions): TickTickReader 
       });
     },
   };
+  return reader;
 }
 
 export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter {
@@ -189,14 +193,28 @@ export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter 
     },
 
     async updateTask(taskId, projectId, payload) {
-      const { project: _p, ...task } = payload as unknown as { project?: string } & Record<string, unknown>;
+      const { project, ...task } = payload as unknown as { project?: string } & Record<string, unknown>;
+      // A task lives where it was BORN unless it is moved. update_task cannot
+      // change the list, and this used to drop `project` and write the task
+      // back where it was — so a row picked its list exactly once, at create,
+      // and never again. Measured 2026-09-28: the week's most important row
+      // was sitting in 待办池. Moving here is what lets the list follow the
+      // payload, and what migrates the old pool into Work on its own.
+      const target = await resolve(project);
+      let where = projectId;
+      if (target && target !== projectId) {
+        await callMcpTool(opts.url, opts.authService, "move_task", {
+          moves: [{ taskId, fromProjectId: projectId, toProjectId: target }],
+        });
+        where = target;
+      }
       const res = await callMcpTool(opts.url, opts.authService, "update_task", {
         task_id: taskId,
         // projectId is REQUIRED on update; without it TickTick cannot locate the
         // task and the change is silently lost.
-        task: { ...task, id: taskId, projectId },
+        task: { ...task, id: taskId, projectId: where },
       });
-      return { itemIds: itemIdsOf(callResultObject(res)) };
+      return { itemIds: itemIdsOf(callResultObject(res)), projectId: where };
     },
 
     async completeTasks(tasks) {

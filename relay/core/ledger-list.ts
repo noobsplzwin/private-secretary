@@ -26,7 +26,8 @@
 //
 //   the VERDICT promotes. needs_leo means he must act, and that reaches the
 //   working list whether or not the work has been filed under a matter.
-//   Everything else sinks to 待办池 at no priority, never dropped —
+//   Everything else sinks — priority 0, never dropped (it went to 待办池
+//   until 2026-09-28; see ONE LIST below) —
 //   系统删待办这个概念不存在。
 //
 //   the one exception is a matter the OWNER CLOSED. That is him saying the work
@@ -59,9 +60,52 @@ type RowMode = "own" | "chase" | "waiting";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Where sunk rows go. The list must exist in TickTick — the io layer resolves
- * a name and throws rather than inventing a list. */
-export const POOL_LIST = "待办池";
+// ONE LIST (owner, 2026-09-28: 「取消待办池，全进 Work」). Sunk rows used to go
+// to a second list, 待办池, and that split was the root of two of the worst
+// bugs this engine shipped: the readback read only Work, so every sunk row read
+// as finished (94 commitments closed behind his back), and orphan cleanup read
+// only Work, so 159 strays piled up in the pool. It also never worked as
+// designed — the writer cannot move a task, so a row stayed in whichever list
+// it was BORN in, and the week's most important row sat in the pool. A list is
+// sticky; priority and date update in place. So weight now lives there:
+//
+//   5  a real deadline within two days, or already past
+//   3  his move — a live verdict, or a chase
+//   0  light: nothing of his right now (what the pool used to hold)
+
+/**
+ * The review clock for a row with NO real deadline (owner, 2026-09-28: every
+ * row should carry a date, 「回看日」). A review date is NOT a deadline and the
+ * note says so in words — this is what keeps the 2026-08-13 rule honest:
+ * 「给每条都编一个『今天到期』，一周之内 Today 就没有意义了」. Nothing here claims
+ * a deadline nobody stated; it says when to look again.
+ *
+ *   his own move   — the day the verdict said he must act, +3
+ *   waiting on them — the last time THEY spoke, +7; past that and still inside
+ *                     the mint window, the row becomes a 催
+ */
+const OWN_REVIEW_DAYS = 3;
+const WAIT_REVIEW_DAYS = 7;
+
+function localDate(ms: number, zone: string): string {
+  // en-CA formats as YYYY-MM-DD, which dueFields reads as an all-day date.
+  return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+    new Date(ms),
+  );
+}
+
+function md(ms: number, zone: string): string {
+  const [, m, d] = localDate(ms, zone).split("-");
+  return `${Number(m)}/${Number(d)}`;
+}
+
+/** Who a row belongs to, plus the one fact about them the review clock needs. */
+interface RowOwner {
+  key: string;
+  name?: string;
+  /** When this person last spoke (state.personTraffic) — epoch ms. */
+  spokeMs?: number;
+}
 
 /**
  * Namespace for a MATTER row's hash, so it cannot be confused with a
@@ -127,7 +171,7 @@ function recentlyOverdue(due: string | undefined, nowMs: number): boolean {
  * gets a fortnight at the top of his list before it sinks, and a dead
  * appointment stops occupying the list forever.
  *
- * SINKING IS NOT DELETION. The row moves to the pool with priority 0 — the
+ * SINKING IS NOT DELETION. The row drops to priority 0 — the
  * owner's own rule, 「如果还是待办，但是优先级较低，那就往后排」. A commitment
  * only ends by being done or dropped, and neither happens here.
  *
@@ -143,8 +187,7 @@ function longOverdue(due: string | undefined, nowMs: number): boolean {
 }
 
 function itemFor(
-  personaKey: string,
-  displayName: string | undefined,
+  owner: RowOwner,
   lead: Commitment,
   chain: readonly Commitment[],
   zone: string,
@@ -162,7 +205,7 @@ function itemFor(
    * A boolean could not tell the last two apart, and conflating them is how a
    * parked matter would start shouting 催 at him.
    */
-  mode: RowMode = "own",
+  modeIn: RowMode = "own",
   /**
    * Set when this row stands for a whole MATTER rather than one commitment.
    * `all` is every link the matter has ever had, open and settled, so the note
@@ -170,14 +213,75 @@ function itemFor(
    */
   matter?: { id: string; all: readonly Commitment[] },
 ): DesiredTask {
+  const personaKey = owner.key;
+  const displayName = owner.name;
   const steps = chain
     .map((c) => c.assessment?.next_step?.trim())
     .filter((s): s is string => !!s);
   const due = lead.due ? dueFields(lead.due, zone) : null;
+  const who = displayName ?? personaKey;
+
+  // ── the date. A real deadline wins; otherwise a REVIEW date, said as one.
+  let mode = modeIn;
+  let light = sunk;
+  let dateLine = "";
+  let reviewMs: number | undefined;
+  if (!due) {
+    const at = Date.parse(lead.assessment?.at ?? "");
+    const verdictMs = Number.isNaN(at) ? undefined : at;
+    const waiting = mode === "waiting";
+    // Waiting is timed from THEIR last word; his own move from the verdict that
+    // made it his. Each falls back to the other rather than to nothing.
+    const base = waiting ? (owner.spokeMs ?? verdictMs) : (verdictMs ?? owner.spokeMs);
+    const days = waiting ? WAIT_REVIEW_DAYS : OWN_REVIEW_DAYS;
+    const baseLabel = waiting
+      ? owner.spokeMs !== undefined ? `${who} 最后一次说话` : "上次判定"
+      : verdictMs !== undefined ? "判定要你动手" : `${who} 最后一次说话`;
+    if (base === undefined) {
+      dateLine = "没有可用的回看基准(从没判定过,近期也没对话),暂不挂日期。";
+    } else {
+      const first = base + days * DAY_MS;
+      // 「到了还没动就变成催」 — but only inside the mint window. A silence
+      // older than that is history, not someone running late (recentlyOverdue
+      // draws the same line for stated deadlines).
+      if (waiting && first <= nowMs && nowMs - base <= MINT_WINDOW_DAYS * DAY_MS) {
+        mode = "chase";
+        light = false;
+        reviewMs = first;
+        dateLine = `${who} ${md(base, zone)} 之后没有动静,已过回看日 ${md(first, zone)}。`;
+      } else if (light && first <= nowMs) {
+        // A LIGHT row whose review passed rolls to its next one instead of
+        // sitting overdue — overdue light rows are exactly how Today fills with
+        // things nobody has to do. His own live work does NOT roll: overdue is
+        // the signal there.
+        const k = Math.floor((nowMs - first) / (days * DAY_MS)) + 1;
+        reviewMs = first + k * days * DAY_MS;
+        dateLine = `每 ${days} 天回看一次,下次 ${md(reviewMs, zone)}(回看日,不是截止)。`;
+      } else {
+        reviewMs = first;
+        dateLine = `回看日 ${md(first, zone)}(${baseLabel} ${md(base, zone)} +${days} 天),不是截止。`;
+      }
+    }
+  }
+  // A LIGHT row whose REAL deadline is past rolls the same way. That date is
+  // theirs or history — 「等: Run diagnostics on Rev5」 was carrying 8/18 six
+  // weeks later — and 18 such rows would otherwise sit in Today as overdue.
+  // The deadline is kept, in the note and in `deadline`; only the date that
+  // decides where the row SHOWS moves. His own live work keeps its overdue date.
+  if (due && light) {
+    const dueMs = Date.parse(due.dueDate);
+    if (!Number.isNaN(dueMs) && dueMs + DAY_MS <= nowMs) {
+      const k = Math.floor((nowMs - dueMs) / (WAIT_REVIEW_DAYS * DAY_MS)) + 1;
+      reviewMs = dueMs + k * WAIT_REVIEW_DAYS * DAY_MS;
+      dateLine = `原定截止 ${md(dueMs, zone)} 已过;每 ${WAIT_REVIEW_DAYS} 天回看一次,下次 ${md(reviewMs, zone)}。`;
+    }
+  }
+  const shown = reviewMs !== undefined ? dueFields(localDate(reviewMs, zone), zone) : null;
+  const dated = shown ?? due;
+
   // The evidence is the row's provenance — the reader can see WHY this is on
   // the list without opening the conversation. Source language is preserved
   // because the quote is verbatim by construction.
-  const who = displayName ?? personaKey;
   const noteLines = [
     mode === "chase"
       ? `${who} 欠这件事` +
@@ -185,6 +289,7 @@ function itemFor(
       : mode === "waiting"
         ? `这件事还没完,但眼下不用你动——在等 ${who}。`
         : "",
+    dateLine,
     matter ? matterProgress(matter.all, lead, displayName ?? personaKey) : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
     displayName ? `— ${displayName}` : `— ${personaKey}`,
@@ -197,10 +302,9 @@ function itemFor(
     title:
       mode === "chase" ? `催: ${lead.what}` : mode === "waiting" ? `等: ${lead.what}` : lead.what,
     kind: steps.length > 0 ? "CHECKLIST" : "TEXT",
-    // A sunk row carries no urgency by construction — priority is what pulls a
-    // row into the owner's day, and nothing outside a live matter may do that.
-    priority: sunk ? 0 : priorityFor(due, nowMs),
-    ...(sunk ? { project: POOL_LIST } : {}),
+    // Weight, now that there is one list (see the header of ONE LIST above).
+    // Only a REAL deadline can reach 5; a review date never raises priority.
+    priority: light ? 0 : Math.max(3, priorityFor(due, nowMs)) as 3 | 5,
     // BOTH note fields and `items`, ALWAYS — the rule card rows already follow
     // (core/ticktick-plan.ts), which this path never did. update_task is a
     // PARTIAL patch: a field we omit keeps whatever TickTick already holds. Once
@@ -214,7 +318,7 @@ function itemFor(
     content: steps.length > 0 ? "" : note,
     items: steps.map((title, i) => ({ title, status: 0 as const, sortOrder: i })),
     tags: ["secretary"],
-    ...(due ? { ...due, timeZone: zone } : {}),
+    ...(dated ? { ...dated, timeZone: zone } : {}),
   };
   return {
     // A MATTER keys by the matter, an unfiled commitment by its own wording.
@@ -238,6 +342,7 @@ function itemFor(
       ? `ledger_${personaKey}_${stableHash(MATTER_TAG + matter.id.trim())}`
       : `ledger_${personaKey}_${stableHash((mode === "chase" ? "chase:" : "") + lead.what.trim())}`,
     payload,
+    ...(due ? { deadline: due.dueDate } : {}),
   };
 }
 
@@ -284,9 +389,16 @@ export function deriveLedgerTasks(
   activeMatters: ReadonlySet<string>,
   /** Matters the owner CLOSED. Work inside one sinks whatever the verdict says. */
   closedMatters: ReadonlySet<string> = new Set(),
+  /** When each persona last spoke (state.personTraffic) — the waiting clock. */
+  lastSpoke: Readonly<Record<string, number>> = {},
 ): DesiredTask[] {
   const out: DesiredTask[] = [];
   for (const p of personas) {
+    const owner: RowOwner = {
+      key: p.key,
+      ...(p.display_name ? { name: p.display_name } : {}),
+      ...(lastSpoke[p.key] !== undefined ? { spokeMs: lastSpoke[p.key] } : {}),
+    };
     const open = (p.commitments ?? []).filter((c) => c.status === "open");
 
     // Matters first: all open links sharing a matter_id are one unit of work.
@@ -316,7 +428,7 @@ export function deriveLedgerTasks(
       const closed = closedMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (lead) {
-        out.push(itemFor(p.key, p.display_name, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs), "own", as));
+        out.push(itemFor(owner, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs), "own", as));
         continue;
       }
       const sunk = closed || !activeMatters.has(matterId);
@@ -328,7 +440,7 @@ export function deriveLedgerTasks(
         (c) => c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo),
       );
       if (late) {
-        out.push(itemFor(p.key, p.display_name, late, chain, zone, nowMs, sunk, "chase", as));
+        out.push(itemFor(owner, late, chain, zone, nowMs, sunk, "chase", as));
         continue;
       }
       // Still open, just not now. The owner's rule is that only done or dropped
@@ -354,21 +466,21 @@ export function deriveLedgerTasks(
       // What reaches the top of the list is unchanged — a verdict promotes, and
       // nothing here fakes one.
       const dormant = chain.find((c) => c.who === "me");
-      if (dormant) out.push(itemFor(p.key, p.display_name, dormant, chain, zone, nowMs, true, "own", as));
-      else if (chain[0]) out.push(itemFor(p.key, p.display_name, chain[0], chain, zone, nowMs, true, "waiting", as));
+      if (dormant) out.push(itemFor(owner, dormant, chain, zone, nowMs, true, "own", as));
+      else if (chain[0]) out.push(itemFor(owner, chain[0], chain, zone, nowMs, true, "waiting", as));
     }
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
       if (c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo)) {
-        out.push(itemFor(p.key, p.display_name, c, [c], zone, nowMs, true, "chase"));
+        out.push(itemFor(owner, c, [c], zone, nowMs, true, "chase"));
         continue;
       }
       if (c.who !== "me") continue;
       // No matter_id at all — unfiled, not closed. The verdict decides, and a
       // date that went by a fortnight ago overrides a stale yes: see longOverdue.
       out.push(
-        itemFor(p.key, p.display_name, c, [c], zone, nowMs, !c.assessment?.needs_leo || longOverdue(c.due, nowMs)),
+        itemFor(owner, c, [c], zone, nowMs, !c.assessment?.needs_leo || longOverdue(c.due, nowMs)),
       );
     }
   }

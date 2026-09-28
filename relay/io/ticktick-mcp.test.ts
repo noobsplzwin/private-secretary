@@ -95,6 +95,39 @@ describe("createTickTickWriter", () => {
     expect(args.task.projectId).toBe("p-work");
   });
 
+  // REGRESSION 2026-09-28. update_task cannot change a task's list, and this
+  // used to drop `project` — so a row stayed in the list it was BORN in, and
+  // the week's most important row sat in 待办池. Moving first is what lets the
+  // list follow the payload, and what migrated the pool into Work.
+  it("MOVES a task that is not in its list, then updates it there", async () => {
+    callMcpTool.mockImplementation(async (_u, _a, tool) => {
+      if (tool === "list_projects") return textResult({ result: PROJECTS });
+      if (tool === "move_task") return textResult({});
+      if (tool === "update_task") return textResult({ id: "tt1", items: [] });
+      throw new Error(`unexpected ${tool}`);
+    });
+    const w = createTickTickWriter({ url: "u", authService: "s", project: "💼Work" });
+    const out = await w.updateTask("tt1", "p-pool", payload);
+    const tools = callMcpTool.mock.calls.map((c) => c[2]);
+    expect(tools.indexOf("move_task")).toBeLessThan(tools.indexOf("update_task"));
+    const move = callMcpTool.mock.calls.find((c) => c[2] === "move_task")![3];
+    expect(move.moves).toEqual([{ taskId: "tt1", fromProjectId: "p-pool", toProjectId: "p-work" }]);
+    expect(callMcpTool.mock.calls.find((c) => c[2] === "update_task")![3].task.projectId).toBe("p-work");
+    // ...and says where the task is NOW, so the map stops pointing at the pool
+    expect(out.projectId).toBe("p-work");
+  });
+
+  it("does not move a task that is already where it belongs", async () => {
+    callMcpTool.mockImplementation(async (_u, _a, tool) => {
+      if (tool === "list_projects") return textResult({ result: PROJECTS });
+      if (tool === "update_task") return textResult({ id: "tt1", items: [] });
+      throw new Error(`unexpected ${tool}`);
+    });
+    const w = createTickTickWriter({ url: "u", authService: "s", project: "💼Work" });
+    await w.updateTask("tt1", "p-work", payload);
+    expect(callMcpTool.mock.calls.some((c) => c[2] === "move_task")).toBe(false);
+  });
+
   it("completes a batch with status 2", async () => {
     callMcpTool.mockImplementation(async () => textResult({ id2etag: { a: "e" }, id2error: {} }));
     const w = createTickTickWriter({ url: "u", authService: "s" });

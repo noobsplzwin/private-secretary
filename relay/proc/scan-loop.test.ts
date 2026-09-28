@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runScanTick } from "./scan-loop.js";
+import { readAllActive, runScanTick } from "./scan-loop.js";
 import { acquireLock, loadState, releaseLock } from "../io/state.js";
 import { labelsPathFor, readLabels } from "../io/labels.js";
 import { readActivity } from "../io/activity-log.js";
@@ -1429,5 +1429,50 @@ describe("tick-to-execute", () => {
     });
     const after = JSON.parse(readFileSync(statePath, "utf8"));
     expect(after.sourceErrors["llm:tick-execute"].message).toContain("jira down");
+  });
+});
+
+// The readback reads exactly the lists tracked tasks LIVE in — derived from the
+// map, never named. A hard-coded set missed 待办池 for weeks (94 false closes),
+// and naming 待办池 would have stalled every close the day the owner deleted it.
+describe("readAllActive", () => {
+  const rec = (projectId: string, done?: number) => ({ ticktickId: "t", projectId, hash: "h", ...(done ? { done } : {}) });
+
+  it("reads Work plus every other list a LIVE record lives in", async () => {
+    const asked: string[] = [];
+    const reader = {
+      listActive: async () => [{ id: "w1", status: 0, projectId: "p-work" }],
+      listActiveIn: async (id: string) => (asked.push(id), [{ id: `${id}-t`, status: 0, projectId: id }]),
+    };
+    const r = await readAllActive(reader, {
+      a: rec("p-work"),
+      b: rec("p-pool"),
+      c: rec("p-gone", 123), // a tombstone does not make a list worth reading
+    });
+    expect(asked).toEqual(["p-pool"]);
+    expect(r.tasks.map((t) => t.id).sort()).toEqual(["p-pool-t", "w1"]);
+    expect(r.complete).toBe(true);
+  });
+
+  it("a list that cannot be read makes the read INCOMPLETE, never silently partial", async () => {
+    const reader = {
+      listActive: async () => [{ id: "w1", status: 0, projectId: "p-work" }],
+      listActiveIn: async () => {
+        throw new Error("list deleted");
+      },
+    };
+    const r = await readAllActive(reader, { b: rec("p-pool") });
+    expect(r.complete).toBe(false);
+  });
+
+  it("once nothing lives outside Work, only Work is read", async () => {
+    let extra = 0;
+    const reader = {
+      listActive: async () => [{ id: "w1", status: 0, projectId: "p-work" }],
+      listActiveIn: async () => (extra++, []),
+    };
+    const r = await readAllActive(reader, { a: rec("p-work"), c: rec("p-pool", 1) });
+    expect(extra).toBe(0);
+    expect(r.complete).toBe(true);
   });
 });
