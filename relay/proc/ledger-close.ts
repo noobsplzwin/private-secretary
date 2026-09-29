@@ -37,20 +37,61 @@ export function markLedgerCommitmentsDone(
   closedUnitKeys: readonly string[],
   deps: LedgerCloseDeps,
 ): number {
+  return settleLedgerCommitments(closedUnitKeys, "done", deps);
+}
+
+/**
+ * The owner ticked 「🚫 这条不该出现」 on a ledger row: the work behind it
+ * should never have been listed. That is `dropped`, never `done` — marking it
+ * done would claim the work happened, which is the false-close this engine
+ * spent a week undoing (94 commitments, 2026-09-27). Recorded in the persona
+ * file with its reason, not in labels.jsonl: that ledger scores the CARD judge,
+ * and a ledger row is not a card.
+ *
+ * ONLY THE COMMITMENT HE WAS SHOWN. A matter row stands for a whole chain, and
+ * finishing one closes every link — so on 2026-09-29 a single 完成 marked 24
+ * commitments done. 🚫 is a verdict on the ROW, 「this one should not be
+ * here」, not on everything else filed beside it, so it drops the link whose
+ * `what` the row's title shows. No title, or none that matches, drops nothing:
+ * guessing which link he meant is the one thing this must never do.
+ */
+export function markLedgerCommitmentsDropped(
+  dismissed: ReadonlyArray<{ unitKey: string; title?: string }>,
+  deps: LedgerCloseDeps,
+): number {
+  const shown = new Map(dismissed.map((d) => [d.unitKey, (d.title ?? "").replace(/^催: /, "").trim()]));
+  return settleLedgerCommitments(
+    dismissed.map((d) => d.unitKey),
+    "dropped",
+    deps,
+    (key, c) => {
+      const t = shown.get(key);
+      return !!t && c.what.trim() === t;
+    },
+  );
+}
+
+function settleLedgerCommitments(
+  closedUnitKeys: readonly string[],
+  to: "done" | "dropped",
+  deps: LedgerCloseDeps,
+  /** Narrows which matching commitments settle; absent = all of them. */
+  only?: (unitKey: string, c: Commitment) => boolean,
+): number {
   // Group first: one persona can own several closed rows, and each write is a
   // whole-file emit, so writing per row would rewrite the same file N times
   // and let a later write clobber an earlier one's change.
-  const byPersona = new Map<string, string[]>();
+  const byPersona = new Map<string, Array<{ key: string; hash: string }>>();
   for (const key of closedUnitKeys) {
     const parsed = parseLedgerUnitKey(key);
     if (!parsed) continue; // a card row — its ActionItems carry the closure
     const list = byPersona.get(parsed.personaKey) ?? [];
-    list.push(parsed.hash);
+    list.push({ key, hash: parsed.hash });
     byPersona.set(parsed.personaKey, list);
   }
 
   let marked = 0;
-  for (const [personaKey, hashes] of byPersona) {
+  for (const [personaKey, rows] of byPersona) {
     try {
       const file = personaPath(deps.personaDir, personaKey);
       const persona = readPersonaV3File(file);
@@ -61,12 +102,19 @@ export function markLedgerCommitmentsDone(
         // owner already made, and overwriting it with `done` would claim work
         // happened that never did.
         if (c.status !== "open") return c;
-        if (!hashes.some((h) => commitmentMatchesHash(c, h))) return c;
+        if (!rows.some((r) => commitmentMatchesHash(c, r.hash) && (!only || only(r.key, c)))) return c;
         hit++;
-        return { ...c, status: "done" as const };
+        return { ...c, status: to };
       });
       if (hit === 0) continue;
-      const res = writePersonaFile(file, { set: { commitments: next } }, "human");
+      const res = writePersonaFile(
+        file,
+        {
+          set: { commitments: next },
+          ...(to === "dropped" ? { evidence: { commitments: "owner ticked 🚫 这条不该出现 in TickTick" } } : {}),
+        },
+        "human",
+      );
       if (res.applied.includes("commitments")) marked += hit;
     } catch (e) {
       deps.onError?.(personaKey, e);

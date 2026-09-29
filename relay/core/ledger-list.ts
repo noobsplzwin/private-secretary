@@ -43,7 +43,7 @@
 // how work is FILED; a verdict is how it is DECIDED.
 
 import { stableHash } from "./unit-key.js";
-import { dueFields } from "./ticktick-plan.js";
+import { dueFields, DISMISS_LINE } from "./ticktick-plan.js";
 import { MINT_WINDOW_DAYS } from "./corpus-lines.js";
 import type { TickTickTaskPayload } from "./ticktick.js";
 import type { Commitment } from "./persona-v3.js";
@@ -56,9 +56,28 @@ export interface LedgerPersona {
 }
 
 /** How a row reads — see itemFor's `mode`. */
-type RowMode = "own" | "chase" | "waiting";
+type RowMode = "own" | "chase";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * What may put a row on the list at all (owner, 2026-09-29: 「全都是错的」 about
+ * the batch that reached Work when the lists merged):
+ *
+ *   a live VERDICT that it is his move (「verdict说了算」, 2026-09-07), or
+ *   an ACTIVE matter in his registry (specs/commitment-brain.md G7, §5 L2).
+ *
+ * NOT a date on its own. The brain's L1/L2 admit by `due`, but only a due that
+ * passed G6 — re-derived from a verbatim quote against the MESSAGE timestamp.
+ * This ledger's `due` never went through G6, and what it holds is mostly a
+ * date-anchored OCCASION: 「今天下午3:40到楼下接Leo」, 「Join tomorrow's 9am
+ * call」, 「把李处汇报会改约到周四」. Admitting by date put 16 such rows on the
+ * list, every one of them in the batch he struck; the same shape was the
+ * dominant dead commitment when he adjudicated the whole ledger on 9/13.
+ *
+ * Everything else stays in the ledger, OPEN. Not listing is not removing: the
+ * commitment is untouched and returns the moment a verdict makes it his move.
+ */
 
 // ONE LIST (owner, 2026-09-28: 「取消待办池，全进 Work」). Sunk rows used to go
 // to a second list, 待办池, and that split was the root of two of the worst
@@ -80,12 +99,20 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  * 「给每条都编一个『今天到期』，一周之内 Today 就没有意义了」. Nothing here claims
  * a deadline nobody stated; it says when to look again.
  *
- *   his own move   — the day the verdict said he must act, +3
- *   waiting on them — the last time THEY spoke, +7; past that and still inside
- *                     the mint window, the row becomes a 催
+ *   his move — the day the verdict said he must act (else the last time the
+ *              person spoke), +3
+ *
+ * A LIGHT row whose review or deadline has passed rolls forward every
+ * ROLL_DAYS instead of sitting overdue in Today.
+ *
+ * There is NO waiting clock. Rows for work sitting with the other side were
+ * added 2026-09-28 and struck the next day — 52 「等:」 rows the owner called
+ * 「全都是错的」 — because the brain already says so: WAITING occupies no level
+ * of the list (specs/commitment-brain.md §5). Nor does a quiet week turn into a
+ * 催 on its own; 该催了 is a nudge somebody set, not a timer.
  */
 const OWN_REVIEW_DAYS = 3;
-const WAIT_REVIEW_DAYS = 7;
+const ROLL_DAYS = 7;
 
 function localDate(ms: number, zone: string): string {
   // en-CA formats as YYYY-MM-DD, which dueFields reads as an all-day date.
@@ -196,14 +223,9 @@ function itemFor(
   /**
    * Whose move it is, which decides how the row READS.
    *
-   *   own     — Leo's work. The title is the commitment.
-   *   chase   — they are late, or the verdict says he is the one waiting, so
-   *             his to-do is the phone call: 「催: …」.
-   *   waiting — the matter is live but nothing is his right now. Neither of the
-   *             above is honest: it is not his task, and nobody is late.
-   *
-   * A boolean could not tell the last two apart, and conflating them is how a
-   * parked matter would start shouting 催 at him.
+   *   own   — Leo's work. The title is the commitment.
+   *   chase — they are late, or the verdict says he is the one waiting, so
+   *           his to-do is the phone call: 「催: …」.
    */
   modeIn: RowMode = "own",
   /**
@@ -222,44 +244,30 @@ function itemFor(
   const who = displayName ?? personaKey;
 
   // ── the date. A real deadline wins; otherwise a REVIEW date, said as one.
-  let mode = modeIn;
-  let light = sunk;
+  const mode = modeIn;
+  const light = sunk;
   let dateLine = "";
   let reviewMs: number | undefined;
   if (!due) {
     const at = Date.parse(lead.assessment?.at ?? "");
     const verdictMs = Number.isNaN(at) ? undefined : at;
-    const waiting = mode === "waiting";
-    // Waiting is timed from THEIR last word; his own move from the verdict that
-    // made it his. Each falls back to the other rather than to nothing.
-    const base = waiting ? (owner.spokeMs ?? verdictMs) : (verdictMs ?? owner.spokeMs);
-    const days = waiting ? WAIT_REVIEW_DAYS : OWN_REVIEW_DAYS;
-    const baseLabel = waiting
-      ? owner.spokeMs !== undefined ? `${who} 最后一次说话` : "上次判定"
-      : verdictMs !== undefined ? "判定要你动手" : `${who} 最后一次说话`;
+    const base = verdictMs ?? owner.spokeMs;
+    const baseLabel = verdictMs !== undefined ? "判定要你动手" : `${who} 最后一次说话`;
     if (base === undefined) {
       dateLine = "没有可用的回看基准(从没判定过,近期也没对话),暂不挂日期。";
     } else {
-      const first = base + days * DAY_MS;
-      // 「到了还没动就变成催」 — but only inside the mint window. A silence
-      // older than that is history, not someone running late (recentlyOverdue
-      // draws the same line for stated deadlines).
-      if (waiting && first <= nowMs && nowMs - base <= MINT_WINDOW_DAYS * DAY_MS) {
-        mode = "chase";
-        light = false;
-        reviewMs = first;
-        dateLine = `${who} ${md(base, zone)} 之后没有动静,已过回看日 ${md(first, zone)}。`;
-      } else if (light && first <= nowMs) {
+      const first = base + OWN_REVIEW_DAYS * DAY_MS;
+      if (light && first <= nowMs) {
         // A LIGHT row whose review passed rolls to its next one instead of
         // sitting overdue — overdue light rows are exactly how Today fills with
         // things nobody has to do. His own live work does NOT roll: overdue is
         // the signal there.
-        const k = Math.floor((nowMs - first) / (days * DAY_MS)) + 1;
-        reviewMs = first + k * days * DAY_MS;
-        dateLine = `每 ${days} 天回看一次,下次 ${md(reviewMs, zone)}(回看日,不是截止)。`;
+        const k = Math.floor((nowMs - first) / (ROLL_DAYS * DAY_MS)) + 1;
+        reviewMs = first + k * ROLL_DAYS * DAY_MS;
+        dateLine = `每 ${ROLL_DAYS} 天回看一次,下次 ${md(reviewMs, zone)}(回看日,不是截止)。`;
       } else {
         reviewMs = first;
-        dateLine = `回看日 ${md(first, zone)}(${baseLabel} ${md(base, zone)} +${days} 天),不是截止。`;
+        dateLine = `回看日 ${md(first, zone)}(${baseLabel} ${md(base, zone)} +${OWN_REVIEW_DAYS} 天),不是截止。`;
       }
     }
   }
@@ -271,9 +279,9 @@ function itemFor(
   if (due && light) {
     const dueMs = Date.parse(due.dueDate);
     if (!Number.isNaN(dueMs) && dueMs + DAY_MS <= nowMs) {
-      const k = Math.floor((nowMs - dueMs) / (WAIT_REVIEW_DAYS * DAY_MS)) + 1;
-      reviewMs = dueMs + k * WAIT_REVIEW_DAYS * DAY_MS;
-      dateLine = `原定截止 ${md(dueMs, zone)} 已过;每 ${WAIT_REVIEW_DAYS} 天回看一次,下次 ${md(reviewMs, zone)}。`;
+      const k = Math.floor((nowMs - dueMs) / (ROLL_DAYS * DAY_MS)) + 1;
+      reviewMs = dueMs + k * ROLL_DAYS * DAY_MS;
+      dateLine = `原定截止 ${md(dueMs, zone)} 已过;每 ${ROLL_DAYS} 天回看一次,下次 ${md(reviewMs, zone)}。`;
     }
   }
   const shown = reviewMs !== undefined ? dueFields(localDate(reviewMs, zone), zone) : null;
@@ -286,9 +294,7 @@ function itemFor(
     mode === "chase"
       ? `${who} 欠这件事` +
         (recentlyOverdue(lead.due, nowMs) ? `,${lead.due} 已过期。` : ",你在等它。")
-      : mode === "waiting"
-        ? `这件事还没完,但眼下不用你动——在等 ${who}。`
-        : "",
+      : "",
     dateLine,
     matter ? matterProgress(matter.all, lead, displayName ?? personaKey) : "",
     lead.assessment?.evidence ? `依据: "${lead.assessment.evidence}"` : "",
@@ -299,9 +305,9 @@ function itemFor(
   const payload: TickTickTaskPayload = {
     // The owner's action on someone else's missed deadline is to chase it. The
     // row names that action, not their work — his to-do is the phone call.
-    title:
-      mode === "chase" ? `催: ${lead.what}` : mode === "waiting" ? `等: ${lead.what}` : lead.what,
-    kind: steps.length > 0 ? "CHECKLIST" : "TEXT",
+    title: mode === "chase" ? `催: ${lead.what}` : lead.what,
+    // Always a checklist: DISMISS_LINE rides on every row.
+    kind: "CHECKLIST",
     // Weight, now that there is one list (see the header of ONE LIST above).
     // Only a REAL deadline can reach 5; a review date never raises priority.
     priority: light ? 0 : Math.max(3, priorityFor(due, nowMs)) as 3 | 5,
@@ -314,9 +320,15 @@ function itemFor(
     // row: `content` carried the new 「进度: 共 3 项」 note, `desc` — the one a
     // checklist task displays — still carried the week-old quote. The
     // self-updating description was updating somewhere he could not see.
-    desc: steps.length > 0 ? note : "",
-    content: steps.length > 0 ? "" : note,
-    items: steps.map((title, i) => ({ title, status: 0 as const, sortOrder: i })),
+    desc: note,
+    content: "",
+    // 🚫 LAST, on every ledger row. The ledger never carried it — only card
+    // rows did — so when the lists merged on 2026-09-28, 110 rows reached the
+    // owner's Work list with no way to say "this should not be here" except
+    // 完成, which closes the commitment as DONE: the exact false-close this
+    // engine spent a week undoing. Ticking it drops the commitment instead
+    // (proc/ledger-close.ts markLedgerCommitmentsDropped).
+    items: [...steps, DISMISS_LINE].map((title, i) => ({ title, status: 0 as const, sortOrder: i })),
     tags: ["secretary"],
     ...(dated ? { ...dated, timeZone: zone } : {}),
   };
@@ -425,63 +437,56 @@ export function deriveLedgerTasks(
       const all = allByMatter.get(matterId) ?? chain;
       const as = { id: matterId, all };
       // The ACTIVE link is the one where the work sits with Leo.
-      const closed = closedMatters.has(matterId);
+      // A matter the OWNER CLOSED is over — his ruling outranks any verdict.
+      // Its links stay open in the ledger; none of them is listed.
+      if (closedMatters.has(matterId)) continue;
+      const matterActive = activeMatters.has(matterId);
       const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
       if (lead) {
-        out.push(itemFor(owner, lead, chain, zone, nowMs, closed || longOverdue(lead.due, nowMs), "own", as));
+        const sunkLead = longOverdue(lead.due, nowMs);
+        if (!sunkLead || matterActive) out.push(itemFor(owner, lead, chain, zone, nowMs, sunkLead, "own", as));
         continue;
       }
-      const sunk = closed || !activeMatters.has(matterId);
+      const sunk = !matterActive;
       // Nothing on my side is live — but the waiting can still be mine, either
       // because they are past a date they gave me, or because the assess pass
       // judged that I am the one left waiting (中汽研's payment carries no date
       // at all, which is why the verdict route has to exist beside the dates).
+      // A chase needs the same footing as any row: a verdict that the waiting is
+      // his, or lateness inside a matter he registered. Lateness alone was how
+      // 「催: Drive Leo's suitcase over to 张江」 reached the list.
       const late = chain.find(
-        (c) => c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo),
+        (c) => c.who === "them" && (c.assessment?.needs_leo || (matterActive && recentlyOverdue(c.due, nowMs))),
       );
       if (late) {
         out.push(itemFor(owner, late, chain, zone, nowMs, sunk, "chase", as));
         continue;
       }
-      // Still open, just not now. The owner's rule is that only done or dropped
-      // ends a commitment — 「如果还是待办，但是优先级较低，那就往后排」 — so a
-      // matter with nothing live sinks to the floor instead of vanishing.
-      // Vanishing is what the sync reads as "finished", and on 2026-09-06 that
-      // was one push away from closing three live to-dos.
-      //
-      // ANY open link holds the floor — not just a who=me one (owner,
-      // 2026-09-28: 「补上，沉到待办池，不升顶」).
-      //
-      // The old rule asked for a dormant commitment of MINE and rendered
-      // NOTHING when it found none, which was survivable only while a row's key
-      // moved on its own. Under a stable matter key, no row in `desired` is
-      // exactly how the sync spells "finished", so a live matter auto-completed
-      // its own ticket. Both halves were measured on the real account the same
-      // week: 金小奇's equity matter — twelve links, six open, the whole 股权变更
-      // inside it — produced zero rows on 2026-09-27; and on 2026-09-28 the
-      // 大众VW cascade matter had its ticket completed with two links still
-      // open, because the chase window expired and nothing else held it.
-      //
-      // ALWAYS SUNK, never promoted. The floor is the whole point: 「不升顶」.
-      // What reaches the top of the list is unchanged — a verdict promotes, and
-      // nothing here fakes one.
+      // A dormant link of HIS, with no live verdict: listed only when the brain
+      // admits it (admitsLight). A matter whose open links all sit with OTHERS
+      // renders nothing — WAITING occupies no level (brain §5). Under the stable
+      // matter key that means the sync completes its ticket, which is harmless:
+      // a sync-side complete never touches the commitments (only the readback's
+      // closes do), so the chain stays open and the row returns the moment one
+      // of its links becomes his move.
       const dormant = chain.find((c) => c.who === "me");
-      if (dormant) out.push(itemFor(owner, dormant, chain, zone, nowMs, true, "own", as));
-      else if (chain[0]) out.push(itemFor(owner, chain[0], chain, zone, nowMs, true, "waiting", as));
+      if (dormant && matterActive)
+        out.push(itemFor(owner, dormant, chain, zone, nowMs, true, "own", as));
     }
 
     for (const c of open) {
       if (inMatter.has(c)) continue;
-      if (c.who === "them" && (recentlyOverdue(c.due, nowMs) || c.assessment?.needs_leo)) {
+      // Unfiled: no registered matter to lend lateness any weight, so only a
+      // verdict makes the waiting his.
+      if (c.who === "them" && c.assessment?.needs_leo) {
         out.push(itemFor(owner, c, [c], zone, nowMs, true, "chase"));
         continue;
       }
       if (c.who !== "me") continue;
       // No matter_id at all — unfiled, not closed. The verdict decides, and a
       // date that went by a fortnight ago overrides a stale yes: see longOverdue.
-      out.push(
-        itemFor(owner, c, [c], zone, nowMs, !c.assessment?.needs_leo || longOverdue(c.due, nowMs)),
-      );
+      // Unfiled and no live verdict → not listed (see the admission note above).
+      if (c.assessment?.needs_leo && !longOverdue(c.due, nowMs)) out.push(itemFor(owner, c, [c], zone, nowMs, false));
     }
   }
   return out;

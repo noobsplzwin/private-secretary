@@ -51,11 +51,12 @@ The layout is discoverable from the tree; what is NOT discoverable:
   sitting in the map as three rows for one job. A commitment carrying a
   `matter_id` keys by `stableHash("matter:" + id)`, so new links UPDATE the same
   task and its note re-renders (「直接更新目前ticket的Description区域」); the task
-  auto-completes exactly when every link in the chain is settled — which only
-  holds because a matter with ANY open link keeps a row: when nothing in it is
-  Leo's, it sinks as 「等: …」 at priority 0 and is never promoted (「补上，沉到
-  待办池，不升顶」, 2026-09-28). Without that floor a live matter
-  rendered nothing and completed its own ticket. Unfiled work
+  leaves the list when nothing in it is his move. A matter whose open links all
+  sit with OTHERS lists nothing — WAITING occupies no level (brain §5) — and the
+  sync completing its ticket is harmless: a sync-side complete never touches the
+  commitments, and the row returns on the SAME key when a link becomes his. (For
+  one day, 2026-09-28, such matters rendered as 「等: …」 rows; once the lists
+  merged, 52 of them reached Work and the owner struck them all.) Unfiled work
   keeps the wording key and still re-mints — 「归属判不准就新开一张」 (owner,
   2026-09-27). Never add a fuzzy matcher here: gluing the wrong conversation
   onto a live ticket is worse than one extra card (`core/unit-key.ts`).
@@ -80,11 +81,24 @@ The layout is discoverable from the tree; what is NOT discoverable:
   updates in place. The writer MOVES a task whose list differs from the
   payload's (`updateTask` → `move_task`); before that it silently kept a task
   in the list it was born in, and the week's most important row sat in 待办池.
+- **What reaches the list: a live verdict, or an ACTIVE registered matter —
+  never a date alone** (`core/ledger-list.ts`, owner 2026-09-29: 「全都是错的」
+  about the 110 ledger rows the list merge put in Work; 102 fail this rule).
+  The brain admits by `due`, but only a G6-validated one, and this ledger's
+  `due` is mostly a date-anchored OCCASION (「今天下午3:40到楼下接Leo」) — date
+  admission listed 16 of those. A 催 needs the same footing. Anything else stays
+  OPEN in the ledger, unlisted; nothing is closed by not being shown.
+- **Every ledger row ends with 「🚫 这条不该出现」**, as card rows always did.
+  Ticking it DROPS the ONE commitment the row's title shows
+  (`markLedgerCommitmentsDropped`, reason in the persona evidence) — never
+  `done`, and never the whole matter a row can stand for: one 完成 on a matter
+  row closed 24 links on 2026-09-29. No title match → nothing drops. Not in
+  labels.jsonl: that ledger scores the CARD judge.
 - **Every ledger row carries a date; without a real deadline it is a REVIEW
-  date, and its note says 「回看日…不是截止」** (owner, 2026-09-28). His move:
-  verdict +3 days. Waiting on them: their last word (`state.personTraffic`)
-  +7; past that and inside the 14-day mint window it becomes a 催 on the same
-  row. A LIGHT row past its review — or past a real deadline — ROLLS to its
+  date, and its note says 「回看日…不是截止」** (owner, 2026-09-28): the verdict
+  +3 days. There is no waiting clock — an automatic 「对方 7 天没动静 → 催」 was
+  tried for a day and produced rows like 「催: Drive Leo's suitcase over to
+  张江」. A LIGHT row past its review — or past a real deadline — ROLLS to its
   next review instead of piling up overdue in Today; his own live work does
   not roll. Nothing to time it from → no date, said in the note. Anything that
   reasons about DEADLINES reads `DesiredTask.deadline`, never `dueDate`.

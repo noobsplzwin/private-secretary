@@ -40,23 +40,27 @@ const persona = (commitments: Commitment[], key = "zech", display_name = "Zech N
 describe("the floor: what a row falls to when nothing promotes it", () => {
   // 2026-08-24 clearance swept 163 matter-less rows by hand; ten days later the
   // ledger had minted 59 more. A cleanup is not a gate.
-  it("sinks a matter-less commitment with NO verdict, deadline or not", () => {
-    // The date does not promote it — only a verdict does. Undecided work waits
-    // on the floor rather than claiming his day.
-    const [row] = derive([persona([c({ due: "2026-08-23" })])]);
-    expect(row!.payload.priority).toBe(0);
-    expect(row!.payload.priority).toBe(0);
+  // REVISED 2026-09-29: the floor was 待办池, now gone. The rule it pinned is
+  // stronger than ever — a date does not list it, only a verdict (or an active
+  // matter) does — so undecided, unfiled work is not listed at all.
+  it("does not list a matter-less commitment with NO verdict, deadline or not", () => {
+    expect(derive([persona([c({ due: "2026-08-23" })])])).toEqual([]);
+    expect(derive([persona([c({})])])).toEqual([]);
   });
 
-  it("sinks a commitment whose matter the owner has closed, verdict and all", () => {
-    const [row] = derive(
+  // REVISED 2026-09-29 (brain §5, owner: 「全都是错的」 about the merged batch).
+  // A closed matter used to SINK; with 待办池 gone, sunk meant "in his face at
+  // priority 0". His closing it is the ruling — nothing inside is listed. The
+  // commitment itself is untouched: derive never writes the ledger.
+  it("lists nothing from a matter the owner has closed, verdict and all", () => {
+    const rows = derive(
       [persona([c({ matter_id: "maoming-trip", ...assessed(true) })])],
       ZONE,
       NOW,
       LIVE,
       new Set(["maoming-trip"]),
     );
-    expect(row!.payload.priority).toBe(0);
+    expect(rows).toEqual([]);
   });
 
   it("promotes a commitment in a live matter, keeping its deadline priority", () => {
@@ -68,8 +72,9 @@ describe("the floor: what a row falls to when nothing promotes it", () => {
   it("sinks — never drops: the row still exists and keeps its key", () => {
     // Same work, same identity, different shelf. The shelf is `project`;
     // sinking must never re-key, or the sync reads it as a new to-do.
+    // Sunk by a long-past date, in a matter that is still live (so it is listed).
     const live = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])]);
-    const sunk = derive([persona([c({ matter_id: "fcc", ...assessed(true) })])], ZONE, NOW, LIVE, new Set(["fcc"]));
+    const sunk = derive([persona([c({ matter_id: "fcc", due: "2026-07-01", ...assessed(true) })])]);
     expect(sunk).toHaveLength(1);
     expect(sunk[0]!.payload.priority).toBe(0);
     expect(live[0]!.payload.priority).toBeGreaterThan(0);
@@ -118,9 +123,11 @@ describe("deriveLedgerTasks", () => {
     // every OPEN who=me entry has a row — the verdict decides the shelf, not
     // whether it exists. These fixtures carry no matter_id, so the promotion
     // gate puts all of them on the floor regardless.
-    expect(rows.map((r) => r.payload.title).sort()).toEqual(
-      ["handed off", "never assessed", "签署高通 NDA 并回传给李冰"].sort(),
-    );
+    // REVISED again 2026-09-29: the undecided ones used to sit on the floor.
+    // The floor was 待办池, which is gone, so an unfiled commitment with no
+    // verdict and no near deadline is simply not listed (brain §5, admitsLight).
+    // They stay OPEN in the ledger; derive never writes it.
+    expect(rows.map((r) => r.payload.title).sort()).toEqual(["签署高通 NDA 并回传给李冰"]);
     // REVISED with the ruling: the judged one promotes even unfiled; the rest
     // are undecided and stay on the floor.
     const promoted = rows.filter((r) => r.payload.priority !== 0).map((r) => r.payload.title);
@@ -137,15 +144,20 @@ describe("deriveLedgerTasks", () => {
       NOW,
     );
     expect(row!.payload.kind).toBe("CHECKLIST");
-    expect(row!.payload.items).toEqual([{ title: "把签好的 NDA 扫描发回李冰", status: 0, sortOrder: 0 }]);
+    expect(row!.payload.items).toEqual([
+      { title: "把签好的 NDA 扫描发回李冰", status: 0, sortOrder: 0 },
+      { title: "🚫 这条不该出现", status: 0, sortOrder: 1 },
+    ]);
     expect(row!.payload.desc).toContain('依据: "please handle this"');
     expect(row!.payload.desc).toContain("Zech Noiseux");
   });
 
-  it("renders TEXT when the verdict carries no next_step", () => {
+  // REVISED 2026-09-29: every ledger row carries 🚫, so none is TEXT any more.
+  it("a verdict with no next_step is a checklist holding only 🚫", () => {
     const [row] = derive([persona([c({ ...assessed(true) })])], ZONE, NOW);
-    expect(row!.payload.kind).toBe("TEXT");
-    expect(row!.payload.content).toContain("依据");
+    expect(row!.payload.kind).toBe("CHECKLIST");
+    expect(row!.payload.items).toEqual([{ title: "🚫 这条不该出现", status: 0, sortOrder: 0 }]);
+    expect(row!.payload.desc).toContain("依据");
   });
 
   // Priority is mechanical, from the deadline alone. Never invented: an undated
@@ -238,13 +250,11 @@ describe("deriveLedgerTasks", () => {
         ZONE,
         NOW,
       );
-      // REVISED 2026-09-06: the matter owes no WORKING row — Leo has nothing to
-      // do on it — but his own link is still an open commitment, and the owner
-      // was explicit that it stays one: 「不需要任何我做的事情，但是还是要算作一个
-      // commitment」. So it sits on the floor, not nowhere.
-      expect(rows).toHaveLength(1);
-      expect(rows[0]!.payload.priority).toBe(0);
-      expect(rows[0]!.payload.title).toBe("找供应商采购天线");
+      // REVISED 2026-09-06, then 2026-09-29. His words — 「不需要任何我做的事情，
+      // 但是还是要算作一个commitment」 — are honoured by the LEDGER: the link stays
+      // open. They put it on the floor while the floor was 待办池; with that list
+      // gone, and this matter unregistered, it is not listed (brain §5).
+      expect(rows).toEqual([]);
     });
   });
 });
@@ -267,41 +277,21 @@ describe("they owe me, and they are late", () => {
     expect(row!.payload.priority).toBe(5); // past its date — overdue counts as urgent
   });
 
-  // REVISED 2026-09-28 by owner ruling 「补上，沉到待办池，不升顶」. These three
-  // used to assert SILENCE — no row at all. Silence was survivable only while a
-  // row's key moved on its own; under a stable matter key, no row in `desired`
-  // is exactly how the sync spells "finished", so a live matter completed its
-  // own ticket. The 大众VW cascade matter did it that day with two links open.
-  //
-  // What the block still pins is the half that was always right: none of these
-  // is a CHASE, and none of them earns a place in his day.
-  const sunkNotChased = (rows: ReturnType<typeof deriveLedgerTasks>): void => {
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.payload.priority).toBe(0);
-    expect(rows[0]!.payload.priority).toBe(0);
-    expect(rows[0]!.payload.title).not.toContain("催");
-    expect(rows[0]!.payload.title).toContain("等: ");
-  };
-
-  it("a commitment of theirs that is NOT yet due sinks, and is not chased", () => {
-    sunkNotChased(derive([persona([late({ due: "2026-12-01" })])]));
+  // REVISED 2026-09-29, reverting 2026-09-28. For a day these SANK as 「等: …」
+  // rows (「补上，沉到待办池，不升顶」). Once the lists merged they reached Work,
+  // 52 of them, and the owner's verdict on the batch was 「全都是错的」 — which is
+  // what the brain already said: WAITING occupies no level (specs/commitment-
+  // brain.md §5). Silence is right again; the commitments stay open.
+  it("a commitment of theirs that is NOT yet due stays silent", () => {
+    expect(derive([persona([late({ due: "2026-12-01" })])])).toEqual([]);
   });
 
-  it("an undated commitment of theirs sinks — lateness must be evidenced", () => {
-    sunkNotChased(derive([persona([late({ due: undefined })])]));
+  it("an undated commitment of theirs stays silent — lateness must be evidenced", () => {
+    expect(derive([persona([late({ due: undefined })])])).toEqual([]);
   });
 
-  it("a free-text due is not a deadline, so the row sinks instead of chasing", () => {
-    sunkNotChased(derive([persona([late({ due: "end of weekend" })])]));
-  });
-
-  // The row exists so the matter does not auto-complete itself, and its note
-  // has to say why it is parked — 「等: 」 alone reads like a task he is late on.
-  it("says plainly that the move is theirs, not his", () => {
-    const [row] = derive([persona([late({ due: undefined })])]);
-    const note = String(row!.payload.desc || row!.payload.content || "");
-    expect(note).toContain("眼下不用你动");
-    expect(note).toContain("Zech Noiseux");
+  it("a free-text due is not a deadline and mints nothing", () => {
+    expect(derive([persona([late({ due: "end of weekend" })])])).toEqual([]);
   });
 
   it("my own live link wins the matter — no chasing myself", () => {
@@ -329,10 +319,8 @@ describe("they owe me, and the verdict says I am waiting", () => {
     expect(row!.payload.title).toBe("催: Arrange the 承兑汇票 payment");
   });
 
-  it("needs_leo=false on their commitment sinks rather than chasing", () => {
-    const [row] = derive([persona([owed({ ...assessed(false) })])]);
-    expect(row!.payload.priority).toBe(0);
-    expect(row!.payload.title).toBe("等: Arrange the 承兑汇票 payment");
+  it("needs_leo=false on their commitment stays silent", () => {
+    expect(derive([persona([owed({ ...assessed(false) })])])).toEqual([]);
   });
 
   it("my own live link still wins the matter", () => {
@@ -464,7 +452,7 @@ describe("the verdict promotes, the matter only files", () => {
       LIVE,
       new Set(["retired"]),
     );
-    expect(row!.payload.priority).toBe(0);
+    expect(row).toBeUndefined(); // REVISED 2026-09-29: closed lists nothing
   });
 
   it("an unregistered matter id is unfiled, not closed", () => {
@@ -480,9 +468,11 @@ describe("the verdict promotes, the matter only files", () => {
     expect(row!.payload.project).toBeUndefined();
   });
 
-  it("no verdict still means the floor, matter or not", () => {
+  // REVISED 2026-09-29: no verdict is still light — but only an ACTIVE matter's
+  // next step earns a place without one (brain §5 L2); unfiled, it is not listed.
+  it("no verdict: listed light inside an active matter, not listed unfiled", () => {
     expect(derive([persona([c({ matter_id: "fcc" })])])[0]!.payload.priority).toBe(0);
-    expect(derive([persona([c({})])])[0]!.payload.priority).toBe(0);
+    expect(derive([persona([c({})])])).toEqual([]);
   });
 });
 
@@ -503,8 +493,11 @@ describe("a date-anchored occasion sinks once it is long past", () => {
     expect(row.payload.priority).toBe(5);
   });
 
-  it("sinks it to the pool once its date is more than the window past", () => {
-    const row = derive([persona([c({ due: days(20), ...assessed(true) })])])[0]!;
+  // REVISED 2026-09-29: sinking used to mean 待办池. Now a long-past occasion
+  // is not listed unless an active matter still holds it.
+  it("stops listing it once its date is more than the window past", () => {
+    expect(derive([persona([c({ due: days(20), ...assessed(true) })])])).toEqual([]);
+    const row = derive([persona([c({ due: days(20), matter_id: "fcc", ...assessed(true) })])])[0]!;
     expect(row.payload.priority).toBe(0);
     expect(row.payload.priority).toBe(0);
   });
@@ -520,12 +513,14 @@ describe("a date-anchored occasion sinks once it is long past", () => {
   });
 
   it("leaves a commitment with no due exactly as the verdict decided", () => {
-    expect(derive([persona([c({ ...assessed(true) })])])[0]!.payload.project).toBeUndefined();
-    expect(derive([persona([c({ ...assessed(false) })])])[0]!.payload.priority).toBe(0);
+    expect(derive([persona([c({ ...assessed(true) })])])[0]!.payload.priority).toBe(3);
+    expect(derive([persona([c({ ...assessed(false) })])])).toEqual([]);
   });
 
-  it("sinks but does NOT remove — a commitment still ends only by done or dropped", () => {
-    const rows = derive([persona([c({ due: days(60), ...assessed(true) })])]);
+  // What survives of this one: derive never ENDS a commitment. Not listing it
+  // is not removing it — inside an active matter it is still on the list.
+  it("does NOT remove — a commitment still ends only by done or dropped", () => {
+    const rows = derive([persona([c({ due: days(60), matter_id: "fcc", ...assessed(true) })])]);
     expect(rows).toHaveLength(1);
   });
 });
@@ -593,30 +588,21 @@ describe("a matter's row updates in place instead of re-minting", () => {
     expect(row!.payload.title).toBe("第三步");
   });
 
-  // THE HOLE, closed 2026-09-28. A matter whose open links all sit with others
-  // used to render nothing — and under a stable key, nothing is how the sync
-  // spells "finished", so the ticket completed itself with the work still live.
-  // Production proof: the 大众VW cascade matter, two links open, task closed.
-  it("keeps a row while ANY link is open, even when none of them is mine", () => {
-    const rows = derive([
-      persona([
-        link("金小奇确定级联商务报价", { who: "them" }),
-        link("把 SoW+MSA 发给杜伟", { who: "them" }),
-      ]),
+  // REVISED 2026-09-29. A matter whose open links all sit with others lists
+  // nothing (brain §5: WAITING occupies no level). The sync completes its
+  // ticket, which never touches the commitments — so what has to hold is that
+  // the row comes BACK on the same key when a link becomes his move, and the
+  // sync reopens that task instead of minting a new one.
+  it("a waiting-only matter lists nothing, and returns on the SAME key", () => {
+    expect(derive([persona([link("金小奇确定级联商务报价", { who: "them" })])])).toEqual([]);
+    const back = derive([
+      persona([link("金小奇确定级联商务报价", { who: "them" }), link("回杜伟的 SoW 修改意见", assessed(true))]),
     ]);
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.payload.priority).toBe(0); // 「不升顶」
-    expect(rows[0]!.payload.priority).toBe(0);
+    const tombMap = { [back[0]!.unitKey]: { ticktickId: "tt-1", projectId: "p", hash: "old", done: 1 } };
+    const ops = diffTickTickSync(back, tombMap);
+    expect(ops).toEqual([expect.objectContaining({ kind: "update", ticktickId: "tt-1", reopen: true })]);
   });
 
-  // ...and that row must survive the diff, or closing the hole achieved
-  // nothing: the whole point is that the task is NOT completed.
-  it("the surviving row stops the sync completing the ticket", () => {
-    const live = derive([persona([link("等对方回价", { who: "them" })])]);
-    const map = { [live[0]!.unitKey]: { ticktickId: "tt-1", projectId: "p", hash: "stale" } };
-    const ops = diffTickTickSync(live, map);
-    expect(ops.some((o) => o.kind === "complete")).toBe(false);
-  });
 
   // Logic 2. Nothing open anywhere in the chain → no row → the sync's
   // ordinary complete path closes the task. Auto-close is the ABSENCE of a
@@ -697,13 +683,12 @@ describe("a ledger row always overwrites BOTH note fields", () => {
     expect(row!.payload.desc).not.toBe("");
   });
 
-  it("a text row blanks `desc` and sends an EMPTY checklist", () => {
+  // REVISED 2026-09-29: there is no TEXT ledger row any more — 🚫 rides on all.
+  it("every ledger row is a checklist ending in 🚫, with `content` blanked", () => {
     const [row] = derive([persona([c({ ...assessed(true) })])]);
-    expect(row!.payload.kind).toBe("TEXT");
-    expect(row!.payload.desc).toBe("");
-    expect(row!.payload.content).not.toBe("");
-    // omitted `items` would leave last week's checklist on the task
-    expect(row!.payload.items).toEqual([]);
+    expect(row!.payload.kind).toBe("CHECKLIST");
+    expect(row!.payload.content).toBe("");
+    expect(row!.payload.items!.at(-1)).toEqual(expect.objectContaining({ title: "🚫 这条不该出现" }));
   });
 });
 
@@ -727,34 +712,14 @@ describe("one list: weight is priority, and every row gets a date", () => {
     expect(rows.every((r) => r.payload.project === undefined)).toBe(true);
   });
 
-  it("waiting: review date is their last word + 7 days, and the row stays light", () => {
-    const [row] = deriveSpoke([waitingOn()], 2);
-    expect(row!.payload.title).toBe("等: 回测试报告");
-    expect(row!.payload.priority).toBe(0);
-    expect(row!.payload.dueDate).toMatch(/^2026-08-27T00:00:00/); // 8/20 + 7
-    expect(note(row!)).toContain("Zech Noiseux 最后一次说话");
-    expect(note(row!)).toContain("不是截止");
+  // REVISED 2026-09-29: the waiting clock (+7 days, then an automatic 催) is
+  // gone. It produced 「催: Drive Leo's suitcase over to 张江」-grade rows from
+  // stale who=them links; the brain's 该催了 is a nudge someone set.
+  it("a quiet week never turns their commitment into a 催 on its own", () => {
+    expect(deriveSpoke([waitingOn()], 9)).toEqual([]);
+    expect(deriveSpoke([waitingOn()], 30)).toEqual([]);
   });
 
-  // 「到了还没动就变成催」 — same matter key, so it UPDATES into a 催.
-  it("waiting past its review date becomes a 催, on the same row", () => {
-    const [before] = deriveSpoke([waitingOn()], 2);
-    const [after] = deriveSpoke([waitingOn()], 9);
-    expect(after!.unitKey).toBe(before!.unitKey);
-    expect(after!.payload.title).toBe("催: 回测试报告");
-    expect(after!.payload.priority).toBe(3);
-    expect(after!.payload.dueDate).toMatch(/^2026-08-20T00:00:00/); // 8/13 + 7, overdue on purpose
-    expect(note(after!)).toContain("已过回看日");
-  });
-
-  // A silence older than the mint window is history, not someone running late.
-  it("a silence older than 14 days stays 等 and ROLLS, instead of shouting", () => {
-    const [row] = deriveSpoke([waitingOn()], 30);
-    expect(row!.payload.title).toBe("等: 回测试报告");
-    expect(row!.payload.priority).toBe(0);
-    expect(Date.parse(row!.payload.dueDate!)).toBeGreaterThan(NOW);
-    expect(note(row!)).toContain("每 7 天回看一次");
-  });
 
   it("his own live work does NOT roll — overdue is the signal there", () => {
     const [row] = derive([persona([c({ ...assessed(true, { at: "2026-08-10T00:00:00Z" }) })])]);
@@ -763,7 +728,8 @@ describe("one list: weight is priority, and every row gets a date", () => {
   });
 
   it("with nothing to time it from, no date is invented — and the note says so", () => {
-    const [row] = derive([persona([c({ what: "never assessed" })])]);
+    // A listed row (active matter, no verdict) with no verdict date and no traffic.
+    const [row] = derive([persona([c({ what: "never assessed", matter_id: "fcc" })])]);
     expect(row!.payload.dueDate).toBeUndefined();
     expect(note(row!)).toContain("暂不挂日期");
   });
@@ -778,14 +744,8 @@ describe("one list: weight is priority, and every row gets a date", () => {
 
 describe("a light row never piles up in Today", () => {
   it("rolls a light row past its REAL deadline, keeping the deadline itself", () => {
-    // 8/1 is three weeks gone and the matter is closed → light.
-    const [row] = derive(
-      [persona([c({ due: "2026-08-01", matter_id: "done-m", ...assessed(true) })])],
-      ZONE,
-      NOW,
-      LIVE,
-      new Set(["done-m"]),
-    );
+    // Listed (active matter), light (no verdict), and 8/1 is three weeks gone.
+    const [row] = derive([persona([c({ due: "2026-08-01", matter_id: "fcc" })])]);
     expect(row!.payload.priority).toBe(0);
     expect(Date.parse(row!.payload.dueDate!)).toBeGreaterThan(NOW);
     expect(row!.deadline).toMatch(/^2026-08-01/); // the fact survives

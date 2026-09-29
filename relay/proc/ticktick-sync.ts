@@ -30,6 +30,7 @@ import { buildTaskPayload, shouldRenderCardUnit, type TaskUnit } from "../core/t
 import { diffTickTickReadback, type RemoteTask } from "../core/ticktick-readback.js";
 import { groupByTask } from "../core/tasks.js";
 import { unitKey, stableHash } from "../core/unit-key.js";
+import { parseLedgerUnitKey } from "../core/ledger-list.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
 import type { TickTickTaskPayload } from "../core/ticktick.js";
 import type { TrackedApproval } from "../core/ticktick-approval.js";
@@ -279,7 +280,20 @@ export function readbackFromTickTick(
   remote: readonly RemoteTask[],
   /** False when a project could not be listed — then absence proves nothing. */
   coversEveryProject = true,
-): { ticked: string[]; closed: string[]; dismissed: string[]; closedUnitKeys: string[]; map: SyncMap; unitsClosed: number } {
+): {
+  ticked: string[];
+  closed: string[];
+  dismissed: string[];
+  closedUnitKeys: string[];
+  /**
+   * Ledger rows the owner ticked 🚫 on — no ActionItem, so their handle is the
+   * key, plus the title he was SHOWN: 🚫 drops that one commitment, not the
+   * whole matter a row can stand for (proc/ledger-close.ts).
+   */
+  dismissedLedger: Array<{ unitKey: string; title?: string }>;
+  map: SyncMap;
+  unitsClosed: number;
+} {
   const { doneActionIds, doneUnitKeys, dismissedUnitKeys } = diffTickTickReadback(map, remote, coversEveryProject);
   // TWO different owner gestures, kept apart because they mean different things:
   //   ticked — the owner checked an EXECUTABLE line (invite/tool; only those are
@@ -327,6 +341,12 @@ export function readbackFromTickTick(
     // so its only handle is the unitKey, and the caller needs it to mark the
     // underlying commitment done (core/ledger-list.ts parseLedgerUnitKey).
     closedUnitKeys: [...doneUnitKeys],
+    dismissedLedger: dismissedUnitKeys
+      .filter((k) => parseLedgerUnitKey(k) !== null)
+      .map((k) => {
+        const title = remote.find((t) => t.id === map[k]?.ticktickId)?.title;
+        return { unitKey: k, ...(title ? { title } : {}) };
+      }),
     map: next,
     unitsClosed: gone.size,
   };

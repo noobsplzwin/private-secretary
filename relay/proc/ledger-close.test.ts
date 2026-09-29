@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { markLedgerCommitmentsDone } from "./ledger-close.js";
+import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
 import { stableHash } from "../core/unit-key.js";
 
 let dir: string;
@@ -84,5 +84,55 @@ describe("markLedgerCommitmentsDone", () => {
     );
     expect(n).toBe(0);
     expect(errs).toEqual(["gone"]);
+  });
+});
+
+// 🚫 on a LEDGER row (2026-09-29). Ledger rows never carried the dismiss line,
+// so the only way off the list was 完成 — which marks the work DONE. Ticking 🚫
+// must say the opposite: this was never his to do.
+describe("markLedgerCommitmentsDropped", () => {
+  it("drops the commitment behind the row — dropped, never done", () => {
+    const what = "Drive Leo's suitcase over to 张江";
+    persona("chen", withCommitments("chen", `  - who: them\n    what: ${what}\n    status: open\n`));
+    const n = markLedgerCommitmentsDropped(
+      [{ unitKey: `ledger_chen_${stableHash("chase:" + what)}`, title: `催: ${what}` }],
+      { personaDir: dir },
+    );
+    expect(n).toBe(1);
+    const body = readFileSync(join(dir, "chen.yaml"), "utf8");
+    expect(body).toContain("status: dropped");
+    expect(body).not.toContain("status: done");
+  });
+
+  // A matter row stands for a whole chain, and one 完成 on 2026-09-29 closed 24
+  // links. 🚫 judges the ROW he saw — only the link its title shows drops.
+  it("drops only the link the matter row SHOWED, not the whole chain", () => {
+    persona(
+      "jin",
+      withCommitments(
+        "jin",
+        [
+          `  - who: me\n    what: 出PPT技术方案\n    status: open\n    matter_id: venture`,
+          `  - who: them\n    what: 约诚哥聊投资\n    status: open\n    matter_id: venture`,
+          `  - who: me\n    what: 已经做完的\n    status: done\n    matter_id: venture`,
+          `  - who: me\n    what: 别的事\n    status: open\n    matter_id: other`,
+        ].join("\n") + "\n",
+      ),
+    );
+    const n = markLedgerCommitmentsDropped(
+      [{ unitKey: `ledger_jin_${stableHash("matter:venture")}`, title: "出PPT技术方案" }],
+      { personaDir: dir },
+    );
+    expect(n).toBe(1);
+    const body = readFileSync(join(dir, "jin.yaml"), "utf8");
+    expect(body.match(/status: dropped/g)).toHaveLength(1);
+    expect(body).toContain("status: done"); // settled work untouched
+    expect(body.match(/status: open/g)).toHaveLength(2); // its sibling and the other matter untouched
+  });
+
+  it("with no title to go by, drops NOTHING rather than guessing", () => {
+    persona("jin", withCommitments("jin", `  - who: me\n    what: 出PPT技术方案\n    status: open\n    matter_id: venture\n`));
+    const n = markLedgerCommitmentsDropped([{ unitKey: `ledger_jin_${stableHash("matter:venture")}` }], { personaDir: dir });
+    expect(n).toBe(0);
   });
 });

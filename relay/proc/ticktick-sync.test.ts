@@ -316,3 +316,15 @@ describe("syncToTickTick", () => {
     expect(report.created).toBe(0);
   });
 });
+
+// A ledger row has no ActionItem, so a 🚫 on it has to come back as its KEY —
+// otherwise the dismissal lands nowhere and the next push unticks it.
+describe("readbackFromTickTick — 🚫 on a ledger row", () => {
+  it("returns the ledger key in dismissedLedgerKeys", () => {
+    const map = { ledger_chen_abc123: { ticktickId: "t1", projectId: "p", hash: "h" } };
+    const remote = [{ id: "t1", status: 0, title: "催: 把箱子送到张江", items: [{ id: "i1", status: 1, title: "🚫 这条不该出现" }] }];
+    const r = readbackFromTickTick({ actions: [], tasks: [] } as never, map, remote);
+    expect(r.dismissedLedger).toEqual([{ unitKey: "ledger_chen_abc123", title: "催: 把箱子送到张江" }]);
+    expect(r.closedUnitKeys).toEqual([]); // dismissed is NOT done
+  });
+});

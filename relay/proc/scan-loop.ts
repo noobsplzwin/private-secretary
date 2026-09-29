@@ -47,7 +47,7 @@ import { clusterKey, unitKey, inheritSupersededTaskIds } from "../core/unit-key.
 import { executeAction, type ExecuteDeps } from "./execute.js";
 import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
-import { markLedgerCommitmentsDone } from "./ledger-close.js";
+import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks } from "../core/ledger-list.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
@@ -1206,7 +1206,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       const syncMap = loadSyncMap(opts.statePath);
       const { tasks: remote, complete } = await readAllActive(opts.ticktickReader, syncMap);
       const snapshot = loadState(opts.statePath);
-      const { ticked, closed, dismissed, closedUnitKeys, map, unitsClosed } = readbackFromTickTick(
+      const { ticked, closed, dismissed, closedUnitKeys, dismissedLedger, map, unitsClosed } = readbackFromTickTick(
         snapshot,
         syncMap,
         remote,
@@ -1285,6 +1285,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             })
           : 0;
       if (ledgerDone > 0) console.log(`[ticktick] ${ledgerDone} ledger commitment(s) marked done`);
+
+      // 🚫 on a LEDGER row: the commitment is dropped, so the next derive stops
+      // listing it and the ordinary complete path takes the task away.
+      const ledgerDropped =
+        dismissedLedger.length > 0 && opts.personaDir
+          ? markLedgerCommitmentsDropped(dismissedLedger, {
+              personaDir: opts.personaDir,
+              onError: (k, e) => console.error(`[ticktick] ledger dismiss FAILED for ${k}: ${errString(e)}`),
+            })
+          : 0;
+      if (ledgerDropped > 0) console.log(`[ticktick] ${ledgerDropped} ledger commitment(s) dropped by owner (🚫)`);
 
       const dismissedSet = new Set(dismissed);
       if (dismissedSet.size > 0) {
