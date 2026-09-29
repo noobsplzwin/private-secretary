@@ -300,6 +300,15 @@ async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200)
   return false;
 }
 
+/** A mailbox failure in one line — the part that says what to DO about it. */
+export function shortMailboxError(error: string): string {
+  const flat = error.replace(/\s+/g, " ").trim();
+  // invalid_grant = the refresh token is dead (expired or revoked). A Google
+  // project in "Testing" publishing status expires them every 7 days.
+  if (/invalid_grant/.test(flat)) return "invalid_grant — refresh token dead, re-auth needed";
+  return flat.length > 70 ? `${flat.slice(0, 69)}…` : flat;
+}
+
 /**
  * Every ACTIVE task in every list the engine has a live task in.
  *
@@ -599,8 +608,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // Per-mailbox failures are isolated inside scanGmailDirect: healthy
       // mailboxes advanced their cursors above. Surface failures without
       // discarding those successes.
+      // One SHORT line per failed mailbox, mailbox first. The activity log keeps
+      // 200 characters of a source's error, and one OAuth failure is longer than
+      // that on its own — so the second mailbox to fail was cut off and never
+      // appeared anywhere. Measured 2026-09-29: zhenghleo@gmail.com had been
+      // failing next to huizhezheng@gmail.com with no trace of it in the log.
       const partialErr = r.errors.length
-        ? r.errors.map((e) => `mailbox=${e.mailbox}: ${e.error}`).join("; ")
+        ? r.errors.map((e) => `mailbox=${e.mailbox}: ${shortMailboxError(e.error)}`).join("; ")
         : undefined;
       if (partialErr) sourceErrors["gmail:direct"] = partialErr;
       perSource.push({

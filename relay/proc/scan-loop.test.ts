@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { readAllActive, runScanTick } from "./scan-loop.js";
+import { readAllActive, runScanTick, shortMailboxError } from "./scan-loop.js";
 import { acquireLock, loadState, releaseLock } from "../io/state.js";
 import { labelsPathFor, readLabels } from "../io/labels.js";
 import { readActivity } from "../io/activity-log.js";
@@ -1474,5 +1474,21 @@ describe("readAllActive", () => {
     const r = await readAllActive(reader, { a: rec("p-work"), c: rec("p-pool", 1) });
     expect(extra).toBe(0);
     expect(r.complete).toBe(true);
+  });
+});
+
+// REGRESSION 2026-09-29: two mailboxes failing, one visible. The log keeps 200
+// characters per source and a single OAuth error is longer than that.
+describe("shortMailboxError", () => {
+  const oauth = 'OAuth refresh failed for 7555698674-x.apps.googleusercontent.com: HTTP 400 {\n  "error": "invalid_grant",\n  "error_description": "Token has been expired or revoked."\n}';
+  it("says what to do about a dead refresh token, in one line", () => {
+    expect(shortMailboxError(oauth)).toBe("invalid_grant — refresh token dead, re-auth needed");
+  });
+  it("keeps every failed mailbox inside the log's 200 characters", () => {
+    const line = ["huizhezheng@gmail.com", "zhenghleo@gmail.com"]
+      .map((m) => `mailbox=${m}: ${shortMailboxError(oauth)}`)
+      .join("; ");
+    expect(line.length).toBeLessThanOrEqual(200);
+    expect(line).toContain("zhenghleo@gmail.com");
   });
 });
