@@ -39,6 +39,12 @@ export interface SyncRecord {
   // time. Measured on the real account: one task existed SEVEN times. The
   // tombstone lets the diff REOPEN the original instead.
   done?: number;
+  /**
+   * "owner" when the tombstone records HIS completion (the readback saw the
+   * task finished in TickTick) rather than the sync's own complete. Only an
+   * owner close is held against resurrection — see heldClosedByOwner.
+   */
+  closedBy?: "owner";
 }
 
 export type SyncMap = Record<string, SyncRecord>;
@@ -268,7 +274,11 @@ export function applySyncOps(
       // came back. The tombstone is what reopen matches against. An orphan
       // complete has no record yet — it gets one, so IT can reopen too.
       const rec = next[op.unitKey];
-      if (rec) next[op.unitKey] = { ...rec, done: nowMs };
+      if (rec) {
+        // A sync-side complete is not his gesture: drop any stale owner mark.
+        const { closedBy: _owner, ...kept } = rec;
+        next[op.unitKey] = { ...kept, done: nowMs };
+      }
       else if (op.title)
         next[op.unitKey] = { ticktickId: op.ticktickId, projectId: op.projectId, hash: "", title: op.title, done: nowMs };
     }

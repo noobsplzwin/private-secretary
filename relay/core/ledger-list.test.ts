@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveLedgerTasks } from "./ledger-list.js";
+import { deriveLedgerTasks, heldClosedByOwner } from "./ledger-list.js";
 import { applySyncOps, diffTickTickSync, summarize } from "./ticktick-sync.js";
 import type { Commitment } from "./persona-v3.js";
 
@@ -768,5 +768,28 @@ describe("startDate always matches dueDate", () => {
     const [rv] = derive([persona([c({ ...assessed(true) })])]);
     expect(rv!.payload.dueDate).toBeDefined();
     expect(rv!.payload.startDate).toBe(rv!.payload.dueDate);
+  });
+});
+
+// REGRESSION 2026-10-01 (brain G12). He completed Trey's BC-company ticket at
+// 13:10; a re-assessment of Trey's 9/30 messages — older than the close —
+// reopened it at 14:25. What HE closed stays closed until the person speaks again.
+describe("heldClosedByOwner", () => {
+  const row = { unitKey: "ledger_wechat-trey_ef6ded47", payload: { title: "Formally employ Trey" } } as never;
+  const CLOSE = 1_000_000;
+
+  it("holds an owner-closed row when nobody has spoken since", () => {
+    const map = { "ledger_wechat-trey_ef6ded47": { ticktickId: "t", projectId: "p", hash: "h", done: CLOSE, closedBy: "owner" as const } };
+    expect(heldClosedByOwner([row], map, { "wechat-trey": CLOSE - 86_400_000 })).toEqual([]);
+  });
+
+  it("lets it back once the person says something NEW", () => {
+    const map = { "ledger_wechat-trey_ef6ded47": { ticktickId: "t", projectId: "p", hash: "h", done: CLOSE, closedBy: "owner" as const } };
+    expect(heldClosedByOwner([row], map, { "wechat-trey": CLOSE + 1 })).toHaveLength(1);
+  });
+
+  it("never holds a row the SYNC closed — that was not his ruling", () => {
+    const map = { "ledger_wechat-trey_ef6ded47": { ticktickId: "t", projectId: "p", hash: "h", done: CLOSE } };
+    expect(heldClosedByOwner([row], map, {})).toHaveLength(1);
   });
 });

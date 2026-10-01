@@ -47,7 +47,7 @@ import { dueFields, DISMISS_LINE } from "./ticktick-plan.js";
 import { MINT_WINDOW_DAYS } from "./corpus-lines.js";
 import type { TickTickTaskPayload } from "./ticktick.js";
 import type { Commitment } from "./persona-v3.js";
-import type { DesiredTask } from "./ticktick-sync.js";
+import type { DesiredTask, SyncMap } from "./ticktick-sync.js";
 
 export interface LedgerPersona {
   key: string;
@@ -491,6 +491,32 @@ export function deriveLedgerTasks(
     }
   }
   return out;
+}
+
+/**
+ * Rows the OWNER closed stay closed until the person says something new
+ * (specs/commitment-brain.md G12: a terminal state comes back only on evidence
+ * newer than the close).
+ *
+ * 2026-10-01: he completed Trey's BC-company ticket at 13:10, among nine he
+ * cleared at once. At 14:25 a re-assessment read Trey's 9/30 messages — a day
+ * OLDER than his close — judged the payroll decision still his, and the sync
+ * reopened the task he had just finished. A row the sync closed itself (its
+ * matter went quiet) is not held: that close was never his ruling.
+ */
+export function heldClosedByOwner(
+  rows: readonly DesiredTask[],
+  map: SyncMap,
+  lastSpoke: Readonly<Record<string, number>>,
+): DesiredTask[] {
+  return rows.filter((r) => {
+    const rec = map[r.unitKey];
+    if (!rec?.done || rec.closedBy !== "owner") return true;
+    const p = parseLedgerUnitKey(r.unitKey);
+    if (!p) return true;
+    const spoke = lastSpoke[p.personaKey];
+    return spoke !== undefined && spoke > rec.done;
+  });
 }
 
 // ── the inverse, for read-back ──────────────────────────────────────────

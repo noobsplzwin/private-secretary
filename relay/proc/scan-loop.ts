@@ -49,7 +49,7 @@ import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
-import { deriveLedgerTasks } from "../core/ledger-list.js";
+import { deriveLedgerTasks, heldClosedByOwner } from "../core/ledger-list.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
 import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
@@ -1429,13 +1429,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // commitments the assess pass judged needs_leo. Cards contribute only what
       // the ledger cannot: executable invite/tool lines, and persona-less work.
       const ledger = opts.ledgerPersonas
-        ? deriveLedgerTasks(
-            opts.ledgerPersonas(),
-            zone,
-            nowMs,
-            opts.activeMatters?.() ?? new Set(),
-            opts.closedMatters?.() ?? new Set(),
-            // The waiting clock: when each person last spoke.
+        ? heldClosedByOwner(
+            deriveLedgerTasks(
+              opts.ledgerPersonas(),
+              zone,
+              nowMs,
+              opts.activeMatters?.() ?? new Set(),
+              opts.closedMatters?.() ?? new Set(),
+              snapshot.personTraffic ?? {},
+            ),
+            // What HE closed stays closed until that person speaks again (G12).
+            loadSyncMap(opts.statePath),
             snapshot.personTraffic ?? {},
           )
         : [];

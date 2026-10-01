@@ -332,7 +332,7 @@ export function readbackFromTickTick(
   // (a reopen attempt will fail and fall through to create — acceptable).
   const nowMs = Date.now();
   const next: SyncMap = {};
-  for (const [k, v] of Object.entries(map)) next[k] = gone.has(k) ? { ...v, done: nowMs } : v;
+  for (const [k, v] of Object.entries(map)) next[k] = gone.has(k) ? { ...v, done: nowMs, closedBy: "owner" as const } : v;
   return {
     ticked: [...ticked],
     closed: [...closed],

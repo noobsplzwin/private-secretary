@@ -328,3 +328,12 @@ describe("readbackFromTickTick — 🚫 on a ledger row", () => {
     expect(r.closedUnitKeys).toEqual([]); // dismissed is NOT done
   });
 });
+
+describe("an owner close is remembered as his", () => {
+  it("tombstones a finished task with closedBy=owner", () => {
+    const map = { ledger_x_abc: { ticktickId: "gone", projectId: "p", hash: "h" } };
+    const r = readbackFromTickTick({ actions: [], tasks: [] } as never, map, []);
+    expect(r.map.ledger_x_abc).toMatchObject({ closedBy: "owner" });
+    expect(r.map.ledger_x_abc!.done).toBeTypeOf("number");
+  });
+});

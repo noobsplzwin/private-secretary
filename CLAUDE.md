@@ -60,6 +60,12 @@ The layout is discoverable from the tree; what is NOT discoverable:
   keeps the wording key and still re-mints — 「归属判不准就新开一张」 (owner,
   2026-09-27). Never add a fuzzy matcher here: gluing the wrong conversation
   onto a live ticket is worse than one extra card (`core/unit-key.ts`).
+- **What the OWNER closed stays closed until that person speaks again** (brain
+  G12, `heldClosedByOwner`). The readback tombstones his completions with
+  `closedBy: "owner"`; a ledger row on such a key is held back unless the
+  persona's `personTraffic` is newer than the close. 2026-10-01: he finished
+  Trey's BC-company ticket at 13:10 and a re-assessment of 9/30 messages
+  reopened it at 14:25. Sync-side closes are not held — they were never his.
 - **The readback reads every list a tracked task LIVES in** — derived from the
   map (`readAllActive`, `proc/scan-loop.ts`), never a hard-coded name list.
   Absence from `remote` is the only evidence
