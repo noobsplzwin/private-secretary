@@ -563,3 +563,28 @@ describe("a tickable ticket must be reviewable before it is ticked", () => {
     expect(line).toContain("TAIV");
   });
 });
+
+// REGRESSION 2026-10-01: the other side sent the invite, the card's invite line
+// came off, and the ticket with its prep step vanished before the call.
+describe("an upcoming meeting with prep stays listed", () => {
+  const meeting = (over: Record<string, unknown> = {}) =>
+    ({
+      id: "m1", source_message_id: "slack:D1:1", action_type: "calendar", status: "suggested",
+      headline: "Call with João", reason: "", confidence: 1, created_at: "2026-10-01T00:00:00Z",
+      params: { start: "2026-10-01T13:00:00.000Z", attendees: [] },
+      next_actions: ["Note the customer's certification requirements before the call"],
+      ...over,
+    }) as never;
+  const unit = (m: never) => ({ unitKey: "u", title: "Call with João", grouped: false, members: [m] });
+  const NOW = Date.parse("2026-10-01T10:30:00Z");
+
+  it("lists it although nothing on it is executable", () => {
+    expect(shouldRenderCardUnit(unit(meeting()), () => false, NOW)).toBe(true);
+  });
+  it("not once it is a day past", () => {
+    expect(shouldRenderCardUnit(unit(meeting()), () => false, Date.parse("2026-10-03T00:00:00Z"))).toBe(false);
+  });
+  it("not without prep steps — a bare meeting lives in the calendar", () => {
+    expect(shouldRenderCardUnit(unit(meeting({ next_actions: [] })), () => false, NOW)).toBe(false);
+  });
+});

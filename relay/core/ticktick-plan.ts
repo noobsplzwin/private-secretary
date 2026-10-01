@@ -103,7 +103,21 @@ export function shouldRenderCardUnit(
   // An EVENT that already happened is over. Only when every live member is such
   // an event — a unit that also carries a task or a reply still has work in it.
   if (live.every((m) => isPastEvent(m, nowMs))) return false;
-  return live.some(isExecutableAction) || isPersonaLess(unit);
+  return live.some(isExecutableAction) || live.some((m) => isUpcomingMeetingWithPrep(m, nowMs)) || isPersonaLess(unit);
+}
+
+// A MEETING STILL AHEAD that carries prep steps is work for today whoever sent
+// the invite. Without this a calendar card only listed while its invite line
+// was executable, so the moment the OTHER side sent the invite the row had no
+// reason to exist: 2026-10-01, João moved the call to 21:00 and sent the
+// invite himself, the card's invite line came off, and the ticket — with its
+// prep step — vanished two hours before the call. Same grace window as
+// isPastEvent, so it leaves the list a day after it starts.
+function isUpcomingMeetingWithPrep(m: ActionItem, nowMs: number): boolean {
+  if (m.action_type !== "calendar") return false;
+  const t = Date.parse(typeof m.params.start === "string" ? m.params.start : "");
+  if (Number.isNaN(t) || t + PAST_EVENT_GRACE_MS < nowMs) return false;
+  return (m.next_actions ?? []).some((s) => s.trim() !== "");
 }
 
 // Mirrors lineFor's actionId branches: those are the lines whose tick executes.
