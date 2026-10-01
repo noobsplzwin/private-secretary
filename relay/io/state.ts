@@ -46,6 +46,10 @@ export interface LoopState {
   // on restart. Optional on input; loadState always fills them.
   personTraffic?: Record<string, number>;
   personAssessed?: Record<string, number>;
+  // Consecutive FAILED assessments per person (the LLM call failed). The
+  // cursor holds while this is under the retry limit, so a failed pass is
+  // retried instead of losing that traffic (proc/scan-loop.ts).
+  personAssessFailures?: Record<string, number>;
 }
 
 // Thrown when saveState detects the on-disk state advanced since the caller
@@ -72,6 +76,7 @@ function empty(): LoopState {
     revision: 0,
     personTraffic: {},
     personAssessed: {},
+    personAssessFailures: {},
   };
 }
 
@@ -91,6 +96,7 @@ export function loadState(path: string): LoopState {
     revision: parsed.revision ?? 0,
     personTraffic: parsed.personTraffic ?? {},
     personAssessed: parsed.personAssessed ?? {},
+    personAssessFailures: parsed.personAssessFailures ?? {},
   };
 }
 

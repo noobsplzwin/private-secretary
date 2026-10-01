@@ -163,6 +163,14 @@ call, 2026-09-12.
   whole-call failure names nobody, so nothing advances. Slack/Gmail marks do
   NOT have this yet: they are one bucket per source with a shared high-water
   mark, so rewinding one sender would re-surface the others.
+- **The person pass holds its cursor on a FAILED call** (`personAssessFailures`,
+  `proc/scan-loop.ts`). It used to advance `personAssessed` for everyone it
+  took off the queue, failures included, with no log line — so a 403 or a
+  timeout made that traffic invisible until the person spoke again. Trey's
+  9/30 「总算完事了」 (BC company filed and paid) left the ticket reading
+  「Handle BC company registration」 two days later. A failed call now retries,
+  up to 3 consecutive failures, then gives up LOUDLY. An unreadable persona
+  file or empty corpus is not a failure — retrying cannot help — and advances.
 - **Attached documents are READ, not just declared** (`core/file-text.ts`).
   Text-shaped formats only (svg, md, csv, json, source files) and no new
   dependency: a PDF or .docx parser is not worth becoming this repo's third

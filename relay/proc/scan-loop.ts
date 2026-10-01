@@ -324,6 +324,9 @@ export function shortMailboxError(error: string): string {
  * `complete` is false when any of those lists could not be read; the readback
  * then concludes nothing from absence (core/ticktick-readback.ts).
  */
+/** Consecutive failed assessments before a person's cursor advances anyway. */
+const PERSON_ASSESS_RETRIES = 3;
+
 export async function readAllActive(
   reader: TickTickReader,
   map: SyncMap,
@@ -1505,14 +1508,36 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       try {
         console.log(`[progress] assessing ${queue.length} contact(s) with new traffic…`);
         const pu = await updatePersonaCommitments(queue, opts.personaUpdate);
-        // Cursors advance for everyone taken off the queue, including the
+        // Cursors advance for everyone the pass FINISHED with, including the
         // unreadable — otherwise one contact with no mapped handle sits at the
-        // head of the oldest-first queue every tick and starves the rest. Their
-        // next message re-queues them, so nothing is lost permanently.
-        if (pu.attempted.length > 0) {
+        // head of the oldest-first queue every tick and starves the rest.
+        //
+        // A FAILED call is different: its traffic was never read. It holds its
+        // cursor and is retried, up to PERSON_ASSESS_RETRIES consecutive
+        // failures — then it gives up loudly, because a contact whose call
+        // always fails (a corpus too big to answer in time) would otherwise
+        // hold one of the few slots per tick forever.
+        let gaveUp: string[] = [];
+        if (pu.attempted.length > 0 || pu.failed.length > 0) {
           await commitUnderLock((fresh) => {
-            fresh.personAssessed = markAssessed(fresh.personAssessed ?? {}, pu.attempted);
+            const fails = { ...(fresh.personAssessFailures ?? {}) };
+            for (const e of pu.attempted) delete fails[e.personaKey];
+            const giveUp = pu.failed.filter((e) => (fails[e.personaKey] = (fails[e.personaKey] ?? 0) + 1) >= PERSON_ASSESS_RETRIES);
+            for (const e of giveUp) delete fails[e.personaKey];
+            gaveUp = giveUp.map((e) => e.personaKey);
+            fresh.personAssessed = markAssessed(fresh.personAssessed ?? {}, [...pu.attempted, ...giveUp]);
+            fresh.personAssessFailures = fails;
           });
+        }
+        if (pu.failed.length > 0) {
+          console.error(
+            `[persona] assessment FAILED for ${pu.failed.map((e) => e.personaKey).join(", ")} — retrying next tick`,
+          );
+        }
+        if (gaveUp.length > 0) {
+          console.error(
+            `[persona] GAVE UP after ${PERSON_ASSESS_RETRIES} failed assessments: ${gaveUp.join(", ")} — their latest traffic is unread until they speak again`,
+          );
         }
         // Spec §6.2 wants this reported, never a silent skip: a contact
         // reachable on no mapped handle is invisible to their own pass, and that

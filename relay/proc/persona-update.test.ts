@@ -585,3 +585,24 @@ describe("a commitment this conversation never mentions still gets a verdict", (
     expect(parsed[0]!.unseen).toBeUndefined();
   });
 });
+
+// REGRESSION 2026-10-01 — Trey's BC company was filed and paid on 9/30
+// (「总算完事了」), and two days later the ticket still said 「Handle BC company
+// registration」. A failed assessment call was counted as attempted, its cursor
+// advanced, and that traffic was never read again — with no log line at all.
+describe("a FAILED assessment is not an attempted one", () => {
+  it("reports the failed call separately, so its cursor can hold", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pu-fail-"));
+    writeFileSync(join(dir, "trey.yaml"), "key: trey\ndisplay_name: trey\nhandles: {}\nidentity:\n  role: peer\n  relationship: peer\nrelationship_meta: {}\ncommunication:\n  language: zh\ncommitments: []\nevidence:\n  display_name: fixture\n", "utf8");
+    const r = await updatePersonaCommitments([{ personaKey: "trey", trafficMs: 5 }], {
+      json: async () => {
+        throw new Error("claude -p exit 1: Failed to authenticate. API Error: 403");
+      },
+      personaFor: (key) => ({ key, displayName: key, handles: {} }) as never,
+      fetchCorpus: async () => "trey: 总算完事了",
+      personaDir: dir,
+    });
+    expect(r.failed.map((e) => e.personaKey)).toEqual(["trey"]);
+    expect(r.attempted).toEqual([]);
+  });
+});

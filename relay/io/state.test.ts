@@ -34,6 +34,7 @@ describe("loop state v2", () => {
       revision: 0,
       personTraffic: {},
       personAssessed: {},
+      personAssessFailures: {},
     });
   });
 
@@ -75,6 +76,9 @@ describe("loop state v2", () => {
       // reason they live in state instead of the module-level TTL they replaced.
       personTraffic: { "wang-acme": 1_700_000_000_000 },
       personAssessed: { "wang-acme": 1_699_000_000_000 },
+      // The retry counter for failed assessments survives a restart too, or a
+      // restart would reset a contact that keeps failing back to zero.
+      personAssessFailures: { "wang-acme": 2 },
     };
     saveState(path, state);
     expect(loadState(path)).toEqual(state);

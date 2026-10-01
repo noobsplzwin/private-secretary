@@ -58,8 +58,16 @@ export interface PersonaUpdateResult {
   discarded: number;
   /** ASSESS verdicts written. The discard/assess ratio is how model invention is watched. */
   assessed: number;
-  /** Everyone the pass took off the queue. Cursors advance for all of these. */
+  /** Everyone the pass finished with — judged, or unreadable. Cursors advance for these. */
   attempted: PersonQueueEntry[];
+  /**
+   * Everyone whose LLM call FAILED (timeout, auth, unparseable reply). Their
+   * cursor must NOT advance: it used to, silently, so the traffic that queued
+   * them was never looked at again — Trey's 9/30 「总算完事了」, the BC company
+   * filed and paid, left the ticket saying 「Handle BC company registration」
+   * two days later. The caller retries them, up to a limit.
+   */
+  failed: PersonQueueEntry[];
   /**
    * Keys whose corpus came back empty — no handles, or every source failed.
    * Reported rather than silently skipped (spec §6.2): a person reachable on no
@@ -78,6 +86,7 @@ export async function updatePersonaCommitments(
 ): Promise<PersonaUpdateResult> {
   const updated: PersonaUpdateResult["updated"] = [];
   const attempted: PersonQueueEntry[] = [];
+  const failed: PersonQueueEntry[] = [];
   const unreadable: string[] = [];
   let discarded = 0;
   let assessed = 0;
@@ -89,11 +98,20 @@ export async function updatePersonaCommitments(
       attempted.push(entry);
       continue;
     }
-    attempted.push(entry);
-
     const corpus = await deps.fetchCorpus(persona);
-    if (!corpus) {
+    // A persona FILE that cannot be read is not a failed call — retrying will
+    // not help — so it is reported and advanced like a missing corpus. Checked
+    // here because extractCommitmentsOnce answers null for both, and only the
+    // LLM failure deserves a retry.
+    let fileOk = true;
+    try {
+      readPersonaV3File(personaPath(deps.personaDir, entry.personaKey));
+    } catch {
+      fileOk = false;
+    }
+    if (!corpus || !fileOk) {
       unreadable.push(entry.personaKey);
+      attempted.push(entry);
       continue;
     }
 
@@ -105,7 +123,11 @@ export async function updatePersonaCommitments(
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.onDiscard ? { onDiscard: deps.onDiscard } : {}),
     });
-    if (!r) continue;
+    if (!r) {
+      failed.push(entry);
+      continue;
+    }
+    attempted.push(entry);
     discarded += r.discarded;
     assessed += r.assessed;
     if (r.added > 0 || r.statusChanged > 0 || r.assessed > 0)
@@ -117,7 +139,7 @@ export async function updatePersonaCommitments(
       });
   }
 
-  return { updated, discarded, assessed, attempted, unreadable };
+  return { updated, discarded, assessed, attempted, failed, unreadable };
 }
 
 
