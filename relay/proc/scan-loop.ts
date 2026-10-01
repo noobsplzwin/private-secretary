@@ -49,6 +49,7 @@ import { executeAction, type ExecuteDeps } from "./execute.js";
 import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
+import { enqueue, settle, takeForDraft, type InboxEntry } from "../core/inbox.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks, heldClosedByOwner } from "../core/ledger-list.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
@@ -73,6 +74,21 @@ export interface ScanLoopOptions {
   // Absolute path to loop-state.json. The scan-loop owns lock acquire +
   // atomic save; callers shouldn't poke this file mid-scan.
   statePath: string;
+  /**
+   * Which LANE this tick is (owner, 2026-10-01: 「收信和分析分开排队」).
+   *
+   *   fetch   — poll `sources`, persist new messages to the inbox, advance
+   *             cursors. No LLM, so it takes seconds and never waits on one.
+   *   analyze — poll NOTHING; draft from the inbox, then TickTick and the
+   *             person pass. A slow `claude -p` holds only this lane.
+   *   all     — the original single-lane tick, kept for tests and the CLI.
+   *
+   * The two lanes run concurrently, so each writes only the state it owns:
+   * fetch owns marks, per-source errors, personTraffic/personGroups and the
+   * WeChat books; analyze owns actions, `llm:*` errors and the person-pass
+   * cursors. The inbox is the hand-off — fetch appends, analyze removes.
+   */
+  mode?: "all" | "fetch" | "analyze";
   // Where the persona YAMLs live. Needed so a LEDGER row the owner finished in
   // TickTick can mark its commitment done — without it the row is re-derived
   // and reopened on the next tick (proc/ledger-close.ts). Omitted in tests that
@@ -194,6 +210,8 @@ export interface ScanLoopResult {
   // remainder. They keep their cursor mark (so they won't re-surface) — a
   // deliberate cost-control drop, reported here so it's never silent.
   draftSkipped: number;
+  /** fetch lane: messages newly added to the inbox this tick. */
+  enqueued?: number;
   // # of Gmail messages excluded at ingestion as non-primary (promo /
   // newsletter / social / forums). Counted (not silent) so a mis-filter of
   // real mail is detectable; each is also in the shadow log with its reason.
@@ -355,6 +373,7 @@ export async function readAllActive(
 
 export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
   const startedAtMs = Date.now();
+  const mode = opts.mode ?? "all";
   const perSource: SourceSummary[] = [];
   // `platform:handle` → when the OWNER last spoke in that conversation. Each
   // source pass fills its own platform, only for conversations that have a
@@ -420,7 +439,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let state: LoopState;
   try {
     state = loadState(opts.statePath);
-    const sources = opts.sources ?? ["slack", "gmail"];
+    // The analyser polls nothing: its input is the inbox.
+    const sources = mode === "analyze" ? [] : (opts.sources ?? ["slack", "gmail"]);
 
     // ── Slack pass (one per workspace account) ─────────────────
     // Each configured workspace is scanned via its own Keychain token, its own
@@ -837,6 +857,15 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         .slice(0, opts.maxDraftCandidates);
       draftSkipped = sourceMessages.length - draftInput.length;
     }
+    // Split lanes: fetch drafts nothing; analyze drafts from the inbox, and
+    // what the cap leaves out stays queued rather than being counted and lost.
+    if (mode === "fetch") {
+      draftInput = [];
+      draftSkipped = 0;
+    } else if (mode === "analyze") {
+      draftInput = takeForDraft(state.inbox ?? [], opts.maxDraftCandidates);
+      draftSkipped = 0;
+    }
 
     // Cursors/marks/sourceErrors live on the in-memory `state`; they're
     // committed in phase 3 (along with the drafted actions) so the lock is held
@@ -855,16 +884,30 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     if (!(await acquireLockWithRetry(stateDir))) return false;
     try {
       const fresh = loadState(opts.statePath);
-      fresh.marks = state.marks;
-      fresh.sourceErrors = state.sourceErrors;
-      // personTraffic is owned by THIS tick (the scan sets it), so it is carried
-      // over. personAssessed is owned only by the phase-7 mutate, so it is NOT:
-      // loadState fills a missing field with {}, and `{}` is truthy — copying it
-      // from the tick's start-of-run snapshot silently wiped the cursor a phase
-      // later, and the pass then re-assessed the same person every single tick.
-      fresh.personTraffic = state.personTraffic ?? fresh.personTraffic;
-      // Same ownership as personTraffic: written by this tick's scan.
-      fresh.personGroups = state.personGroups ?? fresh.personGroups;
+      // Transplant only what THIS lane owns. With two lanes running at once, a
+      // wholesale copy from a snapshot taken minutes ago would roll the other
+      // lane's progress back — the analyser rewinding cursors the fetch lane
+      // had just advanced, which re-fetches and re-drafts the same messages.
+      // The analyser owns none of these; the fresh copy is authoritative.
+      if (mode !== "analyze") {
+        fresh.marks = state.marks;
+        fresh.sourceErrors =
+          mode === "all"
+            ? state.sourceErrors
+            : // fetch: per-source keys are this lane's, `llm:*` the analyser's
+              Object.fromEntries([
+                ...Object.entries(fresh.sourceErrors).filter(([k]) => k.startsWith("llm:")),
+                ...Object.entries(state.sourceErrors).filter(([k]) => !k.startsWith("llm:")),
+              ]);
+        // personTraffic is owned by the scan, so it is carried over.
+        // personAssessed is owned only by the phase-7 mutate, so it is NOT:
+        // loadState fills a missing field with {}, and `{}` is truthy — copying it
+        // from the tick's start-of-run snapshot silently wiped the cursor a phase
+        // later, and the pass then re-assessed the same person every single tick.
+        fresh.personTraffic = state.personTraffic ?? fresh.personTraffic;
+        // Same ownership as personTraffic: written by the scan.
+        fresh.personGroups = state.personGroups ?? fresh.personGroups;
+      }
       mutate(fresh);
       saveState(opts.statePath, fresh);
       return true;
@@ -873,12 +916,112 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   };
 
+  // ── FETCH LANE COMMIT. The whole point of the lane: everything it read is
+  // made DURABLE in the inbox before any cursor moves, in one locked write, and
+  // then it returns — no LLM, no TickTick, nothing that can take minutes.
+  const commitFetch = async (): Promise<ScanLoopResult> => {
+    const roundAt = new Date(startedAtMs).toISOString();
+    let enqueued = 0;
+    let overflow: InboxEntry[] = [];
+    let answered = 0;
+    const ok = opts.dryRun
+      ? true
+      : await commitUnderLock((fresh) => {
+          const before = new Set((fresh.inbox ?? []).map((e) => e.msg.id));
+          const r = enqueue(fresh.inbox ?? [], sourceMessages, roundAt);
+          fresh.inbox = r.inbox;
+          overflow = r.overflow;
+          enqueued = sourceMessages.filter((m) => !before.has(m.id)).length;
+          // Cards Leo already answered. The signal — when he last spoke in the
+          // conversation — only exists here, at fetch, so this lane applies it.
+          const done = cardsAnsweredSince(fresh.actions, ownerSpokeAt);
+          if (done.length > 0) {
+            try {
+              appendLabels(
+                labelsPathFor(opts.statePath),
+                done.map((a) => buildLabel({ action: a, decision: "superseded" })),
+              );
+              const doomed = new Set(done.map((a) => a.id));
+              fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
+              answered = done.length;
+            } catch {
+              /* label write failed — keep the cards; the next fetch retries */
+            }
+          }
+          // What the trigger filter dropped is recorded HERE, where it was seen;
+          // the analyser records what it drafted.
+          if (filteredOut.length > 0) {
+            appendShadowRecord(
+              join(stateDir, "shadow-log.jsonl"),
+              buildShadowRecord(roundAt, [], { runtime: "phase3-t-proc", source_messages: [], filtered: filteredOut }),
+            );
+          }
+        });
+    if (ok && !opts.dryRun) {
+      // AFTER the inbox write: the messages are durable, so the cursors may move.
+      // No rollback is needed any more — a draft failure leaves the message in
+      // the inbox, not behind a cursor.
+      if (pendingWechatDirect && opts.wechatDirect) opts.wechatDirect.save(pendingWechatDirect.next);
+      if (pendingWechatGroups && opts.wechatGroups) opts.wechatGroups.save(pendingWechatGroups.next);
+    } else if (!ok) {
+      logActivity("error", "fetch commit failed (lock busy) — nothing queued, no cursor moved; the next fetch re-reads", {
+        phase: "fetch-commit",
+      });
+    }
+    if (overflow.length > 0) {
+      console.error(`[inbox] FULL — dropped the ${overflow.length} oldest waiting message(s)`);
+      logActivity(
+        "error",
+        `inbox full — dropped the ${overflow.length} oldest waiting message(s): ${[...new Set(overflow.map((e) => e.msg.senderHandle))].join(", ")}`,
+        { phase: "fetch-commit", dropped: overflow.map((e) => e.msg.id) },
+      );
+    }
+    if (answered > 0) {
+      logActivity("supersede", `closed ${answered} card(s) Leo had already answered`, { phase: "fetch-commit", answered });
+    }
+    const totalInbound = perSource.reduce((n, x) => n + x.inboundCount, 0);
+    const totalTriggered = perSource.reduce((n, x) => n + x.triggered, 0);
+    const erroredSources = perSource.filter((x) => x.error).map((x) => x.source);
+    if (totalInbound > 0 || erroredSources.length > 0) {
+      const sig = JSON.stringify(perSource.map((x) => [x.source, x.inboundCount, x.triggered, x.error ?? null]));
+      const scope = `fetch:${[...erroredSources].sort().join(",")}`;
+      if (!(totalInbound === 0 && lastErrorTickSigByScope.get(scope) === sig)) {
+        const parts = perSource.map((x) => `${x.source} ${x.inboundCount} in/${x.triggered} trig${x.error ? " ERR" : ""}`);
+        logActivity("tick", `${parts.join("; ")} → queued ${enqueued}`, {
+          durationMs: Date.now() - startedAtMs,
+          enqueued,
+          ...(erroredSources.length > 0
+            ? {
+                erroredSources,
+                errors: Object.fromEntries(perSource.filter((x) => x.error).map((x) => [x.source, x.error!.slice(0, 200)])),
+              }
+            : {}),
+        });
+        if (totalInbound === 0) lastErrorTickSigByScope.set(scope, sig);
+      }
+    }
+    return {
+      startedAtMs,
+      durationMs: Date.now() - startedAtMs,
+      perSource,
+      totalInbound,
+      totalTriggered,
+      shadowWritten: ok && filteredOut.length > 0,
+      drafted: 0,
+      draftSkipped: 0,
+      promoFiltered,
+      enqueued,
+    };
+  };
+
   // ── PHASE 1.5 (re-locked, brief): commit cursors/marks NOW, BEFORE the slow
   // draft. The draft is exactly when the cockpit is most likely to be holding
   // the lock, so committing cursors first means a later phase-3 miss can only
   // drop drafts (re-drafted next tick) — never cursor progress (losing that
   // would re-surface + re-scan already-handled messages, breaking dedup).
-  if (!opts.dryRun) await commitUnderLock(() => {});
+  if (mode === "fetch") return await commitFetch();
+  // The analyser owns no cursor, so it has nothing to commit before drafting.
+  if (!opts.dryRun && mode === "all") await commitUnderLock(() => {});
 
   // ── PHASE 2 (UNLOCKED): the slow LLM drafting (+ vision decode). No lock is
   // held, so the cockpit stays responsive even through a long or hung draft.
@@ -966,8 +1109,10 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // phase 1.5) and a chatty sender re-drafts next tick.
   const shadowInput: ShadowRecordInput = {
     runtime: "phase3-t-proc",
-    source_messages: sourceMessages,
-    filtered: filteredOut,
+    // The analyser's messages come from the inbox; the fetch lane already
+    // recorded what it filtered.
+    source_messages: mode === "analyze" ? draftInput : sourceMessages,
+    filtered: mode === "analyze" ? [] : filteredOut,
   };
   const willWrite = shouldWriteShadowRecord(draftedActions, shadowInput);
   let shadowWritten = false;
@@ -979,8 +1124,22 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let staleRetiredCount = 0;
   let answeredCount = 0;
   let autoCalendarCount = 0;
-  if (!opts.dryRun && (draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)) {
+  let inboxGaveUp: InboxEntry[] = [];
+  const settlesInbox = mode === "analyze" && draftInput.length > 0;
+  if (
+    !opts.dryRun &&
+    (settlesInbox || draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)
+  ) {
     const committed = await commitUnderLock((fresh) => {
+      // Settled in the SAME write as the cards: a message leaves the inbox
+      // exactly when its cards land, so a lost lock means it is drafted again
+      // — which is what the message below this block has always promised.
+      if (settlesInbox) {
+        const failed = new Set(draftFailedSenders);
+        const r = settle(fresh.inbox ?? [], draftInput, failed, llmDraftError !== undefined && failed.size === 0);
+        fresh.inbox = r.inbox;
+        inboxGaveUp = r.gaveUp;
+      }
       if (draftedActions.length > 0) {
         // Don't re-surface an already-BOOKED meeting: drop a fresh suggested
         // calendar whose task_id OR exact start matches an EXECUTED calendar. The
@@ -1155,6 +1314,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // see llm-draft-raw.jsonl) are the invisible permanent skip: the cursor is
   // already past those messages. sourceErrors surfaces them in the cockpit but
   // the next tick's phase-3 WIPES that entry — the durable record lives here.
+  if (inboxGaveUp.length > 0) {
+    // Loud by design: these messages failed every draft attempt and are no
+    // longer queued. Never let that happen quietly.
+    const who = [...new Set(inboxGaveUp.map((e) => e.msg.senderHandle))].join(", ");
+    console.error(`[inbox] GAVE UP on ${inboxGaveUp.length} message(s) after repeated draft failures: ${who}`);
+    logActivity("error", `inbox gave up on ${inboxGaveUp.length} message(s) after repeated draft failures: ${who}`, {
+      phase: "draft-commit",
+      gaveUp: inboxGaveUp.map((e) => e.msg.id),
+    });
+  }
+
   if (draftEmpty.length > 0) {
     logActivity(
       "error",

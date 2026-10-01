@@ -811,8 +811,9 @@ async function main(): Promise<void> {
   console.log(`[notify] ${describeIdentity()}`);
   console.log(`[notify] timezone: ${ownerTimeZone}`);
 console.log(
-  `[notify] cadence: wechat=${intervals.wechat / 1000}s gmail=${intervals.gmail / 1000}s ` +
-    `slack=${intervals.slack / 1000}s (${intervals.slack === SLACK_MS_UNTHROTTLED ? "own-app token, unthrottled" : "rate-limited credential or override"})`,
+  `[notify] fetch lane: wechat=${intervals.wechat / 1000}s gmail=${intervals.gmail / 1000}s ` +
+    `slack=${intervals.slack / 1000}s (${intervals.slack === SLACK_MS_UNTHROTTLED ? "own-app token, unthrottled" : "rate-limited credential or override"}); ` +
+    `analyze lane: on every queued message + every ${num("--analyze-ms", 60_000) / 1000}s`,
 );
   const draft = await buildDraft();
   const personaUpdate = await buildPersonaUpdate();
@@ -868,20 +869,36 @@ console.log(
   };
 
   let consecutiveErrors = 0;
+  const failed = (lane: string, e: unknown): void => {
+    console.error(`[notify:${lane}] ERROR: ${(e as Error).message}`);
+    if (++consecutiveErrors === 5) {
+      void notify({ title: "Secretary notify failing", body: (e as Error).message.slice(0, 200) });
+    }
+  };
 
-  const tick = (source: Source): Promise<void> =>
+  // TWO LANES (owner, 2026-10-01: 「收信和分析分开排队」). They used to be one
+  // queue, and one tick did everything — poll, draft, TickTick, person pass —
+  // so a slow `claude -p` (420s, retried) held every other source's polling
+  // behind it: one Gmail tick took 1069s. Now:
+  //
+  //   FETCH   — per source, on its own cadence, serialized among themselves
+  //             (they share the marks they write). Polls, queues the messages
+  //             durably in the inbox, advances cursors. Seconds, no LLM.
+  //   ANALYZE — one worker, never two at once. Drafts from the inbox, then
+  //             TickTick and the person pass. Kicked whenever a fetch queues
+  //             something, and on a timer so TickTick read-back and person
+  //             assessments still run when no new message arrives.
+  //
+  // relay/proc/scan-loop.ts `mode` documents who owns which state.
+
+  const fetchTick = (source: Source): Promise<void> =>
     serialize(async () => {
       try {
         const r: ScanLoopResult = await runScanTick({
+          mode: "fetch",
           statePath,
-          // So a finished LEDGER row closes its commitment instead of being
-          // re-derived and reopened next tick (proc/ledger-close.ts).
-          personaDir,
-          // No drafter → nothing to do with inbound messages, and polling would
-          // advance cursors past them. See noDraft above.
+          // No drafter → nothing would ever drain the inbox, so do not fill it.
           sources: noDraft ? [] : [source],
-          draft,
-          personaUpdate,
           wechatGroups: {
             load: () => loadGroupBook(statePath),
             save: (b) => saveGroupBook(statePath, b),
@@ -891,50 +908,84 @@ console.log(
             save: (b) => saveDirectBook(statePath, b),
           },
           ownerTimeZone,
-          ...(ticktickWriter ? { ticktickWriter } : {}),
-          ...(ticktickReader ? { ticktickReader } : {}),
-          ...(executeDeps ? { execute: executeDeps } : {}),
-          ledgerPersonas,
-          activeMatters,
-          closedMatters,
           resolvePersonaKey,
-          maxDraftCandidates: maxDraft,
         });
-        if (r.totalInbound > 0 || r.drafted > 0) {
+        if (r.totalInbound > 0) {
           console.log(
-            `[notify:${source}] inbound=${r.totalInbound} triggered=${r.totalTriggered} drafted=${r.drafted} (${r.durationMs}ms)`,
+            `[notify:${source}] inbound=${r.totalInbound} triggered=${r.totalTriggered} queued=${r.enqueued ?? 0} (${r.durationMs}ms)`,
           );
         }
-        writeFileSync(
-          heartbeatPath,
-          JSON.stringify({ source, atMs: r.startedAtMs, drafted: r.drafted, durationMs: r.durationMs }),
-        );
+        writeFileSync(heartbeatPath, JSON.stringify({ source, atMs: r.startedAtMs, durationMs: r.durationMs }));
         consecutiveErrors = 0;
+        if ((r.enqueued ?? 0) > 0) void analyze();
       } catch (e) {
-        console.error(`[notify:${source}] ERROR: ${(e as Error).message}`);
-        if (++consecutiveErrors === 5) {
-          void notify({ title: "Secretary notify failing", body: (e as Error).message.slice(0, 200) });
-        }
+        failed(source, e);
       }
     });
 
+  let analyzing = false;
+  let analyzeAgain = false;
+  // Single-flight: a kick that arrives mid-run is folded into ONE follow-up run
+  // rather than a pile of queued ones.
+  const analyze = async (): Promise<void> => {
+    if (analyzing) {
+      analyzeAgain = true;
+      return;
+    }
+    analyzing = true;
+    try {
+      do {
+        analyzeAgain = false;
+        try {
+          const r: ScanLoopResult = await runScanTick({
+            mode: "analyze",
+            statePath,
+            // So a finished LEDGER row closes its commitment instead of being
+            // re-derived and reopened next tick (proc/ledger-close.ts).
+            personaDir,
+            draft,
+            personaUpdate,
+            ownerTimeZone,
+            ...(ticktickWriter ? { ticktickWriter } : {}),
+            ...(ticktickReader ? { ticktickReader } : {}),
+            ...(executeDeps ? { execute: executeDeps } : {}),
+            ledgerPersonas,
+            activeMatters,
+            closedMatters,
+            resolvePersonaKey,
+            maxDraftCandidates: maxDraft,
+          });
+          if (r.drafted > 0) console.log(`[notify:analyze] drafted=${r.drafted} (${r.durationMs}ms)`);
+          consecutiveErrors = 0;
+        } catch (e) {
+          failed("analyze", e);
+        }
+      } while (analyzeAgain);
+    } finally {
+      analyzing = false;
+    }
+  };
+
   const sources: Source[] = ["wechat", "gmail", "slack"];
 
-  // One tick per source, sequentially, then exit — no timers, no daemon. tick()
-  // already swallows its own errors, so a failing source cannot strand the run
-  // with the lock held.
+  // One fetch per source, then one analysis pass, then exit — no timers, no
+  // daemon. Both swallow their own errors, so a failing source cannot strand
+  // the run with the lock held.
   if (onceMode) {
-    for (const s of sources) await tick(s);
+    for (const s of sources) await fetchTick(s);
+    await analyze();
     console.log("[notify] --once complete");
     releaseDaemonLock();
     process.exit(0);
   }
 
-  // Stagger the initial ticks so they don't queue up at once; then interval.
+  // Stagger the initial fetches so they don't queue up at once; then interval.
   sources.forEach((s, i) => {
-    setTimeout(() => void tick(s), i * 2000);
-    setInterval(() => void tick(s), intervals[s]);
+    setTimeout(() => void fetchTick(s), i * 2000);
+    setInterval(() => void fetchTick(s), intervals[s]);
   });
+  setTimeout(() => void analyze(), 10_000);
+  setInterval(() => void analyze(), num("--analyze-ms", 60_000));
 
   const shutdown = (sig: string): void => {
     console.log(`[notify] ${sig} — shutting down`);

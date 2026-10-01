@@ -36,6 +36,7 @@ describe("loop state v2", () => {
       personAssessed: {},
       personAssessFailures: {},
       personGroups: {},
+      inbox: [],
     });
   });
 
@@ -81,6 +82,15 @@ describe("loop state v2", () => {
       // restart would reset a contact that keeps failing back to zero.
       personAssessFailures: { "wang-acme": 2 },
       personGroups: { "wang-acme": { "Osyx-浦软": 1_699_500_000_000 } },
+      // Fetched-but-not-yet-drafted messages must survive a restart: that is
+      // what makes it safe for the fetch lane to advance its cursor.
+      inbox: [
+        {
+          msg: { id: "wechat:金小奇:1", platform: "wechat", senderHandle: "金小奇", timestampMs: 1, text: "明天10点?", source: "wechat:金小奇" } as never,
+          at: "2026-10-01T10:00:00Z",
+          attempts: 1,
+        },
+      ],
     };
     saveState(path, state);
     expect(loadState(path)).toEqual(state);

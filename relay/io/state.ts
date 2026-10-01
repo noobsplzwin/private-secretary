@@ -17,6 +17,7 @@ import type { HighWaterMarks } from "../core/dedup.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { TaskRegistry } from "../core/tasks.js";
 import type { DraftOutcome } from "../core/metrics.js";
+import type { InboxEntry } from "../core/inbox.js";
 import { appendLabels, buildLabel, labelsPathFor } from "./labels.js";
 
 export interface SourceError {
@@ -54,6 +55,12 @@ export interface LoopState {
   // (epoch ms). The person pass reads those groups alongside the 1:1 thread, so
   // a matter run in a group can update its ticket (proc/scan-loop.ts).
   personGroups?: Record<string, Record<string, number>>;
+  /**
+   * Fetched messages waiting for the analyser (core/inbox.ts). The fetch lane
+   * appends and only then advances its cursor; the analyser removes an entry in
+   * the same locked commit that writes its cards.
+   */
+  inbox?: InboxEntry[];
 }
 
 // Thrown when saveState detects the on-disk state advanced since the caller
@@ -82,6 +89,7 @@ function empty(): LoopState {
     personAssessed: {},
     personAssessFailures: {},
     personGroups: {},
+    inbox: [],
   };
 }
 
@@ -103,6 +111,7 @@ export function loadState(path: string): LoopState {
     personAssessed: parsed.personAssessed ?? {},
     personAssessFailures: parsed.personAssessFailures ?? {},
     personGroups: parsed.personGroups ?? {},
+    inbox: parsed.inbox ?? [],
   };
 }
 

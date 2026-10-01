@@ -1492,3 +1492,101 @@ describe("shortMailboxError", () => {
     expect(line).toContain("zhenghleo@gmail.com");
   });
 });
+
+// 「收信和分析分开排队」 (owner, 2026-10-01). One shared queue let a slow
+// `claude -p` hold every source's polling: a single Gmail tick took 1069s. The
+// fetch lane now only polls and queues; the analyser drafts from the queue.
+describe("split lanes: fetch queues, analyze drafts", () => {
+  let dir: string;
+  let statePath: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "lanes-"));
+    statePath = join(dir, "loop-state.json");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const wechat = (name: string, text: string, hhmm: string) => ({
+    wechatFetchContacts: async () => "",
+    wechatFetchSessions: async () => `最近 1 个会话:\n\n[06-14 ${hhmm}] ${name} (1条未读)\n  文本: ${text}`,
+    wechatFetchHistory: async () => `[2026-06-14 ${hhmm}] ${name}: ${text}`,
+  });
+  const card = (title: string) => [
+    { action_type: "task" as const, target: {}, reason: "r", confidence: 0.5, params: { title } },
+  ];
+  const draftWith = (llm: (req: { userText: string }) => Promise<unknown>) => ({
+    llm: llm as never,
+    resolvePersona: () => null,
+    knownPersonaKeys: [],
+    now: () => "2026-06-14T12:00:00Z",
+  });
+
+  it("fetch: queues the message, moves the cursor, and never calls the LLM", async () => {
+    const llm = vi.fn(async () => card("x"));
+    const saved: Array<Record<string, { lastSeenMs: number }>> = [];
+    const r = await runScanTick({
+      mode: "fetch",
+      statePath,
+      sources: ["wechat"],
+      ...wechat("金小奇", "明天上午10点开会？", "21:39"),
+      wechatDirect: { load: () => ({ 金小奇: { lastSeenMs: 1 } }), save: (b) => void saved.push(b as never) },
+      draft: draftWith(llm),
+    });
+    expect(llm).not.toHaveBeenCalled();
+    expect(r.enqueued).toBe(1);
+    const inbox = loadState(statePath).inbox!;
+    expect(inbox.map((e) => e.msg.text)).toEqual(["明天上午10点开会？"]);
+    // The message is durable, so the cursor moved at once — no waiting on a draft.
+    expect(saved.at(-1)!.金小奇!.lastSeenMs).toBeGreaterThan(1);
+  });
+
+  it("analyze: polls nothing, drafts from the inbox, and empties what it drafted", async () => {
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("金小奇", "定一下会", "21:39"), wechatDirect: { load: () => ({ 金小奇: { lastSeenMs: 1 } }), save: () => {} } });
+    const poll = vi.fn(async () => "");
+    const r = await runScanTick({
+      mode: "analyze",
+      statePath,
+      sources: ["wechat"], // ignored: the analyser's input is the inbox
+      wechatFetchSessions: poll,
+      draft: draftWith(async () => card("回金小奇定会议时间")),
+    });
+    expect(poll).not.toHaveBeenCalled();
+    expect(r.drafted).toBe(1);
+    const s = loadState(statePath);
+    expect(s.actions.map((a) => a.params.title)).toEqual(["回金小奇定会议时间"]);
+    expect(s.inbox).toEqual([]);
+  });
+
+  // REGRESSION — the old design rolled the WeChat cursor back on a failed draft
+  // and simply LOST Slack/Gmail messages. Now the message just stays queued.
+  it("a failed draft leaves the message queued, with the attempt counted", async () => {
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("陈古龙", "合同发你了", "21:40"), wechatDirect: { load: () => ({ 陈古龙: { lastSeenMs: 1 } }), save: () => {} } });
+    await runScanTick({
+      mode: "analyze",
+      statePath,
+      draft: draftWith(async () => {
+        throw new Error("claude -p timed out after 420000ms");
+      }),
+    });
+    const inbox = loadState(statePath).inbox!;
+    expect(inbox.map((e) => [e.msg.text, e.attempts])).toEqual([["合同发你了", 1]]);
+    expect(loadState(statePath).actions).toEqual([]);
+  });
+
+  // The lanes run at the same time. The analyser must neither drop a message
+  // the fetch lane queued mid-draft, nor roll back the cursor it advanced.
+  it("never loses or rewinds what the fetch lane did while a draft was running", async () => {
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("金小奇", "A", "21:39"), wechatDirect: { load: () => ({ 金小奇: { lastSeenMs: 1 } }), save: () => {} } });
+    await runScanTick({
+      mode: "analyze",
+      statePath,
+      draft: draftWith(async () => {
+        // A fetch lands while the analyser is mid-call.
+        await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("朱桦", "B", "21:45"), wechatDirect: { load: () => ({ 朱桦: { lastSeenMs: 1 } }), save: () => {} } });
+        return card("回金小奇");
+      }),
+    });
+    const s = loadState(statePath);
+    expect(s.inbox!.map((e) => e.msg.text)).toEqual(["B"]); // A drafted, B still waiting
+    expect(Object.keys(s.marks).some((k) => k.includes("朱桦"))).toBe(true); // B's mark survived
+  });
+});

@@ -161,31 +161,22 @@ call, 2026-09-12.
   but it also discarded the lines that made the chat appear — measured
   2026-09-28: 21 groups, ~100 messages over two weeks, including
   「29号茂名行程」's agreed 10:00 meeting, which never became a card.
-- **A cursor advances only AFTER the drafter has had its turn.** Committing it
-  at scan time turns any draft failure into permanent data loss: the messages
-  are marked read and nothing looks at them again. Measured 2026-09-24 — the
-  Osyx-浦软 group timed out at 180s and took the whole 股权变更 discussion with
-  it. Rollback is per-sender (the WeChat books are keyed by chat name); a
-  whole-call failure names nobody, so nothing advances. Slack/Gmail marks do
-  NOT have this yet: they are one bucket per source with a shared high-water
-  mark, so rewinding one sender would re-surface the others.
-- **The person pass wakes on PARTICIPATION, groups and Leo's own lines included**
-  (`Participation`, `sources/wechat-direct.ts`; `personGroups` in state). It
-  used to wake only when the other side wrote a 1:1 message, and read only the
-  1:1 thread — so a matter run in a group (股权变更 in Osyx-浦软, cascade, 茂名)
-  could never update its ticket, and Leo reporting progress himself re-assessed
-  nobody. Group speakers bind to personas by EXACT handle or not at all (the
-  Echo rule); Leo speaking in a group counts for its other recent speakers. A
-  persona's corpus adds up to 3 groups they spoke in within 14 days, each
-  labelled: only their lines and Leo's can make a commitment between them.
-- **The person pass holds its cursor on a FAILED call** (`personAssessFailures`,
-  `proc/scan-loop.ts`). It used to advance `personAssessed` for everyone it
-  took off the queue, failures included, with no log line — so a 403 or a
-  timeout made that traffic invisible until the person spoke again. Trey's
-  9/30 「总算完事了」 (BC company filed and paid) left the ticket reading
-  「Handle BC company registration」 two days later. A failed call now retries,
-  up to 3 consecutive failures, then gives up LOUDLY. An unreadable persona
-  file or empty corpus is not a failure — retrying cannot help — and advances.
+- **Fetching and analysing are two lanes, joined by a durable inbox**
+  (`core/inbox.ts`, `runScanTick` `mode`, owner 2026-10-01: 「收信和分析分开排队」).
+  One shared queue let a slow `claude -p` (420s, retried) hold every source's
+  polling — one Gmail tick took 1069s. The FETCH lane polls, writes new
+  messages into `state.inbox`, and only THEN advances cursors, in seconds and
+  with no LLM. The ANALYZE lane (single-flight, kicked on every queued message
+  and every 60s) drafts from the inbox and removes a message in the SAME locked
+  commit that writes its cards; a failed draft leaves it queued (given up, loudly,
+  after 3 attempts). This replaced three ways messages were lost: Slack/Gmail
+  marks committed before drafting, `draftSkipped` over the cap, and a lost
+  draft-commit lock that promised a re-draft it could not do. The lanes run
+  concurrently, so each writes only what it OWNS — fetch: marks, per-source
+  errors, personTraffic/personGroups, WeChat books; analyze: actions, `llm:*`
+  errors, person-pass cursors. Never transplant a snapshot field across lanes:
+  the analyser holding a minutes-old copy would rewind the fetch lane's cursors.
+  `mode: "all"` is the old single-lane tick, kept for tests and the CLI.
 - **Attached documents are READ, not just declared** (`core/file-text.ts`).
   Text-shaped formats only (svg, md, csv, json, source files) and no new
   dependency: a PDF or .docx parser is not worth becoming this repo's third
