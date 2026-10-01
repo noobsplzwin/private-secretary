@@ -37,6 +37,8 @@ export interface PersonaUpdateDeps {
   // at most an extra slice the implementation adds when one happens to exist.
   fetchCorpus: (persona: Persona) => Promise<string | null>;
   personaDir: string;
+  /** The owner's matter labels by id, so the model files by scope, not slug. */
+  matterLabels?: () => Readonly<Record<string, string>>;
   /** Dates the ASSESS verdicts. */
   now?: () => string;
   /** Where a discarded extraction/verdict is recorded. See extractCommitmentsOnce. */
@@ -122,6 +124,7 @@ export async function updatePersonaCommitments(
       json: deps.json,
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.onDiscard ? { onDiscard: deps.onDiscard } : {}),
+      ...(deps.matterLabels ? { matterLabels: deps.matterLabels() } : {}),
     });
     if (!r) {
       failed.push(entry);
@@ -157,6 +160,7 @@ export async function extractCommitmentsOnce(opts: {
   displayName: string;
   corpus: string;
   json: PersonaUpdateJsonCaller;
+  matterLabels?: Readonly<Record<string, string>>;
   /** Dates each verdict, so a stale needs_leo cannot keep an item alive. */
   now?: () => string;
   /**
@@ -195,7 +199,12 @@ export async function extractCommitmentsOnce(opts: {
   const corpus = capCorpus(opts.corpus);
   try {
     const raw = await opts.json(
-      buildPersonaUpdateRequest({ name: opts.displayName, existing, thread: corpus }),
+      buildPersonaUpdateRequest({
+        name: opts.displayName,
+        existing,
+        thread: corpus,
+        ...(opts.matterLabels ? { matterLabels: opts.matterLabels } : {}),
+      }),
     );
     extracted = parseExtractedCommitments(raw);
     transitions = parseExtractedUpdates(raw, existing.length);

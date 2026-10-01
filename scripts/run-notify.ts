@@ -728,6 +728,19 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
       personaFor: (key) => byKey.get(key) ?? null,
       fetchCorpus: (persona) => fetchCorpusFor(persona, resolvePersona),
       personaDir,
+      // His registry labels, read per call so an edit takes effect next tick.
+      matterLabels: () => {
+        try {
+          return Object.fromEntries(
+            readMatters(resolve(process.cwd(), "config/matters.yaml")).map((m) => [
+              m.id,
+              m.status === "closed" ? `${m.label}（已结束）` : m.label,
+            ]),
+          );
+        } catch {
+          return {};
+        }
+      },
       // Every thrown-away verdict, on disk. The console only ever said HOW MANY
       // were discarded, and on 2026-09-12 that number was 47 against 6 accepted
       // with no sample to look at — so the reason the owner's list has 39

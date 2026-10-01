@@ -31,3 +31,26 @@ describe("persona-update prompt", () => {
     expect(parseExtractedCommitments(null)).toEqual([]);
   });
 });
+
+// 2026-10-01: mold rework was filed on the 4.5-order ticket because the model
+// saw only the slug 「rev5-production」. It now sees the owner's label.
+describe("matter labels reach the model", () => {
+  it("renders the owner's label beside a registered matter id", () => {
+    const req = buildPersonaUpdateRequest({
+      name: "Leo.yang",
+      existing: [{ who: "them", what: "Deliver the 4.5 core board PCB", status: "open", matter_id: "rev5-production" }],
+      thread: "x",
+      matterLabels: { "rev5-production": "Rev5 量产收尾" },
+    });
+    expect(JSON.stringify(req)).toContain("[matter:rev5-production = Rev5 量产收尾]");
+  });
+
+  it("an unlabelled matter still shows its id", () => {
+    const req = buildPersonaUpdateRequest({
+      name: "Leo.yang",
+      existing: [{ who: "them", what: "Rework the top-cover mold", status: "open", matter_id: "topcover-vent" }],
+      thread: "x",
+    });
+    expect(JSON.stringify(req)).toContain("[matter:topcover-vent]");
+  });
+});

@@ -163,6 +163,11 @@ RULES:
   purchase"), set matter_id to that entry's [matter:…] id — or, if the linked
   entry has none, to a short new kebab-case id. One matter shows on Leo's list
   at most once, so linking is what stops a handed-off chain from re-surfacing.
+  A matter is ONE deliverable; where the owner has labelled it ([matter:id =
+  label]), the label is its scope. A step toward a DIFFERENT deliverable is not
+  its link even when it concerns the same product: reworking molds or a top
+  cover is not placing the board order. When unsure, leave matter_id out — an
+  unfiled commitment costs a separate row; a misfiled one corrupts a ticket.
 - due: ISO **YYYY-MM-DD** (or YYYY-MM-DDTHH:MM), or leave it out. Nothing else
   is a date. Resolve 「周一」/「today」/「by Friday」 against THE DATE ON THE LINE
   that says it — every corpus line is prefixed with its own date — never against
@@ -225,12 +230,24 @@ export function buildPersonaUpdateRequest(opts: {
   name: string;
   existing: Commitment[];
   thread: string;
+  /**
+   * The owner's registry labels, by matter id (config/matters.yaml). Without
+   * them the model filed by SLUG alone: 「rev5-production」 reads like anything
+   * to do with producing a board, so mold and top-cover rework landed on the
+   * 4.5-order ticket — and the owner had to say 「这个ticket是下单4.5，而不是改
+   * 模具」 (2026-10-01). His label says what the matter is.
+   */
+  matterLabels?: Readonly<Record<string, string>>;
 }): PersonaUpdateRequest {
+  const tag = (id: string): string => {
+    const label = opts.matterLabels?.[id];
+    return label ? ` [matter:${id} = ${label}]` : ` [matter:${id}]`;
+  };
   const cur = opts.existing.length
     ? opts.existing
         .map(
           (c, i) =>
-            `${i}. [${c.who}] [${c.status}]${c.matter_id ? ` [matter:${c.matter_id}]` : ""} ${c.what}${c.due ? ` (due ${c.due})` : ""}`,
+            `${i}. [${c.who}] [${c.status}]${c.matter_id ? tag(c.matter_id) : ""} ${c.what}${c.due ? ` (due ${c.due})` : ""}`,
         )
         .join("\n")
     : "(none tracked yet)";
