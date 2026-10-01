@@ -399,6 +399,11 @@ async function dmIndexes(): Promise<Awaited<ReturnType<typeof slackDmIndexes>>> 
   return dms;
 }
 
+/** How recently a persona must have spoken in a group for it to join their corpus. */
+const GROUP_CORPUS_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+const GROUP_CORPUS_MAX_GROUPS = 3;
+const GROUP_CORPUS_LINES = 60;
+
 async function fetchCorpusFor(
   persona: Persona,
   resolvePersona: (handle: string) => Persona | null,
@@ -416,6 +421,32 @@ async function fetchCorpusFor(
     if (base.trim()) slices.push(base);
   } catch {
     /* a dead source must not sink the person — the card slice may still land */
+  }
+
+  // The GROUPS this person speaks in (state.personGroups, bound by exact
+  // handle in the scan). Without them a matter run in a group — 股权变更 in the
+  // Osyx-浦软 group, the cascade work — could never update its ticket: the
+  // pass only ever read the 1:1 thread. Recent groups only, a few of them, so
+  // one chatty group cannot push the 1:1 thread out of the corpus cap.
+  try {
+    const groups = Object.entries(loadState(statePath).personGroups?.[persona.key] ?? {})
+      .filter(([, ms]) => Date.now() - ms <= GROUP_CORPUS_WINDOW_MS)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, GROUP_CORPUS_MAX_GROUPS);
+    for (const [group] of groups) {
+      const text = await wechatHistory(group, { limit: GROUP_CORPUS_LINES }).catch(() => "");
+      if (!text.trim()) continue;
+      // Said in the slice itself: in a group, most lines are neither his nor
+      // Leo's, and a commitment between the two of them can only come from one
+      // of them (brain G1 — the speaker is the obligor, no exceptions).
+      slices.push(
+        `=== wechat group «${group}» — shared with ${persona.displayName}. ` +
+          `Only lines spoken by ${persona.displayName} or by me can create or close a commitment between us; ` +
+          `everyone else in it is context. ===\n${text}`,
+      );
+    }
+  } catch {
+    /* group context is additive — never worth losing the 1:1 slices over */
   }
 
   // Channel coverage, when a card for this contact is open.

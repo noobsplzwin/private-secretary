@@ -169,6 +169,15 @@ call, 2026-09-12.
   whole-call failure names nobody, so nothing advances. Slack/Gmail marks do
   NOT have this yet: they are one bucket per source with a shared high-water
   mark, so rewinding one sender would re-surface the others.
+- **The person pass wakes on PARTICIPATION, groups and Leo's own lines included**
+  (`Participation`, `sources/wechat-direct.ts`; `personGroups` in state). It
+  used to wake only when the other side wrote a 1:1 message, and read only the
+  1:1 thread — so a matter run in a group (股权变更 in Osyx-浦软, cascade, 茂名)
+  could never update its ticket, and Leo reporting progress himself re-assessed
+  nobody. Group speakers bind to personas by EXACT handle or not at all (the
+  Echo rule); Leo speaking in a group counts for its other recent speakers. A
+  persona's corpus adds up to 3 groups they spoke in within 14 days, each
+  labelled: only their lines and Leo's can make a commitment between them.
 - **The person pass holds its cursor on a FAILED call** (`personAssessFailures`,
   `proc/scan-loop.ts`). It used to advance `personAssessed` for everyone it
   took off the queue, failures included, with no log line — so a 403 or a

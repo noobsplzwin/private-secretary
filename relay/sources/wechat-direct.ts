@@ -169,9 +169,24 @@ export interface WechatInboxOptions {
 // One InboundMessage per unread 1:1 session, carrying the combined incoming
 // unread messages. Cross-tick/restart dedup is the scan loop's job (it keeps
 // only ids that are new vs the persisted marks).
+/**
+ * Who took part in what this tick READ — by exact handle, Leo's own lines
+ * included. This is the person pass's trigger (state.personTraffic), and it is
+ * wider than `inbound` on purpose: an inbound message exists only when the
+ * other side wrote, so Leo reporting progress himself (「我已经交了」) with no
+ * reply never re-assessed anyone, and the ticket stayed where it was.
+ */
+export interface Participation {
+  /** Exact handle — a 1:1 chat name, or a group speaker's label. Resolved by the caller. */
+  handle: string;
+  tsMs: number;
+  /** The group it happened in, when it was one. */
+  group?: string;
+}
+
 export async function scanWechatInbox(
   opts: WechatInboxOptions,
-): Promise<{ inbound: InboundMessage[]; sessions: RecentSession[]; book: DirectBook }> {
+): Promise<{ inbound: InboundMessage[]; sessions: RecentSession[]; book: DirectBook; spoke: Participation[] }> {
   const sessions = parseRecentSessions(await opts.fetchSessions(), opts.nowMs);
   const exclude = opts.excludeNames ?? WECHAT_FAMILY;
   const cap = opts.historyCap ?? 20;
@@ -180,6 +195,7 @@ export async function scanWechatInbox(
     ...(opts.officialNames ? { official: opts.officialNames } : {}),
   });
   let book = opts.book;
+  const spoke: Participation[] = [];
   // First contact drops a chat's BACKLOG, not the message that brought it here.
   // Seeding at the newest message kept a first sight from pouring months of
   // history into the queue, but it also threw away the one line that made the
@@ -214,6 +230,10 @@ export async function scanWechatInbox(
     // forever. What he SAID is context, never a trigger.
     const newestSeen = history.reduce((mx, m) => Math.max(mx, m.tsMs), since);
     book = advanceCursor(book, name, Math.max(newestSeen, s.tsMs));
+    // EITHER side moving this conversation re-assesses the person in it — his
+    // own lines too, since they are often where the progress is.
+    const moved = history.filter((m) => m.tsMs > since);
+    if (moved.length > 0) spoke.push({ handle: s.name, tsMs: Math.max(...moved.map((m) => m.tsMs)) });
     const fresh = history.filter((m) => m.isIncoming && m.tsMs > since);
     if (fresh.length === 0) continue; // only Leo spoke → context, not an ask
     const combined = fresh.map((m) => m.text).filter(Boolean).join("\n");
@@ -244,7 +264,7 @@ export async function scanWechatInbox(
       ...(attachments.length ? { attachments } : {}),
     });
   }
-  return { inbound, sessions, book };
+  return { inbound, sessions, book, spoke };
 }
 
 // ─── groups ───────────────────────────────────────────────────────────
@@ -324,7 +344,7 @@ export const WAKE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export async function scanWechatGroups(
   opts: WechatGroupScanOptions,
-): Promise<{ inbound: InboundMessage[]; book: GroupBook }> {
+): Promise<{ inbound: InboundMessage[]; book: GroupBook; spoke: Participation[] }> {
   const cap = opts.historyCap ?? 40;
   const book: GroupBook = { ...opts.book };
   const plan = planGroupScan(opts.sessions, book);
@@ -343,6 +363,7 @@ export async function scanWechatGroups(
   }
 
   const inbound: InboundMessage[] = [];
+  const spoke: Participation[] = [];
   for (const name of plan.fetch) {
     const entry = book[name]!;
     let msgs: GroupMsg[];
@@ -385,6 +406,18 @@ export async function scanWechatGroups(
     // The cursor advances over Leo's OWN messages too — they are seen, just not
     // work for him — otherwise a group where he speaks last re-reads every tick.
     book[name] = { ...entry, lastSeenMs: Math.max(cursor, newest) };
+    // GROUPS FEED THE PEOPLE IN THEM. A group used to reach the owner only as a
+    // card, so a matter run in a group — 股权变更 in the Osyx-浦软 group, the
+    // cascade work, 茂名 — could never update its ticket. Each speaker's label
+    // goes up as-is; the caller binds it to a persona by EXACT match or not at
+    // all (the Echo / Echo Lian rule). When Leo is the one speaking, the people
+    // he is talking to are the group's other recent speakers.
+    const others = [...new Set(msgs.filter((m) => m.speaker !== OWN_LABEL).map((m) => m.speaker))];
+    for (const m of msgs) {
+      if (m.tsMs <= cursor) continue;
+      if (m.speaker !== OWN_LABEL) spoke.push({ handle: m.speaker, tsMs: m.tsMs, group: name });
+      else for (const o of others) spoke.push({ handle: o, tsMs: m.tsMs, group: name });
+    }
     if (unseen.length === 0) continue;
     const combined = unseen.map((m) => `${m.speaker}: ${m.text}`).filter((l) => l.trim() !== "").join("\n");
     if (!combined) continue;
@@ -411,7 +444,7 @@ export async function scanWechatGroups(
       ...(attachments.length ? { attachments } : {}),
     });
   }
-  return { inbound, book };
+  return { inbound, book, spoke };
 }
 
 /**

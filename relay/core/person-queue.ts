@@ -66,6 +66,24 @@ export function recordTraffic(
  * actually read up to errs toward re-assessing, which costs one call; the other
  * direction costs a commitment nobody ever sees.
  */
+/**
+ * Remember which groups each persona spoke in, keeping the latest time per
+ * group — the person pass reads those groups for them. Entries are already
+ * resolved to persona keys by EXACT match; anything unresolved never gets here.
+ */
+export function recordGroupPresence(
+  groups: Readonly<Record<string, Readonly<Record<string, number>>>>,
+  seen: ReadonlyArray<{ personaKey: string; group: string; timestampMs: number }>,
+): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const [k, v] of Object.entries(groups)) out[k] = { ...v };
+  for (const { personaKey, group, timestampMs } of seen) {
+    const g = (out[personaKey] ??= {});
+    if ((g[group] ?? 0) < timestampMs) g[group] = timestampMs;
+  }
+  return out;
+}
+
 export function markAssessed(
   assessed: Readonly<Record<string, number>>,
   done: ReadonlyArray<PersonQueueEntry>,

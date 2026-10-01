@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { markAssessed, personsNeedingAssessment, recordTraffic } from "./person-queue.js";
+import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraffic } from "./person-queue.js";
 
 describe("personsNeedingAssessment", () => {
   it("selects a person who spoke since their last assessment", () => {
@@ -86,5 +86,15 @@ describe("markAssessed", () => {
 
   it("never moves a cursor backwards", () => {
     expect(markAssessed({ zech: 500 }, [{ personaKey: "zech", trafficMs: 100 }]).zech).toBe(500);
+  });
+});
+
+describe("recordGroupPresence", () => {
+  it("keeps the latest time per persona per group", () => {
+    const out = recordGroupPresence({ jin: { "Osyx-浦软": 5 } }, [
+      { personaKey: "jin", group: "Osyx-浦软", timestampMs: 3 },
+      { personaKey: "jin", group: "29号茂名行程", timestampMs: 9 },
+    ]);
+    expect(out).toEqual({ jin: { "Osyx-浦软": 5, "29号茂名行程": 9 } });
   });
 });

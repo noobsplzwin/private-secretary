@@ -35,6 +35,7 @@ describe("loop state v2", () => {
       personTraffic: {},
       personAssessed: {},
       personAssessFailures: {},
+      personGroups: {},
     });
   });
 
@@ -79,6 +80,7 @@ describe("loop state v2", () => {
       // The retry counter for failed assessments survives a restart too, or a
       // restart would reset a contact that keeps failing back to zero.
       personAssessFailures: { "wang-acme": 2 },
+      personGroups: { "wang-acme": { "Osyx-浦软": 1_699_500_000_000 } },
     };
     saveState(path, state);
     expect(loadState(path)).toEqual(state);

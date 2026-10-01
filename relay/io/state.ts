@@ -50,6 +50,10 @@ export interface LoopState {
   // cursor holds while this is under the retry limit, so a failed pass is
   // retried instead of losing that traffic (proc/scan-loop.ts).
   personAssessFailures?: Record<string, number>;
+  // Which WeChat GROUPS each persona has been seen speaking in, and when last
+  // (epoch ms). The person pass reads those groups alongside the 1:1 thread, so
+  // a matter run in a group can update its ticket (proc/scan-loop.ts).
+  personGroups?: Record<string, Record<string, number>>;
 }
 
 // Thrown when saveState detects the on-disk state advanced since the caller
@@ -77,6 +81,7 @@ function empty(): LoopState {
     personTraffic: {},
     personAssessed: {},
     personAssessFailures: {},
+    personGroups: {},
   };
 }
 
@@ -97,6 +102,7 @@ export function loadState(path: string): LoopState {
     personTraffic: parsed.personTraffic ?? {},
     personAssessed: parsed.personAssessed ?? {},
     personAssessFailures: parsed.personAssessFailures ?? {},
+    personGroups: parsed.personGroups ?? {},
   };
 }
 

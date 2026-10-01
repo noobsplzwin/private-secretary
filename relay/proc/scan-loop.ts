@@ -31,6 +31,7 @@ import { acquireLock, loadState, releaseLock, saveState, type LoopState } from "
 import { appendLabels, buildLabel, labelsPathFor } from "../io/labels.js";
 import type { InboundMessage } from "../core/types.js";
 import type { GroupBook } from "../core/wechat-groups.js";
+import type { Participation } from "../sources/wechat-direct.js";
 import type { DirectBook } from "../core/wechat-direct-cursor.js";
 import type { ActionItem } from "../core/action-item.js";
 import { canAutoExecute, isSystemicExecuteFailure } from "../core/executors.js";
@@ -52,7 +53,7 @@ import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks, heldClosedByOwner } from "../core/ledger-list.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
-import { markAssessed, personsNeedingAssessment, recordTraffic } from "../core/person-queue.js";
+import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { machineTimeZone } from "../io/settings.js";
@@ -413,6 +414,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   type PendingBook<T> = { prev: T; next: T };
   let pendingWechatDirect: PendingBook<DirectBook> | undefined;
   let pendingWechatGroups: PendingBook<GroupBook> | undefined;
+  // Who took part in what the WeChat pass read (sources/wechat-direct.ts Participation).
+  const wechatSpoke: Participation[] = [];
 
   let state: LoopState;
   try {
@@ -677,6 +680,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // discussion — a 12/06 deadline, a three-stage plan, and a direct request
       // for the 财务报表 — was never seen again by anything.
       pendingWechatDirect = { prev: directBefore, next: r.book };
+      wechatSpoke.push(...r.spoke);
       // GROUPS (2026-09-12) run off the same kind of per-group cursor, over an
       // allowlist the owner confirms plus an auto-admit for small groups
       // (core/wechat-groups.ts). 1:1 joined them on 2026-09-20: unread-gating
@@ -693,6 +697,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           // Held for the same reason as the 1:1 book above.
           pendingWechatGroups = { prev: groupsBefore, next: g.book };
           r.inbound.push(...g.inbound);
+          wechatSpoke.push(...g.spoke);
         } catch (e) {
           // A group-pass failure must never cost the 1:1 scan its tick.
           console.log(`[wechat] group pass failed — ${(e as Error).message.split("\n")[0]}`);
@@ -802,7 +807,18 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           const key = opts.resolvePersonaKey(m.senderHandle);
           if (key) spoke.push({ personaKey: key, timestampMs: m.timestampMs });
         }
+        // WeChat participation — wider than the triggered messages: Leo's own
+        // lines, and every speaker in a group, bound by EXACT handle or not at
+        // all (resolvePersonaKey never guesses). See sources/wechat-direct.ts.
+        const inGroups: Array<{ personaKey: string; group: string; timestampMs: number }> = [];
+        for (const p of wechatSpoke) {
+          const key = opts.resolvePersonaKey(p.handle);
+          if (!key) continue;
+          spoke.push({ personaKey: key, timestampMs: p.tsMs });
+          if (p.group) inGroups.push({ personaKey: key, group: p.group, timestampMs: p.tsMs });
+        }
         state.personTraffic = recordTraffic(state.personTraffic ?? {}, spoke);
+        if (inGroups.length > 0) state.personGroups = recordGroupPresence(state.personGroups ?? {}, inGroups);
       }
     }
 
@@ -847,6 +863,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // from the tick's start-of-run snapshot silently wiped the cursor a phase
       // later, and the pass then re-assessed the same person every single tick.
       fresh.personTraffic = state.personTraffic ?? fresh.personTraffic;
+      // Same ownership as personTraffic: written by this tick's scan.
+      fresh.personGroups = state.personGroups ?? fresh.personGroups;
       mutate(fresh);
       saveState(opts.statePath, fresh);
       return true;

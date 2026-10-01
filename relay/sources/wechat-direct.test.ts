@@ -414,3 +414,44 @@ describe("first contact with a group drops history, not the messages that woke i
     expect(r.inbound[0]!.text).toBe("茉莉: 新的一条");
   });
 });
+
+// 2026-10-01 — the person pass only woke when the OTHER side wrote, and never
+// for a group. Participation is what the scanners now report to it.
+describe("participation: who took part in what was read", () => {
+  it("1:1 — Leo's own line alone still counts the chat as moved", async () => {
+    const { inbound, spoke } = await scanWechatInbox({
+      fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] trey (0条未读)\n  文本: 我已经交了",
+      fetchHistory: async () => "[2026-06-14 20:00] trey: 交了吗\n[2026-06-14 21:00] me: 我已经交了",
+      nowMs: new Date("2026-06-14T22:00:00").getTime(),
+      book: { trey: { lastSeenMs: new Date("2026-06-14T20:30:00").getTime() } },
+    });
+    expect(inbound).toEqual([]); // nothing for the drafter: only Leo spoke
+    expect(spoke).toEqual([{ handle: "trey", tsMs: new Date("2026-06-14T21:00:00").getTime() }]);
+  });
+
+  const G = (lines: Array<[string, string, string]>): string =>
+    ["群 的消息记录: [群聊]", "", ...lines.map(([t, who, text]) => `[${t}] ${who}: ${text}`)].join("\n");
+  const groupOpts = (hist: string) => ({
+    sessions: [{ name: "Osyx-浦软", isGroup: true, unread: 0, tsMs: Date.parse("2026-09-26T10:05:00") }],
+    book: { "Osyx-浦软": { decision: "allow" as const, by: "auto" as const, at: "x", speakers: 3, lastSeenMs: Date.parse("2026-09-26T09:00:00") } },
+    fetchHistory: async () => hist,
+    now: () => "2026-09-26T10:06:00+08:00",
+  });
+
+  it("group — every speaker's line counts for them, with the group named", async () => {
+    const { spoke } = await scanWechatGroups(
+      groupOpts(G([["2026-09-26 10:00", "金小奇 芯联集成", "就按这个方案吧"], ["2026-09-26 10:01", "Kuang远留", "节后开始操作"]])),
+    );
+    expect(spoke.map((p) => [p.handle, p.group])).toEqual([
+      ["金小奇 芯联集成", "Osyx-浦软"],
+      ["Kuang远留", "Osyx-浦软"],
+    ]);
+  });
+
+  it("group — Leo speaking counts for the people he is talking to", async () => {
+    const { spoke } = await scanWechatGroups(
+      groupOpts(G([["2026-09-26 08:50", "金小奇 芯联集成", "方案发群里了"], ["2026-09-26 10:02", "me", "不减资了"]])),
+    );
+    expect(spoke).toEqual([{ handle: "金小奇 芯联集成", tsMs: Date.parse("2026-09-26T10:02:00"), group: "Osyx-浦软" }]);
+  });
+});
