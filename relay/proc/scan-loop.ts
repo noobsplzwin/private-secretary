@@ -52,6 +52,7 @@ import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledge
 import { enqueue, settle, takeForDraft, type InboxEntry } from "../core/inbox.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks, heldClosedByOwner } from "../core/ledger-list.js";
+import { applyInvite, cardForInvite } from "../core/calendar-invite.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
 import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraffic } from "../core/person-queue.js";
@@ -580,6 +581,41 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         bootstrapWindowDays: opts.onWake ? 14 : 7,
         perMailboxLimit: opts.onWake ? 400 : 200,
       });
+      // INVITES SETTLE MEETING CARDS (core/calendar-invite.ts). The invite is
+      // what a meeting's time actually is; the chat before it can be moved in a
+      // thread the scan never sees. A card that matches an invite by the
+      // organizer's EXACT email takes its time and loses its own invite line.
+      // The invite message itself is then not drafted — the card already says
+      // what it would have said, and drafting it is how a second card appears.
+      // The FETCH lane only carries invites to the inbox — actions belong to
+      // the analyse lane, which applies them (see applyInvites below). An
+      // invite in mail he already READ is not inbound, so it travels as an
+      // invite-only message: never drafted, only reconciled.
+      const inviteById = new Map(r.invites.map((x) => [x.id, x.invite] as const));
+      for (const m of r.inbound) {
+        const inv = inviteById.get(m.id);
+        if (inv) {
+          m.invite = inv;
+          inviteById.delete(m.id);
+        }
+      }
+      for (const [id, invite] of inviteById) {
+        sourceMessages.push({
+          id,
+          platform: "gmail",
+          senderHandle: invite.organizer,
+          timestampMs: startedAtMs,
+          text: `Calendar invite: ${invite.summary ?? "(untitled)"}`,
+          source: "gmail:invites",
+          isDirectMessage: false,
+          mentionsUser: false,
+          isReplyInUserThread: false,
+          recipientsIncludeUser: true,
+          threadAnsweredByUserAfter: false,
+          invite,
+          inviteOnly: true,
+        });
+      }
       if (!opts.dryRun) {
         setGmailState(
           state.marks as Record<string, { lastTimestampMs: number; seenIds: string[] }>,
@@ -1034,10 +1070,18 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // Senders whose draft call succeeded but produced ZERO cards — the silent
   // skip (cursor already advanced). Surfaced as llm:draft-empty in phase 3.
   let draftEmpty: string[] = [];
-  if (opts.draft && draftInput.length > 0) {
+  // INVITES SETTLE MEETING CARDS (core/calendar-invite.ts) — in the analyse
+  // lane, which owns actions. A message whose invite matches an open card by
+  // the organizer's exact email is not drafted (the card already says it, and
+  // drafting is how a second card appears); an invite-only message — mail he
+  // had already read — is never drafted. The card itself is updated in the
+  // same locked commit that settles the inbox, re-matched against disk.
+  const inviteMsgs = draftInput.filter((m) => m.invite);
+  const toDraft = draftInput.filter((m) => !m.invite || (!m.inviteOnly && !cardForInvite(state.actions, m.invite)));
+  if (opts.draft && toDraft.length > 0) {
     try {
-      console.log(`[progress] drafting ${draftInput.length} candidate(s)…`);
-      const r = await draftActions(draftInput, opts.draft);
+      console.log(`[progress] drafting ${toDraft.length} candidate(s)…`);
+      const r = await draftActions(toDraft, opts.draft);
       draftedActions = r.actions;
       draftEmpty = r.empty;
       draftFailedSenders = r.errors.map((e) => e.sender);
@@ -1128,9 +1172,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   const settlesInbox = mode === "analyze" && draftInput.length > 0;
   if (
     !opts.dryRun &&
-    (settlesInbox || draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)
+    (settlesInbox || inviteMsgs.length > 0 || draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)
   ) {
     const committed = await commitUnderLock((fresh) => {
+      for (const m of inviteMsgs) {
+        const card = cardForInvite(fresh.actions, m.invite!);
+        if (!card) continue;
+        const next = applyInvite(card, m.invite!);
+        if (JSON.stringify(next.params) === JSON.stringify(card.params)) continue;
+        fresh.actions = fresh.actions.map((a) => (a.id === card.id ? next : a));
+        console.log(`[invite] settled "${next.headline}" → ${String(next.params.start)} (from ${m.invite!.organizer})`);
+      }
       // Settled in the SAME write as the cards: a message leaves the inbox
       // exactly when its cards land, so a lost lock means it is drafted again
       // — which is what the message below this block has always promised.

@@ -84,6 +84,10 @@ export interface InboundMessage {
   threadAnsweredByUserAfter: boolean; // user already replied after this message in-thread
   userIsLastSenderInChannel?: boolean; // user is the most recent sender in the conversation bucket
   attachments?: Attachment[]; // images/files — MUST be read during analysis
+  /** A calendar invite this message carries, read from its .ics (core/calendar-invite.ts). */
+  invite?: import("./calendar-invite.js").ParsedInvite;
+  /** True for an invite in mail already READ: it travels only to be reconciled, never drafted. */
+  inviteOnly?: boolean;
   // Recent conversation around this message (both sides, oldest→newest, sender-
   // labelled), for the analyzer to understand context. This is BACKGROUND — the
   // thing to respond to is `text`; threadContext must NOT be re-answered. Set by

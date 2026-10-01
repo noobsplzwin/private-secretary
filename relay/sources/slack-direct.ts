@@ -145,6 +145,8 @@ interface ChannelRaw {
     user_answered_after?: boolean;
     user_is_last_sender_in_channel?: boolean;
     files?: Array<{ id: string; name?: string; mimetype?: string }>;
+    /** The whole thread this message sits in, both sides (我 = Leo). */
+    thread_context?: string;
   }>;
 }
 
@@ -162,6 +164,9 @@ export interface PollChannelOptions {
   perChannelLimit?: number;
 }
 
+/** How far behind the cursor a DM thread's parent may be and still be checked for new replies. */
+export const THREAD_LOOKBACK_S = 7 * 24 * 60 * 60;
+
 export async function pollChannel(
   opts: PollChannelOptions,
 ): Promise<PolledChannel | null> {
@@ -176,18 +181,10 @@ export async function pollChannel(
     oldest: sinceTs,
     limit,
   });
-  if (page.messages.length === 0) return null;
 
   // Slack returns newest first. Process in chronological order for
   // determinism + so `newLastTs` is the max.
   const ordered = [...page.messages].sort((a, b) => Number(a.ts) - Number(b.ts));
-
-  // The newest message in the *whole* channel (not just this page) is
-  // the basis for `user_is_last_sender_in_channel`. For an active channel,
-  // the newest of the page IS the newest of the channel (we polled to
-  // latest). For a quiet channel we'd need a second call; not worth it.
-  const newestInBatch = ordered[ordered.length - 1]!;
-  const lastSenderIsSelf = newestInBatch.user === selfId;
 
   // For each parent message that has thread replies in this batch, fetch
   // the full thread once. Tiny pre-pass to dedupe.
@@ -196,6 +193,30 @@ export async function pollChannel(
     if (m.thread_ts && m.thread_ts === m.ts) threadParentTs.add(m.ts);
     if (m.thread_ts && m.thread_ts !== m.ts) threadParentTs.add(m.thread_ts);
     if (!m.thread_ts && m.reply_count && m.reply_count > 0) threadParentTs.add(m.ts);
+  }
+
+  // THREADS WHOSE PARENT IS ALREADY BEHIND THE CURSOR. A reply does not
+  // appear in conversations.history, so once a thread's parent was consumed,
+  // everything said under it afterwards was invisible. 2026-10-01: João
+  // proposed 9AM Lisbon at 14:15, the card was minted from it, and the
+  // reschedule — Leo's 「actually, can we call 2pm instead?」 — was a reply in
+  // that thread. DMs only (that is where his conversations are, and where the
+  // second history call per poll is affordable): parents from the last week
+  // whose latest_reply is newer than the cursor.
+  const isDm = channel.is_im === true || channel.is_mpim === true;
+  if (isDm && sinceTs) {
+    try {
+      const recent = await client.conversationsHistory({
+        channel: channel.id,
+        oldest: (Number(sinceTs) - THREAD_LOOKBACK_S).toFixed(6),
+        limit: 100,
+      });
+      for (const m of recent.messages) {
+        if (m.reply_count && m.latest_reply && Number(m.latest_reply) > Number(sinceTs)) threadParentTs.add(m.ts);
+      }
+    } catch {
+      /* thread discovery is additive — the main page still stands */
+    }
   }
   const threads = new Map<string, SlackMessage[]>();
   for (const ts of threadParentTs) {
@@ -208,6 +229,36 @@ export async function pollChannel(
       threads.set(ts, []);
     }
   }
+
+  // New replies become messages of this poll — both sides: the other side's
+  // are inbound, Leo's are the context they answer (and are dropped as
+  // outgoing downstream, like any of his messages).
+  if (sinceTs) {
+    const have = new Set(ordered.map((m) => m.ts));
+    for (const [parent, chain] of threads) {
+      for (const r of chain) {
+        if (r.ts === parent || have.has(r.ts) || Number(r.ts) <= Number(sinceTs)) continue;
+        ordered.push({ ...r, thread_ts: r.thread_ts ?? parent });
+        have.add(r.ts);
+      }
+    }
+    ordered.sort((a, b) => Number(a.ts) - Number(b.ts));
+  }
+  if (ordered.length === 0) return null;
+
+  // The newest message in the *whole* channel (not just this page) is
+  // the basis for `user_is_last_sender_in_channel`. For an active channel,
+  // the newest of the page IS the newest of the channel (we polled to
+  // latest). For a quiet channel we'd need a second call; not worth it.
+  const newestInBatch = ordered[ordered.length - 1]!;
+  const lastSenderIsSelf = newestInBatch.user === selfId;
+
+  // The whole thread, both sides, as context for a message inside it — the
+  // drafter reading João's 「Sure」 without Leo's 「2pm instead?」 above it
+  // reads agreement to the OLD time.
+  const label = (u?: string): string => (u === selfId ? "我" : u ?? "?");
+  const threadText = (chain: readonly SlackMessage[]): string =>
+    chain.filter((r) => r.text).map((r) => `${label(r.user)}: ${r.text}`).join("\n");
 
   const messages: ChannelRaw["messages"] = ordered
     .filter((m) => m.user) // drop bot-only / system messages without a user
@@ -228,6 +279,7 @@ export async function pollChannel(
         user: m.user!,
         text: m.text ?? "",
         ...(threadTs ? { thread_ts: threadTs } : {}),
+        ...(replyChain.length > 1 ? { thread_context: threadText(replyChain) } : {}),
         ...(reply_user_ids.length > 0 ? { reply_user_ids } : {}),
         ...(user_answered_after ? { user_answered_after } : {}),
         // Same flag value for every msg in this poll: it's a channel-level
@@ -327,6 +379,9 @@ export function pollResultToInbound(result: SlackPollResult): InboundMessage[] {
     // codes isDirectMessage=false (it's a channels-mode normalizer), so
     // we patch the field post-normalize when this channel is a DM.
     const msgs = slackChannelsSource.normalize(polled.raw, ctx);
+    const threadCtx = new Map(
+      polled.raw.messages.filter((r) => r.thread_context).map((r) => [r.ts, r.thread_context!] as const),
+    );
     const isDM = polled.channel.is_im === true;
     const isMPIM = polled.channel.is_mpim === true;
     for (const m of msgs) {
@@ -336,6 +391,8 @@ export function pollResultToInbound(result: SlackPollResult): InboundMessage[] {
       // returns both sides; the other side's replies still pass through. The
       // cursor still advances past them (newLastTs), so they don't re-surface.
       if (m.senderHandle === result.selfId) continue;
+      const tc = threadCtx.get(m.id.split(":").pop() ?? "");
+      if (tc) m.threadContext = tc;
       if (isDM || isMPIM) {
         m.isDirectMessage = true;
         // For DMs the "addressed to user" question is trivially yes —

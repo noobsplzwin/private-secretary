@@ -502,3 +502,44 @@ describe("ownerLastSpokeInThreads (answered-closes on Gmail)", () => {
     expect(m.size).toBe(0);
   });
 });
+
+// 2026-10-01: João's invite (NXP AGV Sync, 21:00–22:00 GMT+8) settled the
+// meeting, but nothing read its .ics. It must be read even once opened — the
+// unread gate drops read mail, and an invite's time is a fact either way.
+describe("pollMailbox — calendar invites", () => {
+  const ics = [
+    "BEGIN:VCALENDAR", "METHOD:REQUEST", "BEGIN:VEVENT",
+    "DTSTART:20261001T130000Z", "DTEND:20261001T140000Z",
+    "ORGANIZER;CN=João:mailto:jpeixoto@osyx.tech", "UID:u1", "SUMMARY:NXP AGV Sync",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+
+  it("reads the .ics attachment of an invite — even a READ one", async () => {
+    const base = makeMessage({ id: "M1", threadId: "T1", from: "jpeixoto@osyx.tech", to: "leo@osyx.tech", body: "NXP AGV Sync", labelIds: ["INBOX", "CATEGORY_PERSONAL"] });
+    const msg = {
+      ...base,
+      payload: {
+        mimeType: "multipart/mixed",
+        headers: base.payload!.headers,
+        parts: [
+          { mimeType: "text/plain", body: { data: Buffer.from("NXP AGV Sync").toString("base64url") } },
+          { mimeType: "text/calendar", filename: "invite.ics", body: { attachmentId: "A1" } },
+        ],
+      },
+    } as unknown as GmailMessage;
+    const client = clientStub({
+      getProfile: vi.fn(async () => ({ emailAddress: "leo@osyx.tech", messagesTotal: 1, threadsTotal: 1, historyId: "9" })),
+      messagesList: vi.fn(async () => ({ messages: [{ id: "M1", threadId: "T1" }] })),
+      getMessage: vi.fn(async () => msg),
+      getAttachment: vi.fn(async () => new TextEncoder().encode(ics)),
+    });
+    const r = await pollMailbox({ client, mailboxEmail: "leo@osyx.tech" });
+    expect(r.invites).toEqual([
+      {
+        id: "gmail:M1",
+        invite: expect.objectContaining({ organizer: "jpeixoto@osyx.tech", start: "2026-10-01T13:00:00.000Z" }),
+      },
+    ]);
+    expect(r.inbound).toEqual([]); // still read → still not drafted
+  });
+});

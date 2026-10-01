@@ -28,6 +28,7 @@
 //     thread-bucketed; collapse to the per-thread "user already in chain"
 //     signal)
 
+import { parseInvite, type ParsedInvite } from "../core/calendar-invite.js";
 import { encodeBase64Url } from "../io/gmail-api.js";
 import type {
   GmailClient,
@@ -57,6 +58,12 @@ export interface FilteredMessage {
 export interface GmailMailboxResult {
   email: string;
   inbound: InboundMessage[];
+  /**
+   * Calendar invites found in this poll, read from their .ics — read or
+   * unread alike: a meeting's time is a fact whether or not he opened the
+   * mail, and he usually has (core/calendar-invite.ts).
+   */
+  invites: Array<{ id: string; invite: ParsedInvite }>;
   // Non-primary mail excluded before the trigger filter (promo/updates/etc).
   filtered: FilteredMessage[];
   newHistoryId: string;
@@ -141,6 +148,28 @@ function collectAttachments(msg: GmailMessage): Attachment[] | undefined {
     }
     for (const child of part.parts ?? []) walk(child);
   }
+}
+
+// The .ics of a calendar invite, if this message carries one. Google sends it
+// twice — a text/calendar alternative and an invite.ics attachment — and both
+// arrive as attachments (no inline data), so it costs one extra fetch, paid
+// only by messages that have the part at all.
+async function readInvite(client: GmailClient, msg: GmailMessage): Promise<ParsedInvite | null> {
+  let part: GmailMessagePart | undefined;
+  const walk = (p: GmailMessagePart | undefined): void => {
+    if (!p || part) return;
+    if (p.mimeType === "text/calendar" || p.mimeType === "application/ics") part = p;
+    for (const ch of p.parts ?? []) walk(ch);
+  };
+  walk(msg.payload);
+  const found = part as GmailMessagePart | undefined;
+  if (!found) return null;
+  let text: string;
+  if (found.body?.data) text = decodeText(found.body.data);
+  else if (found.body?.attachmentId)
+    text = new TextDecoder().decode(await client.getAttachment({ messageId: msg.id, attachmentId: found.body.attachmentId }));
+  else return null;
+  return parseInvite(text);
 }
 
 // ─── one message → InboundMessage ──────────────────────────────────
@@ -287,6 +316,7 @@ export async function pollMailbox(
   const threadCache = new Map<string, GmailMessage[]>();
   const inbound: InboundMessage[] = [];
   const filtered: FilteredMessage[] = [];
+  const invites: GmailMailboxResult["invites"] = [];
   for (const id of candidateIds) {
     let msg: GmailMessage;
     try {
@@ -306,6 +336,10 @@ export async function pollMailbox(
       filtered.push({ id: `gmail:${msg.id}`, reason: "gmail:self" });
       continue;
     }
+    // BEFORE the unread and primary-only gates: see GmailMailboxResult.invites.
+    // A failed .ics read is never worth losing the message over.
+    const invite = await readInvite(client, msg).catch(() => null);
+    if (invite) invites.push({ id: `gmail:${msg.id}`, invite });
     // Unread gate (decision 2026-06-20): the messageAdded history path can return
     // mail Leo has since READ elsewhere, and we only want unread. Confirm the
     // CURRENT labels still include UNREAD; a read message is "handled" → skip.
@@ -344,7 +378,7 @@ export async function pollMailbox(
     );
   }
 
-  return { email: mailboxEmail, inbound, filtered, newHistoryId };
+  return { email: mailboxEmail, inbound, filtered, invites, newHistoryId };
 }
 
 // ─── multi-mailbox scan ────────────────────────────────────────────
@@ -362,6 +396,7 @@ export async function scanGmailDirect(
 ): Promise<{
   inbound: InboundMessage[];
   filtered: FilteredMessage[];
+  invites: GmailMailboxResult["invites"];
   nextState: GmailPollState;
   raw: GmailPollResult;
   errors: Array<{ mailbox: string; error: string }>;
@@ -390,7 +425,8 @@ export async function scanGmailDirect(
   }
   const inbound = perMailbox.flatMap((m) => m.inbound);
   const filtered = perMailbox.flatMap((m) => m.filtered);
-  return { inbound, filtered, nextState: { mailboxes }, raw: { perMailbox }, errors };
+  const invites = perMailbox.flatMap((m) => m.invites);
+  return { inbound, filtered, invites, nextState: { mailboxes }, raw: { perMailbox }, errors };
 }
 
 // ─── helper: build an RFC 5322 message + base64url it for createDraft ─

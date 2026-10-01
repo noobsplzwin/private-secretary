@@ -446,3 +446,41 @@ describe("selectChannelsToPoll (447 channels every 60s made the pass take 5-9 mi
     expect(r.poll.map((c) => c.id)).toEqual(["X"]);
   });
 });
+
+// REGRESSION 2026-10-01. João proposed 9AM Lisbon at 14:15; the card was minted
+// from it and the cursor moved past. The reschedule lived only in that thread —
+// Leo's 「actually, can we call 2pm instead?」 and João's 「Sure」 — and a reply
+// never appears in conversations.history, so none of it was seen.
+describe("pollChannel — new replies under a parent already behind the cursor", () => {
+  const JOAO = "U08020UEM4J";
+  const parent: SlackMessage = { ts: "1000.0", user: JOAO, text: "What do you think 9AM Lisbon time?", reply_count: 3, latest_reply: "1300.0", thread_ts: "1000.0" };
+  const chain: SlackMessage[] = [
+    parent,
+    { ts: "1100.0", user: SELF, text: "Sure", thread_ts: "1000.0" },
+    { ts: "1200.0", user: SELF, text: "actually, can we call 2pm instead?", thread_ts: "1000.0" },
+    { ts: "1300.0", user: JOAO, text: "Sure", thread_ts: "1000.0" },
+  ];
+  const client = () =>
+    clientStub({
+      // main page: nothing new at the top level since the cursor
+      conversationsHistory: vi.fn(async (o: { oldest?: string }) =>
+        (Number(o.oldest) >= 1050 ? { messages: [] } : { messages: [parent] }) as SlackHistoryResponse,
+      ),
+      listAllReplies: vi.fn(async () => chain),
+    });
+
+  it("finds the thread, reads the new replies, and hands João's 「Sure」 the whole thread", async () => {
+    const polled = await pollChannel({ client: client(), selfId: SELF, channel: { id: "D1", is_im: true } as SlackConversation, sinceTs: "1050.0" });
+    expect(polled!.raw.messages.map((m) => m.ts)).toEqual(["1100.0", "1200.0", "1300.0"]);
+    expect(polled!.newLastTs).toBe("1300.0");
+    const inbound = pollResultToInbound({ selfId: SELF, channels: [polled!], errors: [] } as never);
+    expect(inbound.map((m) => m.text)).toEqual(["Sure"]); // only João's — Leo's are outgoing
+    expect(inbound[0]!.threadContext).toContain("我: actually, can we call 2pm instead?");
+    expect(inbound[0]!.threadContext).toContain("What do you think 9AM Lisbon time?");
+  });
+
+  it("does not look for old threads in a channel that is not a DM", async () => {
+    const polled = await pollChannel({ client: client(), selfId: SELF, channel: { id: "C1", is_channel: true } as SlackConversation, sinceTs: "1050.0" });
+    expect(polled).toBeNull();
+  });
+});

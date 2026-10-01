@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { readAllActive, runScanTick, shortMailboxError } from "./scan-loop.js";
-import { acquireLock, loadState, releaseLock } from "../io/state.js";
+import { acquireLock, loadState, releaseLock, saveState } from "../io/state.js";
 import { labelsPathFor, readLabels } from "../io/labels.js";
 import { readActivity } from "../io/activity-log.js";
 import type {
@@ -1588,5 +1588,64 @@ describe("split lanes: fetch queues, analyze drafts", () => {
     const s = loadState(statePath);
     expect(s.inbox!.map((e) => e.msg.text)).toEqual(["B"]); // A drafted, B still waiting
     expect(Object.keys(s.marks).some((k) => k.includes("朱桦"))).toBe(true); // B's mark survived
+  });
+});
+
+// END TO END, 2026-10-01: João's invite (21:00) arrives as mail Leo has already
+// READ. The fetch lane carries it to the inbox without touching actions; the
+// analyse lane settles the meeting card from it and never drafts it.
+describe("a calendar invite settles its meeting card across the lanes", () => {
+  let dir: string;
+  let statePath: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "invite-"));
+    statePath = join(dir, "loop-state.json");
+  });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const ics = [
+    "BEGIN:VCALENDAR", "METHOD:REQUEST", "BEGIN:VEVENT",
+    "DTSTART:20261001T130000Z", "DTEND:20261001T140000Z",
+    "ORGANIZER;CN=João:mailto:jpeixoto@osyx.tech", "UID:u1", "SUMMARY:NXP AGV Sync",
+    "END:VEVENT", "END:VCALENDAR",
+  ].join("\r\n");
+
+  it("fetch carries it, analyse applies it, the drafter never sees it", async () => {
+    const s0 = loadState(statePath);
+    s0.actions = [
+      {
+        id: "c1", source_message_id: "slack:D1:1000.0", action_type: "calendar", status: "suggested",
+        target: {}, reason: "r", confidence: 1, created_at: "2026-10-01T06:26:00Z",
+        headline: "Call with João on RTOS motion-loop scope",
+        params: { title: "Call with João", start: "2026-10-01T08:00:00.000Z", end: "2026-10-01T08:30:00.000Z", attendees: ["jpeixoto@osyx.tech"] },
+      } as never,
+    ];
+    saveState(statePath, s0);
+
+    const base = makeGmailMessage({ id: "GM1", threadId: "GT1", from: "jpeixoto@osyx.tech", to: "leo@taiv.tv", body: "NXP AGV Sync", labelIds: ["INBOX"] });
+    const invite = { ...base, payload: { ...base.payload!, parts: [...base.payload!.parts!, { mimeType: "text/calendar", filename: "invite.ics", body: { attachmentId: "A1" } }] } } as GmailMessage;
+    const gmail = gmailStub({ historyId: "9" }, ["GM1"], { GM1: invite });
+    (gmail as unknown as { getAttachment: unknown }).getAttachment = vi.fn(async () => new TextEncoder().encode(ics));
+
+    await runScanTick({ mode: "fetch", statePath, sources: ["gmail"], gmailClients: { "leo@taiv.tv": gmail } });
+    const queued = loadState(statePath);
+    expect(queued.actions[0]!.params.start).toBe("2026-10-01T08:00:00.000Z"); // fetch did not touch actions
+    expect(queued.inbox!.map((e) => e.msg.inviteOnly)).toEqual([true]);
+
+    const llm = vi.fn(async () => []);
+    await runScanTick({
+      mode: "analyze",
+      statePath,
+      draft: { llm: llm as never, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-10-01T10:00:00Z" } as never,
+    });
+    expect(llm).not.toHaveBeenCalled();
+    const after = loadState(statePath);
+    expect(after.actions[0]!.params).toMatchObject({
+      start: "2026-10-01T13:00:00.000Z",
+      end: "2026-10-01T14:00:00.000Z",
+      attendees: [],
+      invite_received_from: "jpeixoto@osyx.tech",
+    });
+    expect(after.inbox).toEqual([]);
   });
 });

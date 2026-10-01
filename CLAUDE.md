@@ -177,6 +177,29 @@ call, 2026-09-12.
   errors, person-pass cursors. Never transplant a snapshot field across lanes:
   the analyser holding a minutes-old copy would rewind the fetch lane's cursors.
   `mode: "all"` is the old single-lane tick, kept for tests and the CLI.
+- **The person pass wakes on PARTICIPATION and holds its cursor on a failed
+  call.** Traffic counts Leo's own lines and every group speaker bound to a
+  persona by EXACT handle (`Participation`, `personGroups`); a persona's corpus
+  adds the groups they spoke in. A failed assessment call (403, timeout) keeps
+  `personAssessed` where it was and retries, up to 3 (`personAssessFailures`),
+  then gives up loudly — it used to advance silently, which is how Trey's 9/30
+  「总算完事了」 never reached his ticket.
+- **A calendar INVITE settles the meeting card it belongs to**
+  (`core/calendar-invite.ts`). The Gmail source reads every invite's .ics, read
+  mail included; the FETCH lane only carries it to the inbox (read mail as an
+  `inviteOnly` message) and the ANALYSE lane, which owns actions, applies it in
+  the commit that settles the inbox: an open calendar card whose attendees
+  include the ORGANIZER'S exact email, within a week, and is the only such card,
+  takes the invite's time and loses its own invite line. Settled invites are
+  never drafted. 2026-10-01: João's NXP AGV Sync invite (21:00) changed nothing
+  — a card is superseded only from its own conversation, and this came by Gmail.
+- **Slack DM threads are read after their parent is consumed** (`pollChannel`,
+  `THREAD_LOOKBACK_S`). A reply never appears in conversations.history, so a
+  reschedule said in a thread was invisible. DMs look back a week for parents
+  whose `latest_reply` passed the cursor, take the new replies, and give every
+  threaded message the whole thread as `threadContext` (我 = Leo).
+- **An upcoming meeting with prep steps stays listed** (`shouldRenderCardUnit`)
+  even with nothing executable on it, until a day after it starts.
 - **Attached documents are READ, not just declared** (`core/file-text.ts`).
   Text-shaped formats only (svg, md, csv, json, source files) and no new
   dependency: a PDF or .docx parser is not worth becoming this repo's third
