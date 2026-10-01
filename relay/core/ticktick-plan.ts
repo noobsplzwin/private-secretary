@@ -422,6 +422,7 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
   const due = deadline ? dueFields(deadline, zone) : null;
   if (due) {
     payload.dueDate = due.dueDate;
+    payload.startDate = due.dueDate;
     payload.isAllDay = due.isAllDay;
     payload.timeZone = zone;
   }

@@ -330,7 +330,8 @@ function itemFor(
     // (proc/ledger-close.ts markLedgerCommitmentsDropped).
     items: [...steps, DISMISS_LINE].map((title, i) => ({ title, status: 0 as const, sortOrder: i })),
     tags: ["secretary"],
-    ...(dated ? { ...dated, timeZone: zone } : {}),
+    // startDate rides with dueDate (see TickTickTaskPayload.startDate).
+    ...(dated ? { ...dated, startDate: dated.dueDate, timeZone: zone } : {}),
   };
   return {
     // A MATTER keys by the matter, an unfiled commitment by its own wording.

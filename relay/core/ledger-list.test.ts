@@ -758,3 +758,15 @@ describe("a light row never piles up in Today", () => {
     expect(row!.payload.dueDate).toMatch(/^2026-08-20/);
   });
 });
+
+// REGRESSION 2026-10-01: start 10/5, due 9/30 on one task. update_task keeps
+// any field we omit, so startDate must be written every time dueDate is.
+describe("startDate always matches dueDate", () => {
+  it("on a real deadline and on a review date alike", () => {
+    const [dl] = derive([persona([c({ due: "2026-08-23", ...assessed(true) })])]);
+    expect(dl!.payload.startDate).toBe(dl!.payload.dueDate);
+    const [rv] = derive([persona([c({ ...assessed(true) })])]);
+    expect(rv!.payload.dueDate).toBeDefined();
+    expect(rv!.payload.startDate).toBe(rv!.payload.dueDate);
+  });
+});

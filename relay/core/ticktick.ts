@@ -46,6 +46,11 @@ export interface TickTickTaskPayload {
   // Today / Next 7 Days are date-driven, so a fabricated "due today" on every
   // urgent item makes Today meaningless within a week.
   dueDate?: string;
+  // Always written WITH dueDate, equal to it. update_task is a partial patch,
+  // so a startDate written once outlives every later dueDate: on 2026-10-01 the
+  // 4.5 core-board task read start 10/5, due 9/30 — the start left over from a
+  // review date, the due a real deadline written after it.
+  startDate?: string;
   isAllDay?: boolean;
   // The zone TickTick renders the date in. Sent with every dueDate because the
   // ACCOUNT default is whatever the app was first set up with — this one reads

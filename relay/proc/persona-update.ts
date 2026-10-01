@@ -215,7 +215,15 @@ export async function extractCommitmentsOnce(opts: {
     // nothing anywhere said why.
     const rawAssess = (raw as { assessments?: unknown[] } | null)?.assessments;
     parseDropped = (Array.isArray(rawAssess) ? rawAssess.length : 0) - assessments.length;
-  } catch {
+  } catch (e) {
+    // SAY WHY. This was a bare `catch { return null }`: once the caller stopped
+    // advancing failed cursors (2026-10-01) the log said 「assessment FAILED for
+    // wechat-trey」 and nothing about the cause, so the one thing needed to fix
+    // it — timeout? auth? an unparseable reply? — was thrown away right here.
+    const msg = (e as Error)?.message ?? String(e);
+    console.error(
+      `[persona] ${opts.displayName}: assessment call failed (corpus ${corpus.length} chars, ${existing.length} tracked) — ${msg.replace(/\s+/g, " ").slice(0, 240)}`,
+    );
     return null;
   }
 
