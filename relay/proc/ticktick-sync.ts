@@ -27,7 +27,7 @@ import {
   type SyncResult,
 } from "../core/ticktick-sync.js";
 import { buildTaskPayload, shouldRenderCardUnit, type TaskUnit } from "../core/ticktick-plan.js";
-import { diffTickTickReadback, type RemoteTask } from "../core/ticktick-readback.js";
+import { diffTickTickReadback, dismissNote, type RemoteTask } from "../core/ticktick-readback.js";
 import { groupByTask } from "../core/tasks.js";
 import { unitKey, stableHash } from "../core/unit-key.js";
 import { parseLedgerUnitKey } from "../core/ledger-list.js";
@@ -213,7 +213,18 @@ export async function syncToTickTick(
         // reopen: the task is completed in TickTick and the list wants it back —
         // status:0 on the partial patch brings the SAME task (and its single
         // calendar event) back instead of minting a twin.
-        const sent = op.reopen ? { ...op.payload, status: 0 as const } : op.payload;
+        const base = op.reopen ? { ...op.payload, status: 0 as const } : op.payload;
+        // Never write over what the OWNER wrote. An update replaces the whole
+        // checklist, so a note he typed after 「🚫 这条不该出现」 would be wiped by
+        // the next re-render of anything on the task — on 2026-10-03 he had just
+        // annotated every ticket. His version of that line is sent back as-is.
+        const remoteLine = remoteActive
+          ?.find((t) => t.id === op.ticktickId)
+          ?.items?.find((i) => dismissNote(i.title));
+        const sent =
+          remoteLine && dismissNote(remoteLine.title) && base.items
+            ? { ...base, items: base.items.map((i) => (dismissNote(i.title) !== null ? { ...i, title: remoteLine.title! } : i)) }
+            : base;
         const written = await writer.updateTask(op.ticktickId, op.projectId, sent);
         results[op.unitKey] = {
           ticktickId: op.ticktickId,
@@ -284,6 +295,8 @@ export function readbackFromTickTick(
   ticked: string[];
   closed: string[];
   dismissed: string[];
+  /** His notes after 「🚫 这条不该出现」 — see core/ticktick-readback.ts. */
+  ownerNotes: Array<{ unitKey: string; note: string; dismissed: boolean; title?: string }>;
   closedUnitKeys: string[];
   /**
    * Ledger rows the owner ticked 🚫 on — no ActionItem, so their handle is the
@@ -294,7 +307,7 @@ export function readbackFromTickTick(
   map: SyncMap;
   unitsClosed: number;
 } {
-  const { doneActionIds, doneUnitKeys, dismissedUnitKeys } = diffTickTickReadback(map, remote, coversEveryProject);
+  const { doneActionIds, doneUnitKeys, dismissedUnitKeys, ownerNotes } = diffTickTickReadback(map, remote, coversEveryProject);
   // TWO different owner gestures, kept apart because they mean different things:
   //   ticked — the owner checked an EXECUTABLE line (invite/tool; only those are
   //            tracked). Per specs/ticktick-migration.md §1 that tick is the
@@ -341,6 +354,10 @@ export function readbackFromTickTick(
     // so its only handle is the unitKey, and the caller needs it to mark the
     // underlying commitment done (core/ledger-list.ts parseLedgerUnitKey).
     closedUnitKeys: [...doneUnitKeys],
+    ownerNotes: ownerNotes.map((n) => {
+      const title = remote.find((t) => t.id === map[n.unitKey]?.ticktickId)?.title;
+      return { ...n, ...(title ? { title } : {}) };
+    }),
     dismissedLedger: dismissedUnitKeys
       .filter((k) => parseLedgerUnitKey(k) !== null)
       .map((k) => {

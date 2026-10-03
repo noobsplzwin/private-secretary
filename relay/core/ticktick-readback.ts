@@ -47,6 +47,21 @@ export interface ReadbackResult {
    * row should never have been minted. Only this one is a label.
    */
   dismissedUnitKeys: string[];
+  /**
+   * What the owner WROTE after 「🚫 这条不该出现」, ticked or not. On 2026-10-03
+   * he went through every ticket and annotated that line — the reason a row
+   * should or should not exist, in his words. That is the richest verdict this
+   * engine ever gets, and an exact-title match made it invisible: a line with
+   * anything appended no longer equalled DISMISS_LINE, so it was neither a
+   * dismissal nor read at all.
+   */
+  ownerNotes: Array<{ unitKey: string; note: string; dismissed: boolean }>;
+}
+
+/** The text the owner added after DISMISS_LINE, or null if this is not that line. */
+export function dismissNote(title: string | undefined): string | null {
+  if (!title || !title.startsWith(DISMISS_LINE)) return null;
+  return title.slice(DISMISS_LINE.length).replace(/^[\s:：,，\-—]+/, "").trim();
 }
 
 /**
@@ -94,6 +109,7 @@ export function diffTickTickReadback(
   const doneActionIds: string[] = [];
   const doneUnitKeys: string[] = [];
   const dismissedUnitKeys: string[] = [];
+  const ownerNotes: ReadbackResult["ownerNotes"] = [];
 
   for (const [unitKey, rec] of Object.entries(map)) {
     // A tombstone is a task WE completed and chose to remember (the duplicate-
@@ -115,7 +131,10 @@ export function diffTickTickReadback(
     // was often no id to record. DISMISS_LINE is a constant we control, so the
     // title is the stable handle, and it works on tasks already carrying the
     // line without waiting for a re-sync.
-    if ((task.items ?? []).some((i) => i.title === DISMISS_LINE && i.status === 1)) {
+    const line = (task.items ?? []).find((i) => dismissNote(i.title) !== null);
+    const note = dismissNote(line?.title);
+    if (note) ownerNotes.push({ unitKey, note, dismissed: line!.status === 1 });
+    if (line && line.status === 1) {
       dismissedUnitKeys.push(unitKey);
       continue;
     }
@@ -123,5 +142,5 @@ export function diffTickTickReadback(
       if (itemStatus.get(tracked.itemId) === 1) doneActionIds.push(tracked.actionId);
     }
   }
-  return { doneActionIds, doneUnitKeys, dismissedUnitKeys };
+  return { doneActionIds, doneUnitKeys, dismissedUnitKeys, ownerNotes };
 }

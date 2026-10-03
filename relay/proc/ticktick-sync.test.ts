@@ -337,3 +337,23 @@ describe("an owner close is remembered as his", () => {
     expect(r.map.ledger_x_abc!.done).toBeTypeOf("number");
   });
 });
+
+// An update replaces the whole checklist; his note on the 🚫 line must survive it.
+describe("syncToTickTick keeps the owner's 🚫 note", () => {
+  it("sends his version of the line back instead of the bare one", async () => {
+    const payload = { title: "T", kind: "CHECKLIST" as const, priority: 3 as const, items: [{ title: "step", status: 0 as const, sortOrder: 0 }, { title: "🚫 这条不该出现", status: 0 as const, sortOrder: 1 }] };
+    const sent: unknown[] = [];
+    const writer = {
+      createTask: vi.fn(),
+      updateTask: vi.fn(async (_id: string, _p: string, pl: unknown) => (sent.push(pl), { itemIds: [] })),
+      completeTasks: vi.fn(),
+    };
+    await syncToTickTick(
+      [{ unitKey: "u1", payload, executable: [] }],
+      { u1: { ticktickId: "t1", projectId: "p", hash: "stale" } },
+      writer as never,
+      [{ id: "t1", status: 0, items: [{ id: "i", status: 0, title: "🚫 这条不该出现 — 已经有人在跟了" }] }],
+    );
+    expect((sent[0] as typeof payload).items.at(-1)!.title).toBe("🚫 这条不该出现 — 已经有人在跟了");
+  });
+});

@@ -15,7 +15,7 @@
 // existing semantics so swapping the skill out for a daemon is a no-op
 // from loop-state's point of view.
 
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendShadowRecord } from "../io/shadow-log.js";
 import {
@@ -1463,7 +1463,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       const syncMap = loadSyncMap(opts.statePath);
       const { tasks: remote, complete } = await readAllActive(opts.ticktickReader, syncMap);
       const snapshot = loadState(opts.statePath);
-      const { ticked, closed, dismissed, closedUnitKeys, dismissedLedger, map, unitsClosed } = readbackFromTickTick(
+      const { ticked, closed, dismissed, closedUnitKeys, dismissedLedger, ownerNotes, map, unitsClosed } = readbackFromTickTick(
         snapshot,
         syncMap,
         remote,
@@ -1542,6 +1542,31 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             })
           : 0;
       if (ledgerDone > 0) console.log(`[ticktick] ${ledgerDone} ledger commitment(s) marked done`);
+
+      // HIS NOTES after 「🚫 这条不该出现」, kept on disk the moment they are
+      // seen — the richest verdict this engine gets, and the task line they
+      // live on can be dismissed, completed or re-rendered. Append-only, one
+      // record per (row, note) the first time it appears.
+      if (ownerNotes.length > 0) {
+        try {
+          const file = join(dirname(opts.statePath), "owner-notes.jsonl");
+          const seen = new Set(
+            existsSync(file)
+              ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => {
+                  const o = JSON.parse(l) as { unitKey: string; note: string };
+                  return `${o.unitKey}\u0000${o.note}`;
+                })
+              : [],
+          );
+          const fresh = ownerNotes.filter((n) => !seen.has(`${n.unitKey}\u0000${n.note}`));
+          if (fresh.length > 0) {
+            appendFileSync(file, fresh.map((n) => JSON.stringify({ at: new Date().toISOString(), ...n })).join("\n") + "\n");
+            console.log(`[ticktick] ${fresh.length} new owner note(s) after 🚫 recorded`);
+          }
+        } catch (e) {
+          console.error(`[ticktick] owner notes NOT recorded: ${errString(e)}`);
+        }
+      }
 
       // 🚫 on a LEDGER row: the commitment is dropped, so the next derive stops
       // listing it and the ordinary complete path takes the task away.
@@ -1708,6 +1733,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             () => undefined,
           )
         : undefined;
+      // NEVER WRITE BLIND. An update replaces a task's whole checklist; what
+      // keeps his note on the 🚫 line alive is reading the task first
+      // (syncToTickTick). With TickTick unreadable this tick — the read failing
+      // while a write might still land, as on 2026-10-03 when every call was
+      // `fetch failed` for an hour — the push waits. Recorded as an error.
+      if (opts.ticktickReader && remoteActive === undefined)
+        throw new Error("TickTick unreadable this tick — not writing blind over the owner's notes");
       const { map, report } = await syncToTickTick(rows, loadSyncMap(opts.statePath), opts.ticktickWriter, remoteActive);
       saveSyncMap(opts.statePath, map);
       if (report.created || report.updated || report.completed || report.failed) {

@@ -62,7 +62,7 @@ describe("diffTickTickReadback", () => {
 
   it("is silent when nothing was ticked", () => {
     const r = diffTickTickReadback(map, [task("tt1", [["i1", 0], ["i2", 0]]), task("tt2")]);
-    expect(r).toEqual({ doneActionIds: [], doneUnitKeys: [], dismissedUnitKeys: [] });
+    expect(r).toEqual({ doneActionIds: [], doneUnitKeys: [], dismissedUnitKeys: [], ownerNotes: [] });
   });
 
   // Our own sync replaces the checklist on every update, minting new item ids,
@@ -128,5 +128,26 @@ describe("absence only means done when we looked everywhere", () => {
       false,
     );
     expect(r.doneActionIds).toEqual(["a1"]);
+  });
+});
+
+// 2026-10-03: he annotated 「🚫 这条不该出现」 on every ticket. Matching the
+// line by exact title made a ticked, annotated line invisible.
+describe("owner notes after 🚫", () => {
+  const map = { u1: { ticktickId: "t1", projectId: "p", hash: "h" }, u2: { ticktickId: "t2", projectId: "p", hash: "h" } };
+  it("reads the note, ticked or not, and a ticked annotated line still dismisses", () => {
+    const r = diffTickTickReadback(map, [
+      { id: "t1", status: 0, items: [{ id: "i", status: 1, title: "🚫 这条不该出现 — 杜伟已经在跟了" }] },
+      { id: "t2", status: 0, items: [{ id: "j", status: 0, title: "🚫 这条不该出现：应该是 Sky benchmarking 的一部分" }] },
+    ]);
+    expect(r.dismissedUnitKeys).toEqual(["u1"]);
+    expect(r.ownerNotes).toEqual([
+      { unitKey: "u1", note: "杜伟已经在跟了", dismissed: true },
+      { unitKey: "u2", note: "应该是 Sky benchmarking 的一部分", dismissed: false },
+    ]);
+  });
+  it("the untouched line yields no note", () => {
+    const r = diffTickTickReadback(map, [{ id: "t1", status: 0, items: [{ id: "i", status: 0, title: "🚫 这条不该出现" }] }]);
+    expect(r.ownerNotes).toEqual([]);
   });
 });
