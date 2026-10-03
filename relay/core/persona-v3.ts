@@ -83,6 +83,15 @@ export interface Commitment {
   // list shows a matter at most once — its active who=me link — and a matter
   // whose open links all sit with others shows nothing while staying tracked.
   matter_id?: string;
+  /**
+   * This commitment is real and still open, but it is tracked as part of
+   * ANOTHER ticket — so it gets no row of its own. Set from the owner's word,
+   * never by a model: 2026-10-03, 「这个Ticket应该是约 Sky 10月6日到场跑
+   * Benchmarking这个大任务的一部分」 about the CPU-load benchmark report. The
+   * assess pass only rewrites status and verdict, so a re-judgement cannot
+   * bring the duplicate row back.
+   */
+  covered_by?: string;
 }
 
 // v3.1 (specs/persona-v3.md §7): a human-stated behavioral correction. Always
@@ -447,6 +456,8 @@ export function validatePersonaV3(
     }
     if (c.matter_id !== undefined && (typeof c.matter_id !== "string" || c.matter_id.trim() === ""))
       errors.push(`commitments[${i}].matter_id must be a non-empty string`);
+    if (c.covered_by !== undefined && (typeof c.covered_by !== "string" || c.covered_by.trim() === ""))
+      errors.push(`commitments[${i}].covered_by must be a non-empty string`);
   });
 
   (p.corrections ?? []).forEach((c, i) => {

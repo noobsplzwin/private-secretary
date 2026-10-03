@@ -412,7 +412,8 @@ export function deriveLedgerTasks(
       ...(p.display_name ? { name: p.display_name } : {}),
       ...(lastSpoke[p.key] !== undefined ? { spokeMs: lastSpoke[p.key] } : {}),
     };
-    const open = (p.commitments ?? []).filter((c) => c.status === "open");
+    // covered_by: tracked inside another ticket, so no row of its own.
+    const open = (p.commitments ?? []).filter((c) => c.status === "open" && !c.covered_by);
 
     // Matters first: all open links sharing a matter_id are one unit of work.
     // `all` carries the SETTLED links too — they are not rows, but they are how

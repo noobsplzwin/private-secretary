@@ -793,3 +793,11 @@ describe("heldClosedByOwner", () => {
     expect(heldClosedByOwner([row], map, {})).toHaveLength(1);
   });
 });
+
+// 2026-10-03: the CPU-load benchmark report is part of the Sky benchmarking
+// ticket. Still open, still his — but no row of its own.
+describe("covered_by", () => {
+  it("a commitment covered by another ticket gets no row, verdict or not", () => {
+    expect(derive([persona([c({ ...assessed(true), covered_by: "约 Sky 到场跑 Benchmarking" })])])).toEqual([]);
+  });
+});
