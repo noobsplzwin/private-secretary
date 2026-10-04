@@ -18,6 +18,7 @@
 // state after changing prompt or mapping logic. run-secretary.ts --once passes
 // `draft` ALONE: it produces cards that are never grouped, tiered, or synced.
 
+import { loadOwnerTickets } from "../relay/io/owner-tickets-store.js";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { describeIdentity, loadIdentity } from "../relay/io/identity.js";
@@ -316,7 +317,12 @@ async function buildDraft(): Promise<DraftDeps | undefined> {
     // image support, and it is the half that was missing entirely.
     const vision = visionEnabled && llmMode === "cli" ? { resolveImages, resolveFiles } : { resolveFiles };
     if (visionEnabled && llmMode === "cli") console.log("[notify] image vision ENABLED (cli)");
-    return { llm, resolvePersona, knownPersonaKeys: keys, projects, leoProfile: leoProfile.trim() || undefined, personas, fetchRelatedThread, ownerTimeZone, ...vision };
+    return {
+      llm, resolvePersona, knownPersonaKeys: keys, projects, leoProfile: leoProfile.trim() || undefined, personas, fetchRelatedThread, ownerTimeZone,
+      // His own TickTick tickets, re-read per call (written by the readback).
+      ownerTickets: () => loadOwnerTickets(statePath),
+      ...vision,
+    };
   } catch (e) {
     console.log(`[notify] drafting DISABLED — ${(e as Error).message.split("\n")[0]}`);
     return undefined;
@@ -759,6 +765,7 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
       personaFor: (key) => byKey.get(key) ?? null,
       fetchCorpus: (persona) => fetchCorpusFor(persona, resolvePersona),
       personaDir,
+      ownerTickets: () => loadOwnerTickets(statePath),
       // His registry labels, read per call so an edit takes effect next tick.
       matterLabels: () => {
         try {

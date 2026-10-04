@@ -225,6 +225,40 @@ describe("assess verdicts", () => {
     });
   });
 
+  // 2026-10-03: 「股权变更那个大任务的一部分」 — work already in one of HIS tickets.
+  it("a commitment placed in one of his tickets is covered, never listed; an unknown handle is inert", async () => {
+    const tickets = [{ id: "tt1", title: "股权变更", steps: ["增资一次变更"] }];
+    let sent = "";
+    await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: dir,
+        ownerTickets: () => tickets,
+        json: async (req) => {
+          sent = req.userText;
+          return {
+            commitments: [{ who: "me", what: "Sign the agreement", evidence: "please review the countersigned copy", covered_by_ticket: "T1" }],
+            updates: [],
+            assessments: [{ index: 0, needs_leo: true, next_step: "x", evidence: "please review the countersigned copy", covered_by_ticket: "T1" }],
+          };
+        },
+      }),
+    );
+    expect(sent).toContain("THE OWNER'S OWN TICKETS:\nT1. 股权变更");
+    const all = ledger() as Array<{ what?: string; covered_by?: string; assessment?: Record<string, unknown> }>;
+    expect(all[0]!.covered_by).toBe("owner-ticket:tt1 股权变更");
+    expect(all[0]!.assessment?.needs_leo).toBe(false);
+    expect(all.find((c) => c.what === "Sign the agreement")?.covered_by).toBe("owner-ticket:tt1 股权变更");
+
+    dir = personaDirWith(MINE);
+    await updatePersonaCommitments(
+      [QUEUED],
+      deps({ personaDir: dir, ownerTickets: () => tickets, reply: reply({ index: 0, needs_leo: true, evidence: "please review the countersigned copy", covered_by_ticket: "T7" }) }),
+    );
+    expect((ledger()[0] as { covered_by?: string }).covered_by).toBeUndefined();
+    expect(ledger()[0]!.assessment?.needs_leo).toBe(true);
+  });
+
   // The failure mode the whole grounding design exists for: a verdict whose
   // quote is not in the corpus is invented, and an invented needs_leo puts work
   // on the owner's list that nobody ever asked of him.
@@ -590,6 +624,48 @@ describe("a commitment this conversation never mentions still gets a verdict", (
 // (「总算完事了」), and two days later the ticket still said 「Handle BC company
 // registration」. A failed assessment call was counted as attempted, its cursor
 // advanced, and that traffic was never read again — with no log line at all.
+// 2026-10-04: Leo's 「是准备买一个」 in the RK3399 group minted 「买恒温箱」 under
+// BOTH Leo.yang and 何修池 — a group line sits in every member's corpus.
+describe("one line, one commitment", () => {
+  const LINE = "[2026-10-04 10:00] me: 是准备买一个恒温箱";
+  const extract = { commitments: [{ who: "me", what: "买恒温箱", evidence: "是准备买一个恒温箱" }], updates: [] };
+  const reasons: string[] = [];
+  const run = (dir: string) =>
+    updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: dir,
+        fetchCorpus: async () => LINE,
+        now: () => "2026-10-04T12:00:00Z",
+        reply: extract,
+        onDiscard: (r) => reasons.push(r.reason),
+      }),
+    );
+  const mine = (dir: string) =>
+    (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as { commitments: Array<{ what: string; source_line?: string }> }).commitments;
+
+  it("records the line it minted from", async () => {
+    const dir = personaDirWith([]);
+    await run(dir);
+    expect(mine(dir)[0]).toMatchObject({ what: "买恒温箱", source_line: LINE });
+  });
+
+  it("mints nothing from a line another persona already holds", async () => {
+    const dir = personaDirWith([]);
+    writeFileSync(
+      join(dir, "he-xiuchi.yaml"),
+      stringify({
+        schema: "persona-v3", key: "he-xiuchi", display_name: "何修池", handles: {},
+        commitments: [{ who: "me", what: "购买恒温箱", status: "open", source_line: LINE }],
+        provenance: { commitments: "inferred" },
+      }),
+    );
+    await run(dir);
+    expect(mine(dir)).toEqual([]);
+    expect(reasons).toContain("same-utterance");
+  });
+});
+
 describe("a FAILED assessment is not an attempted one", () => {
   it("reports the failed call separately, so its cursor can hold", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pu-fail-"));

@@ -15,6 +15,8 @@ export interface ExtractedCommitment {
   evidence?: string;
   /** §7b: links of one real-world matter share an id; the list shows a matter once. */
   matter_id?: string;
+  /** A handle from THE OWNER'S OWN TICKETS (core/owner-tickets.ts). */
+  covered_by_ticket?: string;
 }
 
 /** A status transition for an ALREADY-TRACKED commitment, by its list index. */
@@ -33,6 +35,8 @@ export interface ExtractedAssessment {
   evidence: string;
   /** The thread never mentions this one — see CommitmentAssessment.unseen. */
   unseen?: boolean;
+  /** A handle from THE OWNER'S OWN TICKETS (core/owner-tickets.ts). */
+  covered_by_ticket?: string;
 }
 
 export interface PersonaUpdateRequest {
@@ -64,6 +68,7 @@ const SCHEMA: Record<string, unknown> = {
             description:
               "ONLY when this commitment is one link of a matter already tracked (reuse that matter id from the list) or of another commitment you are returning now (invent one short kebab-case id and put it on both). Omit for standalone work.",
           },
+          covered_by_ticket: { type: "string", description: "ONLY when this work is already a step in, or the same work as, one of THE OWNER'S OWN TICKETS listed in the message: that ticket's handle (e.g. \"T2\"). Omit otherwise." },
         },
         required: ["who", "what", "evidence"],
       },
@@ -125,6 +130,7 @@ const SCHEMA: Record<string, unknown> = {
         description:
           "VERBATIM quote from the conversation showing the CURRENT state of this commitment. Ungrounded verdicts are discarded. Leave empty ONLY when unseen is true.",
       },
+      covered_by_ticket: { type: "string", description: "ONLY when this work is already a step in, or the same work as, one of THE OWNER'S OWN TICKETS listed in the message: that ticket's handle (e.g. \"T2\"). Omit otherwise." },
       unseen: {
         type: "boolean",
         description:
@@ -224,6 +230,14 @@ WHO=THEM — they owe it, and Leo is the one left waiting.
   open commitments had therefore never been judged once. An unseen verdict is a
   real answer: it says no news, which is different from saying he is off the hook.
 
+THE OWNER'S OWN TICKETS. He keeps some work in tickets he wrote himself; when
+there are any, the message lists them as T1, T2 … with their steps. When a
+commitment — new or tracked — is already a step in one of them, or is the same
+piece of work, set covered_by_ticket to that handle: the work is tracked there,
+and listing it again is the duplicate he struck with 「股权变更那个大任务的一部
+分」. Only on a clear match of the WORK; a shared topic or person is not enough.
+A covered commitment is not his to act on from this list: needs_leo is false.
+
 ${ITEM_STANDARD}`;
 
 export function buildPersonaUpdateRequest(opts: {
@@ -238,6 +252,8 @@ export function buildPersonaUpdateRequest(opts: {
    * 模具」 (2026-10-01). His label says what the matter is.
    */
   matterLabels?: Readonly<Record<string, string>>;
+  /** His own tickets, as a T-handle block (core/owner-tickets.ts ticketBlock). */
+  ownerTickets?: string;
 }): PersonaUpdateRequest {
   const tag = (id: string): string => {
     const label = opts.matterLabels?.[id];
@@ -267,6 +283,7 @@ export function buildPersonaUpdateRequest(opts: {
       : "";
   const userText =
     `CONTACT: ${opts.name}\n\nCURRENTLY TRACKED COMMITMENTS:\n${cur}\n\n` +
+    (opts.ownerTickets?.trim() ? `THE OWNER'S OWN TICKETS:\n${opts.ownerTickets.trim()}\n\n` : "") +
     `RECENT CONVERSATION (both sides, newest last):\n${opts.thread}\n\n` +
     `Extract the NEW commitments, and any STATUS CHANGES to the tracked list.${assessLine}`;
   return { system: SYSTEM, userText, toolInputSchema: SCHEMA };

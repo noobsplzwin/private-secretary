@@ -15,6 +15,7 @@
 // Per-sender fault isolation: an LLM error for one sender records an
 // error and continues with the others (same shape as source faults).
 
+import { ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
 import { randomUUID } from "node:crypto";
 import {
   validateActionItem,
@@ -88,6 +89,8 @@ export interface DraftDeps {
   // agreed time to 金小奇). Absent = single-conversation behavior.
   personas?: Persona[];
   fetchRelatedThread?: (p: Persona) => Promise<string | null>;
+  /** His own TickTick tickets, read per call (core/owner-tickets.ts). */
+  ownerTickets?: () => readonly OwnerTicket[];
   now?: () => string;
 }
 
@@ -291,6 +294,7 @@ export async function draftActions(
         if (a.kind !== "image" && !readNames.has(a.name)) unreadable.push(`${a.name}（附件，未读取）`);
       }
     }
+    const tickets = deps.ownerTickets?.() ?? [];
     const req = buildDraftRequest({
       persona,
       messages: batch,
@@ -307,6 +311,7 @@ export async function draftActions(
       relatedContext,
       ...(unreadable.length > 0 ? { unreadableAttachments: unreadable } : {}),
       ...(readFiles.length > 0 ? { attachedFiles: readFiles } : {}),
+      ...(tickets.length > 0 ? { ownerTickets: ticketBlock(tickets) } : {}),
       now: nowIso,
       nowLocal,
     });
@@ -355,6 +360,13 @@ export async function draftActions(
         senderErrors.push(
           `dropped "${s.headline}": decode failed (${unreadable.join("; ")}), so this card only asks Leo to read what the engine could not`,
         );
+        continue;
+      }
+      // ALREADY IN ONE OF HIS TICKETS → no card. Reported, not silent: the
+      // handle names the ticket, and an unknown handle covers nothing.
+      const ticket = ticketByHandle(tickets, (s.params as Record<string, unknown> | undefined)?.covered_by_ticket);
+      if (ticket) {
+        senderErrors.push(`dropped "${s.headline}": already a step of his own ticket 「${ticket.title}」`);
         continue;
       }
       const target = s.target ?? {};

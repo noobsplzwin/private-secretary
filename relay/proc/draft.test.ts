@@ -138,6 +138,24 @@ describe("draftActions orchestrator", () => {
     expect(r.actions).toHaveLength(1); // draft still produced
   });
 
+  // 2026-10-04: 「审阅投资协议并签署承诺函」 was drafted an hour after that step
+  // went into his own 「股权变更」 ticket.
+  it("a task the model places in one of HIS tickets is not made, and says why", async () => {
+    let seenText = "";
+    const llm: LlmCaller = async (req) => {
+      seenText = req.userText;
+      return [
+        { action_type: "task", target: {}, reason: "sign", confidence: 0.9, headline: "审阅投资协议", params: { title: "审阅投资协议", covered_by_ticket: "T1" } } as DraftedAction,
+        { action_type: "task", target: {}, reason: "x", confidence: 0.9, headline: "别的事", params: { title: "别的事", covered_by_ticket: "T9" } } as DraftedAction,
+      ];
+    };
+    const tickets = [{ id: "tt1", title: "股权变更", steps: ["增资一次变更"] }];
+    const r = await draftActions([msg()], { ...deps(llm), ownerTickets: () => tickets });
+    expect(seenText).toContain("T1. 股权变更");
+    expect(r.actions.map((a) => a.params.title)).toEqual(["别的事"]); // an unknown handle covers nothing
+    expect(r.dropped.flatMap((d) => d.errors).join()).toContain("股权变更");
+  });
+
   it("turns a valid suggested task into an ActionItem with id + context", async () => {
     const llm: LlmCaller = async () => [
       {

@@ -108,6 +108,19 @@ The layout is discoverable from the tree; what is NOT discoverable:
   next review instead of piling up overdue in Today; his own live work does
   not roll. Nothing to time it from → no date, said in the note. Anything that
   reasons about DEADLINES reads `DesiredTask.deadline`, never `dueDate`.
+- **His OWN tickets are read, and work inside them gets no row of its own**
+  (`core/owner-tickets.ts`). The readback saves his untagged, untracked Work
+  tasks to `state/owner-tickets.json` (complete reads only); the drafter and
+  the person pass see them as T1, T2 …, and a handle the model returns is
+  mapped back by code — an unknown handle covers nothing. A covered card is
+  dropped with its reason; a covered commitment stays open with `covered_by`.
+  2026-10-03 he struck two steps of his own 「股权变更」 ticket as rows.
+- **One corpus line mints one commitment** (`source_line`). A group line sits
+  in every member's corpus, so the same utterance used to mint once per person
+  (「买恒温箱」 under Leo.yang and 何修池). Only dated, attributed lines count.
+- **A card with no stated deadline carries a review date** (made +3 days,
+  「回看日…不是截止」) and every row carries his time zone — undated cards landed
+  in TickTick's account default, America/New_York.
 - `state/shadow-log.jsonl` is append-only: one ShadowRecord per round, for
   replay/parity validation. Never rewrite it.
 

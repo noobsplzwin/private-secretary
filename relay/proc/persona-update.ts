@@ -5,13 +5,16 @@
 // evidence required). This is the incremental update the roadmap calls Phase B;
 // it is NOT the forbidden full bootstrap.
 
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Persona } from "../core/types.js";
 import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { evidenceGrounded } from "../core/quote-check.js";
 import { isLlmUnavailable } from "../core/inbox.js";
-import { capCorpus, indexCorpus, mintable, theirOwnMove } from "../core/corpus-lines.js";
+import { coveredByTicket, ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
+import { capCorpus, indexCorpus, lineOf, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
   type ExtractedCommitment,
@@ -40,6 +43,8 @@ export interface PersonaUpdateDeps {
   personaDir: string;
   /** The owner's matter labels by id, so the model files by scope, not slug. */
   matterLabels?: () => Readonly<Record<string, string>>;
+  /** His own TickTick tickets, read per call (core/owner-tickets.ts). */
+  ownerTickets?: () => readonly OwnerTicket[];
   /** Dates the ASSESS verdicts. */
   now?: () => string;
   /** Where a discarded extraction/verdict is recorded. See extractCommitmentsOnce. */
@@ -47,7 +52,7 @@ export interface PersonaUpdateDeps {
     at: string;
     persona: string;
     kind: "commitment" | "transition" | "assessment";
-    reason: "ungrounded" | "incoherent" | "their-own-move";
+    reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance";
     evidence: string;
     index?: number;
   }) => void;
@@ -111,6 +116,9 @@ export async function updatePersonaCommitments(
   };
   let discarded = 0;
   let assessed = 0;
+  // Which corpus lines already minted a commitment, and for whom — so a group
+  // line read in several members' corpora mints once (source_line).
+  const claimed = claimedLines(deps.personaDir);
 
   for (const entry of queue) {
     const persona = deps.personaFor(entry.personaKey);
@@ -144,6 +152,9 @@ export async function updatePersonaCommitments(
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.onDiscard ? { onDiscard: deps.onDiscard } : {}),
       ...(deps.matterLabels ? { matterLabels: deps.matterLabels() } : {}),
+      ...(deps.ownerTickets ? { ownerTickets: deps.ownerTickets() } : {}),
+      personaKey: entry.personaKey,
+      claimedLines: claimed,
     });
     if (!r) {
       (isLlmUnavailable(lastError) ? unavailable : failed).push(entry);
@@ -165,6 +176,28 @@ export async function updatePersonaCommitments(
   return { updated, discarded, assessed, attempted, failed, unavailable, unreadable };
 }
 
+/** source_line → persona key, over every OPEN commitment on file. Total: unreadable files are skipped. */
+function claimedLines(personaDir: string): Map<string, string> {
+  const out = new Map<string, string>();
+  let files: string[] = [];
+  try {
+    files = readdirSync(personaDir).filter((f) => f.endsWith(".yaml"));
+  } catch {
+    return out;
+  }
+  for (const f of files) {
+    try {
+      const p = readPersonaV3File(join(personaDir, f));
+      for (const c of p.commitments ?? []) {
+        if (c.status === "open" && c.source_line) out.set(c.source_line, p.key);
+      }
+    } catch {
+      // one broken file must not stop the pass
+    }
+  }
+  return out;
+}
+
 
 /**
  * Extract-and-merge for ONE persona: new commitments + status transitions from
@@ -181,6 +214,15 @@ export async function extractCommitmentsOnce(opts: {
   corpus: string;
   json: PersonaUpdateJsonCaller;
   matterLabels?: Readonly<Record<string, string>>;
+  /** His own tickets; a commitment the model places in one is covered, not listed. */
+  ownerTickets?: readonly OwnerTicket[];
+  /**
+   * Lines that already minted a commitment, by persona — updated in place as
+   * this call mints. With `personaKey`, a line another persona already holds
+   * mints nothing here. Absent = no cross-persona check (one-off scripts).
+   */
+  claimedLines?: Map<string, string>;
+  personaKey?: string;
   /** Dates each verdict, so a stale needs_leo cannot keep an item alive. */
   now?: () => string;
   /**
@@ -195,7 +237,7 @@ export async function extractCommitmentsOnce(opts: {
     at: string;
     persona: string;
     kind: "commitment" | "transition" | "assessment";
-    reason: "ungrounded" | "incoherent" | "their-own-move";
+    reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance";
     evidence: string;
     index?: number;
   }) => void;
@@ -224,6 +266,7 @@ export async function extractCommitmentsOnce(opts: {
         existing,
         thread: corpus,
         ...(opts.matterLabels ? { matterLabels: opts.matterLabels } : {}),
+        ...(opts.ownerTickets?.length ? { ownerTickets: ticketBlock(opts.ownerTickets) } : {}),
       }),
     );
     extracted = parseExtractedCommitments(raw);
@@ -254,7 +297,7 @@ export async function extractCommitmentsOnce(opts: {
   const nowIso = (opts.now ?? (() => new Date().toISOString()))();
   const note = (
     kind: "commitment" | "transition" | "assessment",
-    reason: "ungrounded" | "incoherent" | "their-own-move",
+    reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance",
     evidence: string,
     index?: number,
   ): void =>
@@ -323,6 +366,20 @@ export async function extractCommitmentsOnce(opts: {
     gated++;
     return false;
   });
+  // ONE LINE, ONE COMMITMENT. Only a dated, attributed line counts — a Gmail
+  // body line or a stitched quote resolves to nothing and is never deduped.
+  const sourceOf = (e: { evidence?: string }): string | undefined => {
+    const line = lineOf(lines, e.evidence ?? "");
+    return line && line.speaker !== "unknown" ? line.text.trim() : undefined;
+  };
+  const minted = fresh.filter((e) => {
+    const src = sourceOf(e);
+    const holder = src ? opts.claimedLines?.get(src) : undefined;
+    if (!holder || holder === opts.personaKey) return true;
+    note("commitment", "same-utterance", e.evidence ?? "");
+    gated++;
+    return false;
+  });
 
   // Status transitions FIRST, on a copy. The ledger used to be append-only —
   // dedup-by-wording meant a conversation showing a tracked commitment FINISHED
@@ -347,6 +404,15 @@ export async function extractCommitmentsOnce(opts: {
     // this need Leo's own time. On a commitment they owe, the answer is yes
     // exactly when the chase is his (prompt: WHO=THEM).
     if (target.status !== "open") continue;
+    // In one of HIS tickets → tracked there; never listed again from here. The
+    // handle is checked against the real tickets, so an invented one is inert.
+    const ticket = ticketByHandle(opts.ownerTickets ?? [], a.covered_by_ticket);
+    if (ticket) {
+      target.covered_by = coveredByTicket(ticket);
+      target.assessment = { needs_leo: false, evidence: a.unseen ? "" : a.evidence, at };
+      assessed++;
+      continue;
+    }
     target.assessment = {
       needs_leo: a.needs_leo,
       ...(a.blocked_on ? { blocked_on: a.blocked_on } : {}),
@@ -361,22 +427,24 @@ export async function extractCommitmentsOnce(opts: {
     assessed++;
   }
 
-  if (fresh.length === 0 && statusChanged === 0 && assessed === 0)
+  if (minted.length === 0 && statusChanged === 0 && assessed === 0)
     return { added: 0, statusChanged: 0, discarded, assessed: 0 };
 
   const merged: Commitment[] = [
     ...withStatus,
-    ...fresh.map((e) => ({
+    ...minted.map((e) => ({
       who: e.who,
       what: e.what,
       status: e.status ?? "open",
       ...(e.due ? { due: e.due } : {}),
       ...(e.matter_id ? { matter_id: e.matter_id.trim() } : {}),
+      ...((t) => (t ? { covered_by: coveredByTicket(t) } : {}))(ticketByHandle(opts.ownerTickets ?? [], e.covered_by_ticket)),
+      ...((src) => (src ? { source_line: src } : {}))(sourceOf(e)),
     })),
   ];
   const evidence =
     [
-    ...fresh.map((e) => e.evidence),
+    ...minted.map((e) => e.evidence),
     ...okTransitions.map((u) => u.evidence),
     ...okAssessments.map((a) => a.evidence),
   ]
@@ -392,5 +460,12 @@ export async function extractCommitmentsOnce(opts: {
   } catch {
     return { added: 0, statusChanged: 0, discarded, assessed: 0 };
   }
-  return { added: fresh.length, statusChanged, discarded, assessed };
+  // Claimed only once written, so a later persona in this pass sees it.
+  if (opts.claimedLines && opts.personaKey) {
+    for (const e of minted) {
+      const src = sourceOf(e);
+      if (src) opts.claimedLines.set(src, opts.personaKey);
+    }
+  }
+  return { added: minted.length, statusChanged, discarded, assessed };
 }

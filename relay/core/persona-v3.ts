@@ -85,13 +85,21 @@ export interface Commitment {
   matter_id?: string;
   /**
    * This commitment is real and still open, but it is tracked as part of
-   * ANOTHER ticket — so it gets no row of its own. Set from the owner's word,
-   * never by a model: 2026-10-03, 「这个Ticket应该是约 Sky 10月6日到场跑
-   * Benchmarking这个大任务的一部分」 about the CPU-load benchmark report. The
-   * assess pass only rewrites status and verdict, so a re-judgement cannot
-   * bring the duplicate row back.
+   * ANOTHER ticket — so it gets no row of its own. Set from the owner's word —
+   * 2026-10-03, 「这个Ticket应该是约 Sky 10月6日到场跑Benchmarking这个大任务的一
+   * 部分」 about the CPU-load benchmark report — or by the person pass when the
+   * model places the work in one of his OWN tickets under a handle that code
+   * maps back to a real ticket (core/owner-tickets.ts). Nothing else clears it.
    */
   covered_by?: string;
+  /**
+   * The corpus line this commitment was minted from — date, speaker, text. A
+   * group line sits in the corpus of EVERY member's persona, so before this the
+   * same utterance minted once per person: 2026-10-04, Leo's 「是准备买一个」 in
+   * the RK3399 group became 「买恒温箱」 under both Leo.yang and 何修池. One line,
+   * one commitment (proc/persona-update.ts).
+   */
+  source_line?: string;
 }
 
 // v3.1 (specs/persona-v3.md §7): a human-stated behavioral correction. Always
@@ -458,6 +466,8 @@ export function validatePersonaV3(
       errors.push(`commitments[${i}].matter_id must be a non-empty string`);
     if (c.covered_by !== undefined && (typeof c.covered_by !== "string" || c.covered_by.trim() === ""))
       errors.push(`commitments[${i}].covered_by must be a non-empty string`);
+    if (c.source_line !== undefined && (typeof c.source_line !== "string" || c.source_line.trim() === ""))
+      errors.push(`commitments[${i}].source_line must be a non-empty string`);
   });
 
   (p.corrections ?? []).forEach((c, i) => {

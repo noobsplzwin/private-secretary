@@ -58,6 +58,8 @@ import type { SyncMap } from "../core/ticktick-sync.js";
 import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
+import { saveOwnerTickets } from "../io/owner-tickets-store.js";
+import { ownerTicketsFrom } from "../core/owner-tickets.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
 import { ownerLastSpokeInChannels, scanSlackDirect } from "../sources/slack-direct.js";
@@ -1496,6 +1498,15 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         remote,
         complete,
       );
+      // His own tickets, for the drafter and the person pass (core/owner-tickets.ts).
+      // Only from a COMPLETE read: a partial one would drop tickets and uncover work.
+      if (complete) {
+        try {
+          saveOwnerTickets(opts.statePath, ownerTicketsFrom(remote, syncMap));
+        } catch (e) {
+          console.error(`[ticktick] owner tickets not saved: ${errString(e)}`);
+        }
+      }
 
       // TICK-TO-EXECUTE (specs/ticktick-migration.md §1): a ticked EXECUTABLE
       // line — the labelled invite/tool lines are the only tracked ones — is the

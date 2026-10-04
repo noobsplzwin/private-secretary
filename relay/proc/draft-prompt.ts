@@ -78,7 +78,7 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           params: {
             type: "object",
             description:
-              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?, answered_closes?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
+              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?, answered_closes?, covered_by_ticket?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
           },
           draft: { type: "string", description: "the message text for a reply" },
           headline: {
@@ -159,7 +159,11 @@ ACTION TYPES (a sender's batch may yield several, or none):
   "https://www.google.com/maps/search/?api=1&query=湘湖地铁站" — so the card carries
   a tappable map. ALWAYS requires Leo's one-click approval before it's created.
 - task: track a to-do Leo OWNS or must follow up on. params {title, due?,
-  answered_closes?}.
+  answered_closes?, covered_by_ticket?}.
+  covered_by_ticket: when THE OWNER'S OWN TICKETS are listed in the message and
+  this task is already a step in one of them, or the same work, its handle
+  (e.g. "T2"). The card is then not made — the work is tracked there. Only on a
+  clear match of the WORK, never a shared topic or person.
   answered_closes: true when ANSWERING THE PERSON IS THE WHOLE JOB — the card is
   finished the moment Leo writes back, with no work left over. 「回复 Leila 何时
   回深圳」, 「回复茉莉是否需要装空调」, 「回复郑建明沉香购买地址」 are all true:
@@ -460,6 +464,8 @@ export function buildDraftRequest(opts: {
   unreadableAttachments?: string[];
   /** Attached documents that WERE read. Their contents are part of the message. */
   attachedFiles?: Array<{ name: string; text: string }>;
+  /** His own tickets, as a T-handle block (core/owner-tickets.ts ticketBlock). */
+  ownerTickets?: string;
 }): DraftRequest {
   const personaBlock = describePersona(opts.persona);
   const msgBlock = opts.messages.map(describeMessage).join("\n\n");
@@ -511,7 +517,12 @@ inventing one.\n${opts.knownPeople?.length ? opts.knownPeople.join("\n") : opts.
     opts.attachedFiles && opts.attachedFiles.length > 0
       ? `\n\nATTACHED FILES — these arrived in the conversation and their contents are below. Treat them as part of what the sender said, not as something for Leo to go open.\n${opts.attachedFiles.map((f) => `--- ${f.name} ---\n${f.text}`).join("\n\n")}`
       : "";
-  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}${unreadableBlock}${filesBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
+  // His own tickets: work already tracked in tasks he wrote himself. A step of
+  // one drafted as its own card is the duplicate he struck 2026-10-03.
+  const ticketsBlock = opts.ownerTickets?.trim()
+    ? `\n\nTHE OWNER'S OWN TICKETS — work he already tracks himself (see covered_by_ticket):\n${opts.ownerTickets.trim()}`
+    : "";
+  const userText = `${timeLine}${personaBlock}${projectBlock}${relatedBlock}${ticketsBlock}${unreadableBlock}${filesBlock}\n\nNEW MESSAGES FROM THIS SENDER:\n${msgBlock}\n\nDecide the action items and call ${TOOL_NAME}.`;
   // The connected MCP tools the model may route a tool card to.
   const toolHint =
     opts.toolKeys && opts.toolKeys.length > 0
