@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageInDays, capCorpus, closedLater, indexCorpus, isHedged, lineOf, mintable } from "./corpus-lines.js";
+import { ageInDays, capCorpus, closedLater, indexCorpus, isHedged, lineOf, mintable, theirOwnMove } from "./corpus-lines.js";
 
 const NOW = Date.parse("2026-08-23T12:00:00Z");
 const CORPUS = [
@@ -160,5 +160,29 @@ describe("capCorpus (a 385k corpus timed out the assess pass entirely)", () => {
     const capped = capCorpus(plain, 1_000);
     expect(capped.length).toBeLessThanOrEqual(1_000 + 40);
     expect(capped).toContain("line 499");
+  });
+});
+
+// 2026-10-03: six dismissed rows stood on the contact announcing their own move.
+describe("theirOwnMove", () => {
+  const L = indexCorpus(
+    [
+      "[2026-09-24 10:00] David: Let me talk with more customers and Renesas",
+      "[2026-09-24 10:01] David: I'll send you the contract tonight",
+      "[2026-09-28 09:00] Leo.yang: Jordan非常强硬要求",
+      "[2026-09-28 09:01] Leo.yang: 我再和他argue一下",
+      "[2026-09-28 09:02] Leo.yang: 我们明天一起去见客户",
+      "[2026-09-28 09:03] me: Let me check the log",
+    ].join("\n"),
+  );
+  it("their first-person next step, asking nothing of Leo", () => {
+    expect(theirOwnMove(L, "Let me talk with more customers and Renesas")).toBe(true);
+    expect(theirOwnMove(L, "Jordan非常强硬要求 / 我再和他argue一下")).toBe(true);
+  });
+  it("not when the line speaks to Leo, says 我们, or is Leo's own", () => {
+    expect(theirOwnMove(L, "I'll send you the contract tonight")).toBe(false);
+    expect(theirOwnMove(L, "我们明天一起去见客户")).toBe(false);
+    expect(theirOwnMove(L, "Let me check the log")).toBe(false);
+    expect(theirOwnMove(L, "not in the corpus at all")).toBe(false);
   });
 });

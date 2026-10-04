@@ -10,7 +10,7 @@ import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { evidenceGrounded } from "../core/quote-check.js";
-import { capCorpus, indexCorpus, mintable } from "../core/corpus-lines.js";
+import { capCorpus, indexCorpus, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
   type ExtractedCommitment,
@@ -46,7 +46,7 @@ export interface PersonaUpdateDeps {
     at: string;
     persona: string;
     kind: "commitment" | "transition" | "assessment";
-    reason: "ungrounded" | "incoherent";
+    reason: "ungrounded" | "incoherent" | "their-own-move";
     evidence: string;
     index?: number;
   }) => void;
@@ -175,7 +175,7 @@ export async function extractCommitmentsOnce(opts: {
     at: string;
     persona: string;
     kind: "commitment" | "transition" | "assessment";
-    reason: "ungrounded" | "incoherent";
+    reason: "ungrounded" | "incoherent" | "their-own-move";
     evidence: string;
     index?: number;
   }) => void;
@@ -234,7 +234,7 @@ export async function extractCommitmentsOnce(opts: {
   const nowIso = (opts.now ?? (() => new Date().toISOString()))();
   const note = (
     kind: "commitment" | "transition" | "assessment",
-    reason: "ungrounded" | "incoherent",
+    reason: "ungrounded" | "incoherent" | "their-own-move",
     evidence: string,
     index?: number,
   ): void =>
@@ -264,11 +264,25 @@ export async function extractCommitmentsOnce(opts: {
   // project is killing me") as grounds for the owner being off the hook.
   // A verdict like this is discarded whole: the commitment keeps whatever it
   // had, which is the safe direction.
-  const okAssessments = grounded(assessments, "assessment").filter((a) => {
-    if (!(a.needs_leo === false && a.blocked_on === "leo")) return true;
-    note("assessment", "incoherent", a.evidence ?? "", a.index);
-    return false;
-  });
+  const corpusLines = indexCorpus(corpus);
+  const okAssessments = grounded(assessments, "assessment")
+    .filter((a) => {
+      if (!(a.needs_leo === false && a.blocked_on === "leo")) return true;
+      note("assessment", "incoherent", a.evidence ?? "", a.index);
+      return false;
+    })
+    // THEIR OWN MOVE IS NOT HIS TO-DO. 2026-10-03 the owner dismissed 15 rows;
+    // six stood on the contact announcing their OWN next step — 「Let me talk
+    // with more customers and Renesas」, 「I can try」, 「我再和他argue一下」,
+    // 「我们下周去和临港汇报一下」. The quote is the verdict's whole case, and it
+    // says the other side is moving. Kept as a verdict, turned the right way
+    // round: open, tracked, sitting with them.
+    .map((a) => {
+      if (!a.needs_leo || !theirOwnMove(corpusLines, a.evidence ?? "")) return a;
+      note("assessment", "their-own-move", a.evidence ?? "", a.index);
+      const { next_step: _drop, ...rest } = a;
+      return { ...rest, needs_leo: false, blocked_on: "them" as const };
+    });
   const discarded =
     extracted.length -
     okExtracted.length +

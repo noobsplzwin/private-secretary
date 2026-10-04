@@ -158,6 +158,25 @@ export function mintable(
   return true;
 }
 
+/**
+ * Does this quote show the CONTACT announcing their own next step — and ask
+ * nothing of Leo? Read per segment (verdict quotes stitch lines with " / "):
+ * true when some segment opens in the first person and none speaks to him.
+ * Only on a positive reading of THEIR line; anything unresolvable is false.
+ */
+export function theirOwnMove(lines: readonly CorpusLine[], quote: string): boolean {
+  const segs = quote.split(/\s+\/\s+/).map((s) => s.trim()).filter(Boolean);
+  const theirs = segs.filter((s) => lineOf(lines, s)?.speaker === "them");
+  if (theirs.length === 0) return false;
+  if (segs.some((s) => ADDRESSES_LEO.test(s))) return false;
+  return theirs.some((s) => SELF_MOVE.test(s));
+}
+
+// Singular only. 「我们」/ let's / we'll often include Leo (「我们明天一起去见客
+// 户」), and a missed dismissal costs less than a dropped real to-do.
+const SELF_MOVE = /^(?:i\b|im\b|i'm\b|i'll\b|i've\b|let me\b|我(?!们))/i;
+const ADDRESSES_LEO = /\byou\b|\byour\b|\bleo\b|你|您|惠哲|leo总/i;
+
 // The assess pass reads a contact's whole recent corpus, and for a chatty
 // contact that is enormous: measured 2026-09-13, michael-dobosz came to 385k
 // characters and wechat-sandro-pinto to 427k. Both timed out at the 180s
