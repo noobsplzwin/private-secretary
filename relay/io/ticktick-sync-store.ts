@@ -55,6 +55,8 @@ export function loadSyncMap(statePath: string): SyncMap {
       // Missing here from 2026-10-01 to 10-04: every owner close lost its mark
       // on the next read, so heldClosedByOwner (core/ledger-list.ts) never held.
       ...(r.closedBy === "owner" ? { closedBy: "owner" as const } : {}),
+      ...(typeof r.sentDue === "string" ? { sentDue: r.sentDue } : {}),
+      ...(r.ownerDated === true ? { ownerDated: true as const } : {}),
       ...(Array.isArray(r.items)
         ? {
             items: r.items.filter(

@@ -39,7 +39,7 @@ describe("loadSyncMap", () => {
 
   it("survives a save/load round trip unchanged", () => {
     const map = {
-      row1: { ticktickId: "tt1", projectId: "p", hash: "h", title: "t", done: 123, closedBy: "owner" as const },
+      row1: { ticktickId: "tt1", projectId: "p", hash: "h", title: "t", done: 123, closedBy: "owner" as const, sentDue: "2026-10-07T00:00:00+08:00", ownerDated: true as const },
       row2: { ticktickId: "tt2", projectId: "p", hash: "h2", items: [{ itemId: "i", actionId: "a" }] },
     };
     saveSyncMap(statePath, map);

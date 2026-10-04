@@ -383,3 +383,52 @@ describe("syncToTickTick keeps the owner's 🚫 note", () => {
     expect((sent[0] as typeof payload).items.at(-1)!.title).toBe("🚫 这条不该出现 — 已经有人在跟了");
   });
 });
+
+// Owner, 2026-10-05: 「Due Date和我哪天计划干这个事情是两个日期，Work需要展示的是
+// 我计划什么时间干这个Task」 — and every update re-sent the engine's date.
+describe("the date he picked is never overwritten", () => {
+  const payload = {
+    title: "T", kind: "CHECKLIST" as const, priority: 3 as const, items: [],
+    dueDate: "2026-10-07T00:00:00+08:00", startDate: "2026-10-07T00:00:00+08:00", isAllDay: true, timeZone: "Asia/Shanghai",
+  };
+  const run = async (rec: Record<string, unknown>, remoteDue?: string) => {
+    const sent: Array<Record<string, unknown>> = [];
+    const writer = {
+      createTask: vi.fn(),
+      updateTask: vi.fn(async (_id: string, _p: string, pl: Record<string, unknown>) => (sent.push(pl), { itemIds: [] })),
+      completeTasks: vi.fn(),
+    };
+    const r = await syncToTickTick(
+      [{ unitKey: "u1", payload, executable: [] }],
+      { u1: { ticktickId: "t1", projectId: "p", hash: "stale", ...rec } },
+      writer as never,
+      [{ id: "t1", status: 0, items: [], ...(remoteDue ? { dueDate: remoteDue } : {}) }],
+    );
+    return { sent: sent[0]!, rec: r.map.u1! };
+  };
+
+  it("he moved it: the update carries no date, and the task is his from now on", async () => {
+    const { sent, rec } = await run({ sentDue: "2026-10-07T00:00:00+08:00" }, "2026-10-09T00:00:00+0800");
+    expect(sent).not.toHaveProperty("dueDate");
+    expect(sent).not.toHaveProperty("startDate");
+    expect(rec.ownerDated).toBe(true);
+  });
+  it("he cleared it: same", async () => {
+    const { sent } = await run({ sentDue: "2026-10-07T00:00:00+08:00" });
+    expect(sent).not.toHaveProperty("dueDate");
+  });
+  it("still the date the engine wrote: the engine keeps writing it", async () => {
+    const { sent, rec } = await run({ sentDue: "2026-10-07T00:00:00+0800" }, "2026-10-07T00:00:00+0800");
+    expect(sent.dueDate).toBe("2026-10-07T00:00:00+08:00");
+    expect(rec.sentDue).toBe("2026-10-07T00:00:00+08:00");
+    expect(rec.ownerDated).toBeUndefined();
+  });
+  it("a record from before this knew nothing: today's date becomes its baseline", async () => {
+    const { rec } = await run({ hash: "x" }, "2026-10-09T00:00:00+0800");
+    expect(rec.sentDue).toBeDefined();
+  });
+  it("once his, always his — even when the dates line up again", async () => {
+    const { sent } = await run({ sentDue: "2026-10-07T00:00:00+08:00", ownerDated: true }, "2026-10-07T00:00:00+0800");
+    expect(sent).not.toHaveProperty("dueDate");
+  });
+});

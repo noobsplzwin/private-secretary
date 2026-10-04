@@ -127,6 +127,11 @@ The layout is discoverable from the tree; what is NOT discoverable:
   quote kept, commitments as `done`; no label is written — it is the engine's
   reading, not his verdict. 2026-10-04 he struck two rows for work he had
   already done in the very chats they came from.
+- **The date on a task is the day HE plans to do it; once he moves it, the
+  engine never writes it again** (owner, 2026-10-05: 「Due Date和我哪天计划干这个
+  事情是两个日期」). The map keeps the date the engine last wrote (`sentDue`); a
+  remote date that differs — or none — marks the task `ownerDated`, and every
+  later update leaves the date fields out. Real deadlines live in the note.
 - **A card with no stated deadline carries a review date** (made +3 days,
   「回看日…不是截止」) and every row carries his time zone — undated cards landed
   in TickTick's account default, America/New_York.

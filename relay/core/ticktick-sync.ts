@@ -45,6 +45,16 @@ export interface SyncRecord {
    * owner close is held against resurrection — see heldClosedByOwner.
    */
   closedBy?: "owner";
+  /**
+   * The dueDate the engine last WROTE. TickTick's date is the day he PLANS to
+   * do the work (owner, 2026-10-05: 「Due Date和我哪天计划干这个事情是两个日期，
+   * Work需要展示的是我计划什么时间干这个Task」), and every update used to
+   * re-send the engine's review date over the day he had moved it to. A remote
+   * date that differs from this one is his.
+   */
+  sentDue?: string;
+  /** He set this task's date himself; the engine never writes its date again. */
+  ownerDated?: true;
 }
 
 export type SyncMap = Record<string, SyncRecord>;
@@ -235,6 +245,8 @@ export interface SyncResult {
   ticktickId: string;
   projectId: string;
   items?: TrackedApproval[];
+  sentDue?: string;
+  ownerDated?: true;
 }
 
 /** The map after `ops` have been applied. Completed units leave the map. */

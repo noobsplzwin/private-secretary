@@ -143,7 +143,7 @@ export function createTickTickReader(opts: TickTickToolOptions): TickTickReader 
 }
 
 function parseRemoteTask(t: unknown): RemoteTask[] {
-  const o = t as { id?: unknown; status?: unknown; items?: unknown; projectId?: unknown; title?: unknown; tags?: unknown; desc?: unknown };
+  const o = t as { id?: unknown; status?: unknown; items?: unknown; projectId?: unknown; title?: unknown; tags?: unknown; desc?: unknown; dueDate?: unknown };
   if (typeof o.id !== "string") return [];
   const items = Array.isArray(o.items)
     ? o.items.flatMap((i) => {
@@ -165,6 +165,7 @@ function parseRemoteTask(t: unknown): RemoteTask[] {
     ...(typeof o.projectId === "string" ? { projectId: o.projectId } : {}),
     ...(typeof o.title === "string" ? { title: o.title } : {}),
     ...(typeof o.desc === "string" && o.desc ? { desc: o.desc } : {}),
+    ...(typeof o.dueDate === "string" && o.dueDate ? { dueDate: o.dueDate } : {}),
     ...(Array.isArray(o.tags) ? { tags: o.tags.filter((x): x is string => typeof x === "string") } : {}),
   }];
 }

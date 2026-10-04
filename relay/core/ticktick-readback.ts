@@ -35,6 +35,8 @@ export interface RemoteTask {
   tags?: readonly string[];
   /** The description, so 🚫 can see which links the row showed (ledger-list ownLinesShown). */
   desc?: string;
+  /** The date shown on the task — the day he plans it once he has moved it. */
+  dueDate?: string;
 }
 
 export interface ReadbackResult {

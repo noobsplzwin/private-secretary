@@ -24,6 +24,7 @@ import {
   type DesiredTask,
   type SyncMap,
   type SyncOp,
+  type SyncRecord,
   type SyncResult,
 } from "../core/ticktick-sync.js";
 import { buildTaskPayload, shouldRenderCardUnit, type TaskUnit } from "../core/ticktick-plan.js";
@@ -215,6 +216,7 @@ export async function syncToTickTick(
           ticktickId: created.id,
           projectId: created.projectId,
           items: trackedFrom(op.unitKey, created.itemIds),
+          ...(op.payload.dueDate ? { sentDue: op.payload.dueDate } : {}),
         };
       } else if (op.kind === "update") {
         // reopen: the task is completed in TickTick and the list wants it back —
@@ -228,15 +230,23 @@ export async function syncToTickTick(
         const remoteLine = remoteActive
           ?.find((t) => t.id === op.ticktickId)
           ?.items?.find((i) => dismissNote(i.title));
-        const sent =
+        const withNote =
           remoteLine && dismissNote(remoteLine.title) && base.items
             ? { ...base, items: base.items.map((i) => (dismissNote(i.title) !== null ? { ...i, title: remoteLine.title! } : i)) }
             : base;
+        // NEVER OVERWRITE THE DAY HE PICKED. The date on the task is when he
+        // plans to do it; once he has moved it (or cleared it), every later
+        // update leaves the date fields out — update_task is a partial patch.
+        const rec = map[op.unitKey] ?? (op.adoptedFrom ? map[op.adoptedFrom] : undefined);
+        const remote = remoteActive?.find((t) => t.id === op.ticktickId);
+        const owner = ownerMovedDate(rec, remote);
+        const sent = owner ? withoutDates(withNote) : withNote;
         const written = await writer.updateTask(op.ticktickId, op.projectId, sent);
         results[op.unitKey] = {
           ticktickId: op.ticktickId,
           projectId: written.projectId ?? op.projectId,
           items: trackedFrom(op.unitKey, written.itemIds),
+          ...(owner ? { ownerDated: true as const, ...(rec?.sentDue ? { sentDue: rec.sentDue } : {}) } : sent.dueDate ? { sentDue: sent.dueDate } : {}),
         };
       }
     } catch (e) {
@@ -267,7 +277,7 @@ export async function syncToTickTick(
   const landed = (kind: SyncOp["kind"]) =>
     ops.filter((o) => o.kind === kind && results[o.unitKey]).length;
   return {
-    map: applySyncOps(map, applied, results),
+    map: baselineDates(applySyncOps(map, applied, results), remoteActive),
     report: {
       created: landed("create"),
       updated: landed("update"),
@@ -292,6 +302,40 @@ export async function syncToTickTick(
  * task is gone must leave the map, or the next sync would try to complete a task
  * that no longer exists.
  */
+/**
+ * Has HE set this task's date? Yes once flagged; else when TickTick shows a
+ * date other than the one the engine last wrote — including none at all. A
+ * record from before `sentDue` existed cannot tell, and is treated as the
+ * engine's (every date until then was).
+ */
+export function ownerMovedDate(rec: SyncRecord | undefined, remote: RemoteTask | undefined): boolean {
+  if (rec?.ownerDated) return true;
+  if (!rec?.sentDue || !remote) return false;
+  if (!remote.dueDate) return true;
+  return Date.parse(remote.dueDate) !== Date.parse(rec.sentDue);
+}
+
+/**
+ * Records written before `sentDue` existed: take the date on the task now as
+ * the engine's, so a move he makes FROM HERE ON is recognised. Whatever he
+ * moved before cannot be told apart and is not guessed at.
+ */
+function baselineDates(map: SyncMap, remote: readonly RemoteTask[] | undefined): SyncMap {
+  if (!remote) return map;
+  const due = new Map(remote.filter((t) => t.dueDate).map((t) => [t.id, t.dueDate!]));
+  const out: SyncMap = {};
+  for (const [k, r] of Object.entries(map)) {
+    const d = !r.sentDue && !r.ownerDated && !r.done ? due.get(r.ticktickId) : undefined;
+    out[k] = d ? { ...r, sentDue: d } : r;
+  }
+  return out;
+}
+
+function withoutDates(p: TickTickTaskPayload): TickTickTaskPayload {
+  const { dueDate: _d, startDate: _s, isAllDay: _a, timeZone: _z, ...rest } = p;
+  return rest;
+}
+
 export function readbackFromTickTick(
   state: LoopState,
   map: SyncMap,
