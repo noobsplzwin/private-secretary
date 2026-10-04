@@ -46,6 +46,8 @@ export interface PersonaUpdateDeps {
   matterLabels?: () => Readonly<Record<string, string>>;
   /** His own TickTick tickets, read per call (core/owner-tickets.ts). */
   ownerTickets?: () => readonly OwnerTicket[];
+  /** His decision profile — who does what — read per call so an edit applies next tick. */
+  leoProfile?: () => string;
   /** Dates the ASSESS verdicts. */
   now?: () => string;
   /** Where a discarded extraction/verdict is recorded. See extractCommitmentsOnce. */
@@ -158,6 +160,7 @@ export async function updatePersonaCommitments(
       ...(deps.onDiscard ? { onDiscard: deps.onDiscard } : {}),
       ...(deps.matterLabels ? { matterLabels: deps.matterLabels() } : {}),
       ...(deps.ownerTickets ? { ownerTickets: deps.ownerTickets() } : {}),
+      ...(deps.leoProfile ? { leoProfile: deps.leoProfile() } : {}),
       personaKey: entry.personaKey,
       claimedLines: claimed,
     });
@@ -266,6 +269,8 @@ export async function extractCommitmentsOnce(opts: {
   matterLabels?: Readonly<Record<string, string>>;
   /** His own tickets; a commitment the model places in one is covered, not listed. */
   ownerTickets?: readonly OwnerTicket[];
+  /** His decision profile (who does what) — see buildPersonaUpdateRequest. */
+  leoProfile?: string;
   /**
    * Lines that already minted a commitment, by persona — updated in place as
    * this call mints. With `personaKey`, a line another persona already holds
@@ -317,6 +322,7 @@ export async function extractCommitmentsOnce(opts: {
         thread: corpus,
         ...(opts.matterLabels ? { matterLabels: opts.matterLabels } : {}),
         ...(opts.ownerTickets?.length ? { ownerTickets: ticketBlock(opts.ownerTickets) } : {}),
+        ...(opts.leoProfile?.trim() ? { leoProfile: opts.leoProfile } : {}),
       }),
     );
     extracted = parseExtractedCommitments(raw);

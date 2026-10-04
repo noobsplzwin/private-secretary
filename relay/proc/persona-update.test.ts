@@ -696,6 +696,25 @@ describe("a listed commitment the conversation shows done is closed", () => {
   });
 });
 
+// 2026-10-04: 「浦软工商变更以及投资协议金小奇都会负责」 — routing he stated,
+// which the drafter read and the pass deciding his list never did.
+describe("the assess pass reads who does what", () => {
+  it("sends his profile, with the rule that routes work off him", async () => {
+    let system = "";
+    await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: personaDirWith([]),
+        leoProfile: () => "- 浦软工商变更 + 奇绩投资协议 → 金小奇 follows up",
+        json: async (req) => ((system ||= req.system), { commitments: [], updates: [] }),
+      }),
+    );
+    expect(system).toContain("HOW LEO WORKS");
+    expect(system).toContain("浦软工商变更 + 奇绩投资协议 → 金小奇");
+    expect(system).toContain("needs_leo is FALSE");
+  });
+});
+
 describe("a FAILED assessment is not an attempted one", () => {
   it("reports the failed call separately, so its cursor can hold", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pu-fail-"));

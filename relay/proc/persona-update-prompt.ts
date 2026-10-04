@@ -254,6 +254,13 @@ export function buildPersonaUpdateRequest(opts: {
   matterLabels?: Readonly<Record<string, string>>;
   /** His own tickets, as a T-handle block (core/owner-tickets.ts ticketBlock). */
   ownerTickets?: string;
+  /**
+   * How Leo works and who does what (projects/LEO-DECISION-PROFILE.md). The
+   * drafter has read it since June; this pass — the one that decides what
+   * reaches his list — never did, so routing he stated plainly (「浦软工商变更以
+   * 及投资协议金小奇都会负责」, 2026-10-04) could not stop a row.
+   */
+  leoProfile?: string;
 }): PersonaUpdateRequest {
   const tag = (id: string): string => {
     const label = opts.matterLabels?.[id];
@@ -286,7 +293,11 @@ export function buildPersonaUpdateRequest(opts: {
     (opts.ownerTickets?.trim() ? `THE OWNER'S OWN TICKETS:\n${opts.ownerTickets.trim()}\n\n` : "") +
     `RECENT CONVERSATION (both sides, newest last):\n${opts.thread}\n\n` +
     `Extract the NEW commitments, and any STATUS CHANGES to the tracked list.${assessLine}`;
-  return { system: SYSTEM, userText, toolInputSchema: SCHEMA };
+  // In `system`, not userText: it is stable between calls, so it caches.
+  const system = opts.leoProfile?.trim()
+    ? `${SYSTEM}\n\nHOW LEO WORKS — his own statement of who does what. When it routes this kind of work to someone else, parks it, or says it is not his, needs_leo is FALSE (blocked_on them or third-party), whatever the thread asks of him. It never makes something his that the thread does not.\n${opts.leoProfile.trim()}`
+    : SYSTEM;
+  return { system, userText, toolInputSchema: SCHEMA };
 }
 
 /** Status transitions, validated: a real index, a known status, a non-empty quote. */
