@@ -254,9 +254,14 @@ describe("a fact is not a to-do (brief FYI cards)", () => {
 });
 
 describe("due dates are never invented", () => {
-  it("has no due date when the task has no real deadline", () => {
-    const built = buildTaskPayload(unit(), ZONE);
-    expect(built.payload).not.toHaveProperty("dueDate");
+  // Owner, 2026-10-01: every row carries a date. With no stated deadline that
+  // date is a REVIEW date, labelled as one — never passed off as a deadline.
+  it("with no real deadline, carries a review date that says it is not a deadline", () => {
+    const built = buildTaskPayload(unit({ members: [member({ created_at: "2026-10-04T15:00:00Z" })] }), ZONE);
+    expect(built.payload.dueDate?.startsWith("2026-10-07")).toBe(true);
+    expect(built.payload.isAllDay).toBe(true);
+    expect(built.payload.timeZone).toBe(ZONE);
+    expect(built.payload.desc).toContain("回看日 10/7(建卡 10/4 +3 天),不是截止。");
   });
 
 

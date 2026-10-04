@@ -282,6 +282,25 @@ function lineFor(a: ActionItem, zone: string): { title: string; actionId?: strin
 }
 
 /** The task's real deadline, if it has one. Never invented — see the header. */
+const CARD_REVIEW_DAYS = 3;
+
+/** The review date of an undated card: made + CARD_REVIEW_DAYS, in his zone. */
+function reviewDateFor(unit: TaskUnit, zone: string): { date: string; line: string } | null {
+  const made = unit.members
+    .map((m) => Date.parse(m.created_at ?? ""))
+    .filter((t) => !Number.isNaN(t))
+    .sort((a, b) => a - b)[0];
+  if (made === undefined) return null;
+  const day = (ms: number): string =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
+  const md = (ms: number): string => {
+    const [, m, d] = day(ms).split("-");
+    return `${Number(m)}/${Number(d)}`;
+  };
+  const at = made + CARD_REVIEW_DAYS * 24 * 60 * 60 * 1000;
+  return { date: day(at), line: `回看日 ${md(at)}(建卡 ${md(made)} +${CARD_REVIEW_DAYS} 天),不是截止。` };
+}
+
 export function deadlineFor(unit: TaskUnit): string | null {
   // The whole value must be a date or a datetime. A `deadline` entity is FREE
   // TEXT the ranking model writes, and "2026-08-13 15:00 Portugal time" is one
@@ -403,13 +422,21 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
       }),
     ),
   ];
+  const deadline = deadlineFor(unit);
+  // EVERY ROW CARRIES A DATE (owner, 2026-10-01: 「所有的row，都最好带上Due
+  // Date」). A card with no stated deadline gets a REVIEW date, the same rule a
+  // ledger row follows: three days after the card was made, said plainly to be
+  // a review and not a deadline. Without it, cards drafted from the 10/02–04
+  // backfill landed undated and, carrying no timeZone either, in TickTick's
+  // account default (America/New_York) rather than his.
+  const review = deadline ? null : reviewDateFor(unit, zone);
   const note = [
     unverified.length > 0 ? `⚠️ 姓名未核实（会话和人物档案里都没有）：${unverified.join("、")}` : "",
+    review?.line ?? "",
     describe(unit),
   ]
     .filter((b) => b !== "")
     .join("\n\n");
-  const deadline = deadlineFor(unit);
   const payload: TickTickTaskPayload = {
     title: unit.title,
     // The tier that used to set this died with the ranking pass. Card rows are
@@ -433,7 +460,10 @@ export function buildTaskPayload(unit: TaskUnit, zone: string): BuiltTask {
     content: "",
     items: lines.map(({ actionId: _a, ...i }) => i),
   };
-  const due = deadline ? dueFields(deadline, zone) : null;
+  const due = deadline ? dueFields(deadline, zone) : review ? dueFields(review.date, zone) : null;
+  // The zone rides on every row, dated or not: TickTick renders an unzoned task
+  // in the account default, which is not where he is.
+  payload.timeZone = zone;
   if (due) {
     payload.dueDate = due.dueDate;
     payload.startDate = due.dueDate;
