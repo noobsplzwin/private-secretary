@@ -59,6 +59,7 @@ import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraf
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { saveOwnerTickets } from "../io/owner-tickets-store.js";
+import { closeDoneCards } from "./card-closure.js";
 import { ownerTicketsFrom } from "../core/owner-tickets.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
@@ -1085,6 +1086,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   /** Senders whose draft call errored. Their cursors are NOT advanced. */
   let draftFailedSenders: string[] = [];
   let draftUnavailableSenders: string[] = [];
+  let doneCards: Array<{ id: string; evidence: string }> = [];
+  let closedByConversation: string[] = [];
   let llmDraftError: string | undefined;
   // Every sender failed — a systemic outage, not a per-sender fault.
   let llmDraftOutage = false;
@@ -1106,6 +1109,14 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       draftedActions = r.actions;
       draftEmpty = r.empty;
       draftFailedSenders = r.errors.map((e) => e.sender);
+      // Open cards this batch shows DONE (proc/card-closure.ts). Never fatal.
+      if (opts.personaUpdate) {
+        try {
+          doneCards = await closeDoneCards(state.actions, toDraft, new Set(draftFailedSenders), opts.personaUpdate.json);
+        } catch (e) {
+          console.error(`[closure] card check failed: ${errString(e)}`);
+        }
+      }
       draftUnavailableSenders = r.errors.filter((e) => isLlmUnavailable(e.error)).map((e) => e.sender);
       if (r.errors.length > 0) {
         // The DENOMINATOR is the whole point. "陈古龙: claude -p exit 1: …" is
@@ -1194,9 +1205,22 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   const settlesInbox = mode === "analyze" && draftInput.length > 0;
   if (
     !opts.dryRun &&
-    (settlesInbox || inviteMsgs.length > 0 || draftedActions.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)
+    (settlesInbox || inviteMsgs.length > 0 || draftedActions.length > 0 || doneCards.length > 0 || llmDraftError !== undefined || draftEmpty.length > 0 || willWrite)
   ) {
     const committed = await commitUnderLock((fresh) => {
+      // Cards the conversation showed done: closed as executed, the proof kept
+      // on the card. No label — this is the engine's reading, not his verdict.
+      closedByConversation = [];
+      for (const d of doneCards) {
+        const card = fresh.actions.find((a) => a.id === d.id && (a.status === "suggested" || a.status === "approved"));
+        if (!card) continue;
+        fresh.actions = fresh.actions.map((a) =>
+          a.id === d.id
+            ? { ...a, status: "executed" as const, params: { ...a.params, closed_by: "conversation", closed_evidence: d.evidence } }
+            : a,
+        );
+        closedByConversation.push(card.headline ?? String(card.params.title ?? card.id));
+      }
       for (const m of inviteMsgs) {
         const card = cardForInvite(fresh.actions, m.invite!);
         if (!card) continue;
@@ -1358,6 +1382,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     });
     if (committed) {
       draftedCount = draftedActions.length;
+      if (closedByConversation.length > 0) {
+        console.log(`[closure] ${closedByConversation.length} card(s) already done per the conversation: ${closedByConversation.join("; ")}`);
+        logActivity("supersede", `closed ${closedByConversation.length} card(s) the conversation showed done: ${closedByConversation.join("; ")}`, {
+          phase: "draft-commit",
+          closedDone: closedByConversation,
+        });
+      }
       shadowWritten = willWrite;
       if (answeredCount > 0) {
         logActivity(
@@ -1822,6 +1853,10 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       try {
         console.log(`[progress] assessing ${queue.length} contact(s) with new traffic…`);
         const pu = await updatePersonaCommitments(queue, opts.personaUpdate);
+        if (pu.closedDone > 0) {
+          console.log(`[closure] ${pu.closedDone} listed commitment(s) already done per the conversation`);
+          logActivity("supersede", `closed ${pu.closedDone} listed commitment(s) the conversation showed done`, { phase: "person-pass", closedDone: pu.closedDone });
+        }
         // Cursors advance for everyone the pass FINISHED with, including the
         // unreadable — otherwise one contact with no mapped handle sits at the
         // head of the oldest-first queue every tick and starves the rest.

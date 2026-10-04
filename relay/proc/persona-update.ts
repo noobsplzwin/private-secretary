@@ -14,6 +14,7 @@ import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-
 import { evidenceGrounded } from "../core/quote-check.js";
 import { isLlmUnavailable } from "../core/inbox.js";
 import { coveredByTicket, ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
+import { findClosures, spokenFromCorpus, stampOf, type OpenItem } from "../core/closure-check.js";
 import { capCorpus, indexCorpus, lineOf, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
@@ -91,6 +92,8 @@ export interface PersonaUpdateResult {
    * their next message re-queues them.
    */
   unreadable: string[];
+  /** Listed commitments the conversation showed DONE (core/closure-check.ts). */
+  closedDone: number;
 }
 
 export async function updatePersonaCommitments(
@@ -116,11 +119,13 @@ export async function updatePersonaCommitments(
   };
   let discarded = 0;
   let assessed = 0;
+  let closedDone = 0;
   // Which corpus lines already minted a commitment, and for whom — so a group
   // line read in several members' corpora mints once (source_line).
   const claimed = claimedLines(deps.personaDir);
 
   for (const entry of queue) {
+    lastError = undefined; // a previous contact's error must not classify this one
     const persona = deps.personaFor(entry.personaKey);
     if (!persona) {
       unreadable.push(entry.personaKey);
@@ -164,6 +169,7 @@ export async function updatePersonaCommitments(
     attempted.push(entry);
     discarded += r.discarded;
     assessed += r.assessed;
+    closedDone += await closeDoneCommitments(personaPath(deps.personaDir, entry.personaKey), persona.displayName, corpus, json);
     if (r.added > 0 || r.statusChanged > 0 || r.assessed > 0)
       updated.push({
         key: entry.personaKey,
@@ -173,7 +179,51 @@ export async function updatePersonaCommitments(
       });
   }
 
-  return { updated, discarded, assessed, attempted, failed, unavailable, unreadable };
+  return { updated, discarded, assessed, attempted, failed, unavailable, unreadable, closedDone };
+}
+
+/**
+ * Close the LISTED commitments this corpus shows done (core/closure-check.ts).
+ * Only rows on his list are asked about — a live verdict, not covered — and
+ * only from lines later than the one the verdict stood on, so the request
+ * cannot close itself. Returns how many closed; any failure closes nothing.
+ */
+async function closeDoneCommitments(
+  file: string,
+  name: string,
+  corpus: string,
+  json: PersonaUpdateJsonCaller,
+): Promise<number> {
+  let commitments: Commitment[];
+  try {
+    commitments = readPersonaV3File(file).commitments ?? [];
+  } catch {
+    return 0;
+  }
+  const lines = indexCorpus(corpus);
+  const items: Array<OpenItem & { index: number }> = [];
+  commitments.forEach((c, index) => {
+    if (c.status !== "open" || c.covered_by || c.assessment?.needs_leo !== true) return;
+    const from = lineOf(lines, c.assessment.evidence ?? "")?.text ?? c.source_line;
+    const after = from ? stampOf(from) : undefined;
+    if (!after) return; // nothing to order against — never guess which lines are "later"
+    items.push({ index, handle: `R${items.length + 1}`, what: c.what, side: c.who === "me" ? "me" : "them", after });
+  });
+  if (items.length === 0) return 0;
+  const found = await findClosures(name, items, spokenFromCorpus(corpus), json);
+  if (found.length === 0) return 0;
+  const next = commitments.map((c) => ({ ...c }));
+  for (const f of found) next[(f.item as OpenItem & { index: number }).index]!.status = "done";
+  try {
+    const res = writePersonaFile(
+      file,
+      { set: { commitments: next }, evidence: { commitments: found.map((f) => `closure: ${f.evidence}`).join(" | ") } },
+      "llm",
+    );
+    return res.applied.includes("commitments") ? found.length : 0;
+  } catch {
+    return 0;
+  }
 }
 
 /** source_line → persona key, over every OPEN commitment on file. Total: unreadable files are skipped. */

@@ -666,6 +666,36 @@ describe("one line, one commitment", () => {
   });
 });
 
+// 2026-10-04: 「已经给过了，应该自动根据聊天记录更新」 — Leo answered Michael on
+// 10/2 and the row kept quoting the request that came before.
+describe("a listed commitment the conversation shows done is closed", () => {
+  it("closes it from his own later line, and only from that", async () => {
+    const dir = personaDirWith([
+      { who: "me", what: "Give Michael input on hiring Ohm", status: "open", assessment: { needs_leo: true, evidence: "I need your input", at: "2026-10-04T10:00:00Z" } },
+      { who: "me", what: "Order wifi modules", status: "open", assessment: { needs_leo: true, evidence: "get 5 of these", at: "2026-10-04T10:00:00Z" } },
+    ]);
+    const corpus = [
+      "[2026-10-02 00:03] Michael: I need your input",
+      "[2026-10-02 00:04] Michael: get 5 of these",
+      "[2026-10-02 11:51] me: one more eng between Zack and Ihor would be super valuable",
+    ].join("\n");
+    const r = await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: dir,
+        fetchCorpus: async () => corpus,
+        json: async (req) =>
+          req.system.startsWith("You check whether open to-dos")
+            ? { closed: [{ item: "R1", evidence: "one more eng between Zack and Ihor" }, { item: "R2", evidence: "get 5 of these" }] }
+            : { commitments: [], updates: [] },
+      }),
+    );
+    expect(r.closedDone).toBe(1);
+    const c = (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as { commitments: Array<{ status: string }> }).commitments;
+    expect(c.map((x) => x.status)).toEqual(["done", "open"]); // R2's quote is Michael's, not Leo's
+  });
+});
+
 describe("a FAILED assessment is not an attempted one", () => {
   it("reports the failed call separately, so its cursor can hold", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pu-fail-"));

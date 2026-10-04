@@ -118,6 +118,15 @@ The layout is discoverable from the tree; what is NOT discoverable:
 - **One corpus line mints one commitment** (`source_line`). A group line sits
   in every member's corpus, so the same utterance used to mint once per person
   (「买恒温箱」 under Leo.yang and 何修池). Only dated, attributed lines count.
+- **What the conversation shows DONE leaves the list** (`core/closure-check.ts`).
+  After drafting a sender's batch (`proc/card-closure.ts`) and after assessing a
+  person, the open rows are put to the model as one question — which are done? —
+  and code accepts a closure only on a verbatim quote from ONE line spoken by
+  the side that owed it (Leo's own line for his work), later than where the row
+  began, never from the row's own origin. Cards close as `executed` with the
+  quote kept, commitments as `done`; no label is written — it is the engine's
+  reading, not his verdict. 2026-10-04 he struck two rows for work he had
+  already done in the very chats they came from.
 - **A card with no stated deadline carries a review date** (made +3 days,
   「回看日…不是截止」) and every row carries his time zone — undated cards landed
   in TickTick's account default, America/New_York.
