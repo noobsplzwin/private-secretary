@@ -75,6 +75,20 @@ export function takeForDraft(inbox: readonly InboxEntry[], max?: number): Inboun
 }
 
 /**
+ * Is this the LLM being UNAVAILABLE — logged out, refused, out of credit —
+ * rather than this one call going wrong? Such a failure says nothing about the
+ * message or the contact, so it must not count toward giving up on either.
+ * 2026-10-02 → 10-04 the CLI's OAuth session expired; every call failed with
+ * 「Failed to authenticate: OAuth session expired」, each failure was counted,
+ * and dozens of messages and contacts were given up on as unreadable.
+ */
+export function isLlmUnavailable(error: string | undefined): boolean {
+  return !!error && LLM_UNAVAILABLE.test(error);
+}
+const LLM_UNAVAILABLE =
+  /failed to authenticate|oauth session expired|could not be refreshed|invalid (?:x-)?api.?key|api error: 40[13]\b|credit balance is too low|not logged in|please run \/login/i;
+
+/**
  * Settle the messages a draft call was given.
  *
  *   drafted OK                 → removed

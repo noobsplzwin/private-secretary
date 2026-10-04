@@ -596,13 +596,31 @@ describe("a FAILED assessment is not an attempted one", () => {
     writeFileSync(join(dir, "trey.yaml"), "key: trey\ndisplay_name: trey\nhandles: {}\nidentity:\n  role: peer\n  relationship: peer\nrelationship_meta: {}\ncommunication:\n  language: zh\ncommitments: []\nevidence:\n  display_name: fixture\n", "utf8");
     const r = await updatePersonaCommitments([{ personaKey: "trey", trafficMs: 5 }], {
       json: async () => {
-        throw new Error("claude -p exit 1: Failed to authenticate. API Error: 403");
+        throw new Error("claude -p timed out after 180000ms");
       },
       personaFor: (key) => ({ key, displayName: key, handles: {} }) as never,
       fetchCorpus: async () => "trey: 总算完事了",
       personaDir: dir,
     });
     expect(r.failed.map((e) => e.personaKey)).toEqual(["trey"]);
+    expect(r.attempted).toEqual([]);
+  });
+
+  // 2026-10-02 → 10-04: the CLI was logged out, every call failed, and each
+  // failure counted — contacts were given up on for an outage that was ours.
+  it("an UNAVAILABLE LLM is held but never counted as the contact's failure", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pu-down-"));
+    writeFileSync(join(dir, "trey.yaml"), "key: trey\ndisplay_name: trey\nhandles: {}\nidentity:\n  role: peer\n  relationship: peer\nrelationship_meta: {}\ncommunication:\n  language: zh\ncommitments: []\nevidence:\n  display_name: fixture\n", "utf8");
+    const r = await updatePersonaCommitments([{ personaKey: "trey", trafficMs: 5 }], {
+      json: async () => {
+        throw new Error("claude -p exit 1: Failed to authenticate: OAuth session expired and could not be refreshed");
+      },
+      personaFor: (key) => ({ key, displayName: key, handles: {} }) as never,
+      fetchCorpus: async () => "trey: 总算完事了",
+      personaDir: dir,
+    });
+    expect(r.unavailable.map((e) => e.personaKey)).toEqual(["trey"]);
+    expect(r.failed).toEqual([]);
     expect(r.attempted).toEqual([]);
   });
 });

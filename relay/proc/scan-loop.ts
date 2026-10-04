@@ -49,7 +49,7 @@ import { executeAction, type ExecuteDeps } from "./execute.js";
 import { approveAction } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
-import { enqueue, settle, takeForDraft, type InboxEntry } from "../core/inbox.js";
+import { enqueue, isLlmUnavailable, settle, takeForDraft, type InboxEntry } from "../core/inbox.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
 import { deriveLedgerTasks, heldClosedByOwner } from "../core/ledger-list.js";
 import { applyInvite, cardForInvite } from "../core/calendar-invite.js";
@@ -1082,6 +1082,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let draftedActions: ActionItem[] = [];
   /** Senders whose draft call errored. Their cursors are NOT advanced. */
   let draftFailedSenders: string[] = [];
+  let draftUnavailableSenders: string[] = [];
   let llmDraftError: string | undefined;
   // Every sender failed — a systemic outage, not a per-sender fault.
   let llmDraftOutage = false;
@@ -1103,6 +1104,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       draftedActions = r.actions;
       draftEmpty = r.empty;
       draftFailedSenders = r.errors.map((e) => e.sender);
+      draftUnavailableSenders = r.errors.filter((e) => isLlmUnavailable(e.error)).map((e) => e.sender);
       if (r.errors.length > 0) {
         // The DENOMINATOR is the whole point. "陈古龙: claude -p exit 1: …" is
         // what an expired subscription session looked like for two days
@@ -1206,7 +1208,14 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // — which is what the message below this block has always promised.
       if (settlesInbox) {
         const failed = new Set(draftFailedSenders);
-        const r = settle(fresh.inbox ?? [], draftInput, failed, llmDraftError !== undefined && failed.size === 0);
+        // A sender whose call failed because the LLM is UNAVAILABLE was never
+        // tried: left out of `attempted`, its messages stay queued, uncounted.
+        const unavailable = new Set(draftUnavailableSenders);
+        const tried = unavailable.size > 0 ? draftInput.filter((m) => !unavailable.has(m.senderHandle)) : draftInput;
+        const wholeFailed = llmDraftError !== undefined && failed.size === 0;
+        const r = wholeFailed && isLlmUnavailable(llmDraftError)
+          ? { inbox: fresh.inbox ?? [], gaveUp: [] }
+          : settle(fresh.inbox ?? [], tried, failed, wholeFailed);
         fresh.inbox = r.inbox;
         inboxGaveUp = r.gaveUp;
       }
@@ -1822,6 +1831,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             fresh.personAssessed = markAssessed(fresh.personAssessed ?? {}, [...pu.attempted, ...giveUp]);
             fresh.personAssessFailures = fails;
           });
+        }
+        if (pu.unavailable.length > 0) {
+          console.error(
+            `[persona] LLM unavailable — ${pu.unavailable.map((e) => e.personaKey).join(", ")} held, not counted as failures`,
+          );
         }
         if (pu.failed.length > 0) {
           console.error(

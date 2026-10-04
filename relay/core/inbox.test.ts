@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { enqueue, settle, takeForDraft, MAX_DRAFT_ATTEMPTS, type InboxEntry } from "./inbox.js";
+import { enqueue, isLlmUnavailable, settle, takeForDraft, MAX_DRAFT_ATTEMPTS, type InboxEntry } from "./inbox.js";
 import type { InboundMessage } from "./types.js";
 
 const msg = (id: string, sender = "金小奇", ts = 1): InboundMessage =>
@@ -73,5 +73,15 @@ describe("settle", () => {
     const fresh = enqueue(inbox, [msg("arrived-mid-draft", "朱桦")], AT).inbox;
     const r = settle(fresh, attempted, new Set(), false);
     expect(r.inbox.map((e) => e.msg.id)).toEqual(["later", "arrived-mid-draft"]);
+  });
+});
+
+describe("isLlmUnavailable", () => {
+  it("knows a logged-out or refused LLM from one bad call", () => {
+    expect(isLlmUnavailable("claude -p exit 1: Failed to authenticate: OAuth session expired and could not be refreshed")).toBe(true);
+    expect(isLlmUnavailable("claude -p exit 1: Failed to authenticate. API Error: 403 Request not allowed")).toBe(true);
+    expect(isLlmUnavailable("claude -p timed out after 180000ms")).toBe(false);
+    expect(isLlmUnavailable("Unexpected token < in JSON")).toBe(false);
+    expect(isLlmUnavailable(undefined)).toBe(false);
   });
 });

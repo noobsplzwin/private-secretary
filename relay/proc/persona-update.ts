@@ -10,6 +10,7 @@ import type { PersonQueueEntry } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { personaPath, readPersonaV3File, writePersonaFile } from "../io/persona-store.js";
 import { evidenceGrounded } from "../core/quote-check.js";
+import { isLlmUnavailable } from "../core/inbox.js";
 import { capCorpus, indexCorpus, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
@@ -71,6 +72,12 @@ export interface PersonaUpdateResult {
    */
   failed: PersonQueueEntry[];
   /**
+   * Everyone whose call failed because the LLM itself is UNAVAILABLE (logged
+   * out, refused). Held like `failed` but never counted toward giving up —
+   * core/inbox.ts isLlmUnavailable.
+   */
+  unavailable: PersonQueueEntry[];
+  /**
    * Keys whose corpus came back empty — no handles, or every source failed.
    * Reported rather than silently skipped (spec §6.2): a person reachable on no
    * mapped handle is invisible to their own pass, and that is a data bug worth
@@ -89,7 +96,19 @@ export async function updatePersonaCommitments(
   const updated: PersonaUpdateResult["updated"] = [];
   const attempted: PersonQueueEntry[] = [];
   const failed: PersonQueueEntry[] = [];
+  const unavailable: PersonQueueEntry[] = [];
   const unreadable: string[] = [];
+  // The call's error is swallowed inside extractCommitmentsOnce; keep the last
+  // one so an auth outage can be told from a bad reply.
+  let lastError: string | undefined;
+  const json: PersonaUpdateJsonCaller = async (req) => {
+    try {
+      return await deps.json(req);
+    } catch (e) {
+      lastError = (e as Error)?.message ?? String(e);
+      throw e;
+    }
+  };
   let discarded = 0;
   let assessed = 0;
 
@@ -121,13 +140,14 @@ export async function updatePersonaCommitments(
       file: personaPath(deps.personaDir, entry.personaKey),
       displayName: persona.displayName,
       corpus,
-      json: deps.json,
+      json,
       ...(deps.now ? { now: deps.now } : {}),
       ...(deps.onDiscard ? { onDiscard: deps.onDiscard } : {}),
       ...(deps.matterLabels ? { matterLabels: deps.matterLabels() } : {}),
     });
     if (!r) {
-      failed.push(entry);
+      (isLlmUnavailable(lastError) ? unavailable : failed).push(entry);
+      lastError = undefined;
       continue;
     }
     attempted.push(entry);
@@ -142,7 +162,7 @@ export async function updatePersonaCommitments(
       });
   }
 
-  return { updated, discarded, assessed, attempted, failed, unreadable };
+  return { updated, discarded, assessed, attempted, failed, unavailable, unreadable };
 }
 
 
