@@ -130,6 +130,31 @@ describe("markLedgerCommitmentsDropped", () => {
     expect(body.match(/status: open/g)).toHaveLength(2); // its sibling and the other matter untouched
   });
 
+  // 2026-10-03: dismissing 「Talk to more customers & Renesas」 left its listed
+  // sibling open, and it was queued as the next row.
+  it("also drops the links the row LISTED as his, never the ones waiting on them", () => {
+    persona(
+      "david",
+      withCommitments(
+        "david",
+        [
+          `  - who: me\n    what: Talk to customers\n    status: open\n    matter_id: leap`,
+          `  - who: me\n    what: Add options to the weekly agenda\n    status: open\n    matter_id: leap`,
+          `  - who: them\n    what: Send the hypervisor build\n    status: open\n    matter_id: leap`,
+          `  - who: me\n    what: Not shown on the row\n    status: open\n    matter_id: leap`,
+        ].join("\n") + "\n",
+      ),
+    );
+    const n = markLedgerCommitmentsDropped(
+      [{ unitKey: `ledger_david_${stableHash("matter:leap")}`, title: "Talk to customers", shown: ["Add options to the weekly agenda"] }],
+      { personaDir: dir },
+    );
+    expect(n).toBe(2);
+    const body = readFileSync(join(dir, "david.yaml"), "utf8");
+    expect(body.match(/status: dropped/g)).toHaveLength(2);
+    expect(body.match(/status: open/g)).toHaveLength(2);
+  });
+
   it("with no title to go by, drops NOTHING rather than guessing", () => {
     persona("jin", withCommitments("jin", `  - who: me\n    what: 出PPT技术方案\n    status: open\n    matter_id: venture\n`));
     const n = markLedgerCommitmentsDropped([{ unitKey: `ledger_jin_${stableHash("matter:venture")}` }], { personaDir: dir });

@@ -52,6 +52,9 @@ export function loadSyncMap(statePath: string): SyncMap {
       // times. Add a field to SyncRecord and you must add it here too.
       ...(typeof r.title === "string" ? { title: r.title } : {}),
       ...(typeof r.done === "number" ? { done: r.done } : {}),
+      // Missing here from 2026-10-01 to 10-04: every owner close lost its mark
+      // on the next read, so heldClosedByOwner (core/ledger-list.ts) never held.
+      ...(r.closedBy === "owner" ? { closedBy: "owner" as const } : {}),
       ...(Array.isArray(r.items)
         ? {
             items: r.items.filter(

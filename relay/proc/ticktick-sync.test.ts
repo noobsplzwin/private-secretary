@@ -329,6 +329,32 @@ describe("readbackFromTickTick — 🚫 on a ledger row", () => {
   });
 });
 
+// 2026-10-03: he ticked 🚫, wrote why, then completed the whole task.
+describe("readbackFromTickTick — 🚫 then completed", () => {
+  const map = {
+    ledger_jordan_abc: { ticktickId: "t1", projectId: "p", hash: "h" },
+    ledger_rhyse_def: { ticktickId: "t2", projectId: "p", hash: "h" },
+  };
+  const remote = [
+    { id: "t1", status: 2, title: "Investigate SR-488", items: [{ id: "i1", status: 1, title: "🚫 这条不该出现 Graham is working on this" }] },
+    { id: "t2", status: 2, title: "Transfer to 孙陈", items: [{ id: "i2", status: 0, title: "🚫 这条不该出现" }] },
+  ];
+  it("is a dismissal with his note, not done work; a plain completion stays done", () => {
+    const r = readbackFromTickTick({ actions: [], tasks: [] } as never, map, remote);
+    expect(r.dismissedLedger).toEqual([{ unitKey: "ledger_jordan_abc", title: "Investigate SR-488" }]);
+    expect(r.closedUnitKeys).toEqual(["ledger_rhyse_def"]);
+    expect(r.ownerNotes).toEqual([{ unitKey: "ledger_jordan_abc", note: "Graham is working on this", dismissed: true, title: "Investigate SR-488" }]);
+    // Both tasks are gone from his list, so both are settled.
+    expect(r.map.ledger_jordan_abc).toMatchObject({ closedBy: "owner" });
+    expect(r.map.ledger_rhyse_def).toMatchObject({ closedBy: "owner" });
+  });
+  it("concludes nothing when a list went unread", () => {
+    const r = readbackFromTickTick({ actions: [], tasks: [] } as never, map, remote, false);
+    expect(r.dismissedLedger).toEqual([]);
+    expect(r.closedUnitKeys).toEqual([]);
+  });
+});
+
 describe("an owner close is remembered as his", () => {
   it("tombstones a finished task with closedBy=owner", () => {
     const map = { ledger_x_abc: { ticktickId: "gone", projectId: "p", hash: "h" } };

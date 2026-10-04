@@ -371,6 +371,22 @@ function itemFor(
  * COUNT, not a list — the ledger records no completion date, so any "recently
  * finished" ordering would be array order dressed up as chronology.
  */
+/**
+ * The links a row's description listed under 「我这边还有」 — read back so a 🚫
+ * on the row drops what he was SHOWN, not just its title. Parses the block
+ * matterProgress writes; anything else yields nothing.
+ */
+export function ownLinesShown(desc: string | undefined): string[] {
+  const out: string[] = [];
+  let inMine = false;
+  for (const line of (desc ?? "").split("\n")) {
+    if (line.startsWith("我这边还有:")) inMine = true;
+    else if (!line.startsWith("  · ")) inMine = false;
+    else if (inMine) out.push(line.slice(4).trim());
+  }
+  return out;
+}
+
 function matterProgress(all: readonly Commitment[], lead: Commitment, them: string): string {
   const open = all.filter((c) => c.status === "open");
   const settled = all.length - open.length;

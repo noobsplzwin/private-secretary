@@ -54,20 +54,30 @@ export function markLedgerCommitmentsDone(
  * here」, not on everything else filed beside it, so it drops the link whose
  * `what` the row's title shows. No title, or none that matches, drops nothing:
  * guessing which link he meant is the one thing this must never do.
+ *
+ * …AND THE LINKS THE ROW LISTED AS HIS. The description shows 「我这边还有」
+ * under the title; he read those too when he ticked 🚫. Dropping only the
+ * title left them open, and the next tick listed the first of them as a NEW
+ * row — 2026-10-03 he dismissed 「Talk to more customers & Renesas」 and its
+ * sibling 「Add Leap next-steps to the weekly agenda」 was queued to replace it.
+ * Exact text from the row he saw, so still no guessing. Links listed as
+ * waiting on the other side stay open — they were never his to dismiss.
  */
 export function markLedgerCommitmentsDropped(
-  dismissed: ReadonlyArray<{ unitKey: string; title?: string }>,
+  dismissed: ReadonlyArray<{ unitKey: string; title?: string; shown?: readonly string[] }>,
   deps: LedgerCloseDeps,
 ): number {
-  const shown = new Map(dismissed.map((d) => [d.unitKey, (d.title ?? "").replace(/^催: /, "").trim()]));
+  const shown = new Map(
+    dismissed.map((d) => {
+      const title = (d.title ?? "").replace(/^催: /, "").trim();
+      return [d.unitKey, new Set([...(title ? [title] : []), ...(d.shown ?? [])])];
+    }),
+  );
   return settleLedgerCommitments(
     dismissed.map((d) => d.unitKey),
     "dropped",
     deps,
-    (key, c) => {
-      const t = shown.get(key);
-      return !!t && c.what.trim() === t;
-    },
+    (key, c) => shown.get(key)?.has(c.what.trim()) ?? false,
   );
 }
 

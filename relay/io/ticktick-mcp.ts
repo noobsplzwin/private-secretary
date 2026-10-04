@@ -19,6 +19,7 @@ import { callMcpTool, callResultObject, callResultRows } from "./mcp-tool.js";
 import { resolveTickTickProject, type TickTickProject } from "../core/ticktick.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
 import type { TickTickWriter, TickTickReader } from "../proc/ticktick-sync.js";
+import type { RemoteTask } from "../core/ticktick-readback.js";
 import type { ToolRunner } from "../proc/execute.js";
 
 const projectIdCache = new Map<string, string>();
@@ -128,34 +129,44 @@ export function createTickTickReader(opts: TickTickToolOptions): TickTickReader 
       });
       const raw = callResultObject(res).tasks;
       if (!Array.isArray(raw)) return [];
-      return raw.flatMap((t) => {
-        const o = t as { id?: unknown; status?: unknown; items?: unknown; projectId?: unknown; title?: unknown; tags?: unknown };
-        if (typeof o.id !== "string") return [];
-        const items = Array.isArray(o.items)
-          ? o.items.flatMap((i) => {
-              const it = i as { id?: unknown; status?: unknown; title?: unknown };
-              return typeof it.id === "string"
-                ? [{
-                    id: it.id,
-                    status: typeof it.status === "number" ? it.status : 0,
-                    // The dismissal line is recognised by title (see readback).
-                    ...(typeof it.title === "string" ? { title: it.title } : {}),
-                  }]
-                : [];
-            })
-          : [];
-        return [{
-          id: o.id,
-          status: typeof o.status === "number" ? o.status : 0,
-          items,
-          ...(typeof o.projectId === "string" ? { projectId: o.projectId } : {}),
-          ...(typeof o.title === "string" ? { title: o.title } : {}),
-          ...(Array.isArray(o.tags) ? { tags: o.tags.filter((x): x is string => typeof x === "string") } : {}),
-        }];
-      });
+      return raw.flatMap(parseRemoteTask);
+    },
+    // One task by id, completed or not. Used only for tracked tasks that left
+    // the active list — to see what the owner wrote on the 🚫 line before he
+    // completed the whole task (scan-loop readAllActive).
+    async getTask(taskId: string) {
+      const res = await callMcpTool(opts.url, opts.authService, "get_task_by_id", { task_id: taskId });
+      return parseRemoteTask(callResultObject(res))[0] ?? null;
     },
   };
   return reader;
+}
+
+function parseRemoteTask(t: unknown): RemoteTask[] {
+  const o = t as { id?: unknown; status?: unknown; items?: unknown; projectId?: unknown; title?: unknown; tags?: unknown; desc?: unknown };
+  if (typeof o.id !== "string") return [];
+  const items = Array.isArray(o.items)
+    ? o.items.flatMap((i) => {
+        const it = i as { id?: unknown; status?: unknown; title?: unknown };
+        return typeof it.id === "string"
+          ? [{
+              id: it.id,
+              status: typeof it.status === "number" ? it.status : 0,
+              // The dismissal line is recognised by title (see readback).
+              ...(typeof it.title === "string" ? { title: it.title } : {}),
+            }]
+          : [];
+      })
+    : [];
+  return [{
+    id: o.id,
+    status: typeof o.status === "number" ? o.status : 0,
+    items,
+    ...(typeof o.projectId === "string" ? { projectId: o.projectId } : {}),
+    ...(typeof o.title === "string" ? { title: o.title } : {}),
+    ...(typeof o.desc === "string" && o.desc ? { desc: o.desc } : {}),
+    ...(Array.isArray(o.tags) ? { tags: o.tags.filter((x): x is string => typeof x === "string") } : {}),
+  }];
 }
 
 export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter {

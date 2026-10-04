@@ -358,15 +358,33 @@ export async function readAllActive(
   ];
   // A reader that can only list by name is a single-list reader (the test
   // stubs, and the shape before this existed): Work is all there is to read.
-  if (!reader.listActiveIn || elsewhere.length === 0) return { tasks: work, complete: true };
   const tasks = [...work];
   let complete = true;
-  for (const id of elsewhere) {
-    try {
-      tasks.push(...(await reader.listActiveIn(id)));
-    } catch (e) {
-      complete = false;
-      console.error(`[ticktick] list ${id} unreadable — closing nothing this tick: ${errString(e)}`);
+  if (reader.listActiveIn) {
+    for (const id of elsewhere) {
+      try {
+        tasks.push(...(await reader.listActiveIn(id)));
+      } catch (e) {
+        complete = false;
+        console.error(`[ticktick] list ${id} unreadable — closing nothing this tick: ${errString(e)}`);
+      }
+    }
+  }
+  // A tracked task that left the active lists was completed or deleted. Fetch
+  // it: what he wrote on its 🚫 line before completing it is the verdict
+  // (core/ticktick-readback.ts). Usually zero or a handful per tick. A fetch
+  // that fails reads as before — finished — rather than holding every close.
+  if (complete && reader.getTask) {
+    const live = new Set(tasks.map((t) => t.id));
+    for (const rec of Object.values(map)) {
+      if (rec.done || live.has(rec.ticktickId)) continue;
+      try {
+        const t = await reader.getTask(rec.ticktickId);
+        // Still active (in a list not read) counts as active, not finished.
+        if (t) tasks.push(t);
+      } catch (e) {
+        console.error(`[ticktick] finished task ${rec.ticktickId} unreadable — its 🚫 line is not read: ${errString(e)}`);
+      }
     }
   }
   return { tasks, complete };

@@ -30,7 +30,7 @@ import { buildTaskPayload, shouldRenderCardUnit, type TaskUnit } from "../core/t
 import { diffTickTickReadback, dismissNote, type RemoteTask } from "../core/ticktick-readback.js";
 import { groupByTask } from "../core/tasks.js";
 import { unitKey, stableHash } from "../core/unit-key.js";
-import { parseLedgerUnitKey } from "../core/ledger-list.js";
+import { ownLinesShown, parseLedgerUnitKey } from "../core/ledger-list.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
 import type { TickTickTaskPayload } from "../core/ticktick.js";
 import type { TrackedApproval } from "../core/ticktick-approval.js";
@@ -47,6 +47,13 @@ export interface TickTickReader {
    * the hard-coded set is what missed 待办池 for weeks.
    */
   listActiveIn?(projectId: string): Promise<RemoteTask[]>;
+  /**
+   * One task by id, whatever its status. A tracked task that left the active
+   * list was completed or deleted; fetching it is the only way to see whether
+   * he ticked 🚫 (and what he wrote after it) BEFORE completing the whole task.
+   * Null when it no longer exists.
+   */
+  getTask?(taskId: string): Promise<RemoteTask | null>;
 }
 
 export interface TickTickWriter {
@@ -303,7 +310,7 @@ export function readbackFromTickTick(
    * key, plus the title he was SHOWN: 🚫 drops that one commitment, not the
    * whole matter a row can stand for (proc/ledger-close.ts).
    */
-  dismissedLedger: Array<{ unitKey: string; title?: string }>;
+  dismissedLedger: Array<{ unitKey: string; title?: string; shown?: string[] }>;
   map: SyncMap;
   unitsClosed: number;
 } {
@@ -353,7 +360,10 @@ export function readbackFromTickTick(
     // The KEYS, not the action ids: a ledger row has no ActionItem behind it,
     // so its only handle is the unitKey, and the caller needs it to mark the
     // underlying commitment done (core/ledger-list.ts parseLedgerUnitKey).
-    closedUnitKeys: [...doneUnitKeys],
+    // A finished task he ticked 🚫 on first is a dismissal, not done work: it
+    // goes to dismissedLedger, never to both (done would be written, then
+    // dropped, and the label would say he did it).
+    closedUnitKeys: doneUnitKeys.filter((k) => !tossed.has(k)),
     ownerNotes: ownerNotes.map((n) => {
       const title = remote.find((t) => t.id === map[n.unitKey]?.ticktickId)?.title;
       return { ...n, ...(title ? { title } : {}) };
@@ -361,8 +371,9 @@ export function readbackFromTickTick(
     dismissedLedger: dismissedUnitKeys
       .filter((k) => parseLedgerUnitKey(k) !== null)
       .map((k) => {
-        const title = remote.find((t) => t.id === map[k]?.ticktickId)?.title;
-        return { unitKey: k, ...(title ? { title } : {}) };
+        const task = remote.find((t) => t.id === map[k]?.ticktickId);
+        const shown = ownLinesShown(task?.desc);
+        return { unitKey: k, ...(task?.title ? { title: task.title } : {}), ...(shown.length ? { shown } : {}) };
       }),
     map: next,
     unitsClosed: gone.size,

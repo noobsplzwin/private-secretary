@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveLedgerTasks, heldClosedByOwner } from "./ledger-list.js";
+import { deriveLedgerTasks, heldClosedByOwner, ownLinesShown } from "./ledger-list.js";
 import { applySyncOps, diffTickTickSync, summarize } from "./ticktick-sync.js";
 import type { Commitment } from "./persona-v3.js";
 
@@ -799,5 +799,13 @@ describe("heldClosedByOwner", () => {
 describe("covered_by", () => {
   it("a commitment covered by another ticket gets no row, verdict or not", () => {
     expect(derive([persona([c({ ...assessed(true), covered_by: "约 Sky 到场跑 Benchmarking" })])])).toEqual([]);
+  });
+});
+
+describe("ownLinesShown", () => {
+  it("reads only the 我这边还有 block of a row's description", () => {
+    const desc = "回看日 10/4,不是截止。\n进度: 共 5 项,已了结 1 项。\n我这边还有:\n  · A\n  · B\n等 朱桦:\n  · C\n依据: \"x\"";
+    expect(ownLinesShown(desc)).toEqual(["A", "B"]);
+    expect(ownLinesShown(undefined)).toEqual([]);
   });
 });

@@ -1475,6 +1475,23 @@ describe("readAllActive", () => {
     expect(extra).toBe(0);
     expect(r.complete).toBe(true);
   });
+
+  it("fetches a tracked task that left the active list, so its 🚫 line can be read", async () => {
+    const fetched: string[] = [];
+    const reader = {
+      listActive: async () => [{ id: "live", status: 0, projectId: "p-work" }],
+      getTask: async (id: string) => (fetched.push(id), id === "gone" ? { id, status: 2, items: [] } : null),
+    };
+    const r = await readAllActive(reader, {
+      a: { ticktickId: "live", projectId: "p-work", hash: "h" },
+      b: { ticktickId: "gone", projectId: "p-work", hash: "h" },
+      c: { ticktickId: "deleted", projectId: "p-work", hash: "h" },
+      d: { ticktickId: "old", projectId: "p-work", hash: "h", done: 1 },
+    });
+    expect(fetched.sort()).toEqual(["deleted", "gone"]);
+    expect(r.tasks.map((t) => t.id).sort()).toEqual(["gone", "live"]);
+    expect(r.complete).toBe(true);
+  });
 });
 
 // REGRESSION 2026-09-29: two mailboxes failing, one visible. The log keeps 200

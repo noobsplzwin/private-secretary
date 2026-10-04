@@ -33,6 +33,8 @@ export interface RemoteTask {
   projectId?: string;
   title?: string;
   tags?: readonly string[];
+  /** The description, so 🚫 can see which links the row showed (ledger-list ownLinesShown). */
+  desc?: string;
 }
 
 export interface ReadbackResult {
@@ -104,7 +106,8 @@ export function diffTickTickReadback(
   coversEveryProject = true,
 ): ReadbackResult {
   const active = new Map<string, RemoteTask>();
-  for (const t of remote) if (t.status === 0) active.set(t.id, t);
+  const finished = new Map<string, RemoteTask>();
+  for (const t of remote) (t.status === 0 ? active : finished).set(t.id, t);
 
   const doneActionIds: string[] = [];
   const doneUnitKeys: string[] = [];
@@ -119,7 +122,19 @@ export function diffTickTickReadback(
     if (rec.done) continue;
     const task = active.get(rec.ticktickId);
     if (!task) {
-      if (coversEveryProject) doneUnitKeys.push(unitKey);
+      if (!coversEveryProject) continue;
+      doneUnitKeys.push(unitKey);
+      // COMPLETING THE TASK IS NOT A VERDICT ON IT. 2026-10-03 the owner ticked
+      // 🚫 on 15 rows, wrote why on 7 (「Graham is working on this」「古龙已经
+      // 签署」…), then completed each whole task to clear it. Only active tasks
+      // were read, so all 15 read as finished work: commitments marked done, no
+      // not_a_thing label, every note lost. The caller fetches a vanished task
+      // when it can (scan-loop readAllActive), and its 🚫 line is honoured here.
+      const gone = finished.get(rec.ticktickId);
+      const goneLine = (gone?.items ?? []).find((i) => dismissNote(i.title) !== null);
+      const goneNote = dismissNote(goneLine?.title);
+      if (goneNote) ownerNotes.push({ unitKey, note: goneNote, dismissed: goneLine!.status === 1 });
+      if (goneLine && goneLine.status === 1) dismissedUnitKeys.push(unitKey);
       continue;
     }
     const itemStatus = new Map((task.items ?? []).map((i) => [i.id, i.status]));
