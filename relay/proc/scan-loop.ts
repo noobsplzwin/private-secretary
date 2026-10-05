@@ -14,7 +14,6 @@
 // existing semantics so swapping the skill out for a daemon is a no-op
 // from loop-state's point of view.
 
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendShadowRecord } from "../io/shadow-log.js";
 import {
@@ -57,6 +56,7 @@ import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraf
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { saveOwnerTickets } from "../io/owner-tickets-store.js";
+import { recordOwnerNotes } from "../io/owner-notes-store.js";
 import { localDate } from "../core/ticktick-plan.js";
 import { closeDoneCards } from "./card-closure.js";
 import { loadOwnerTickets } from "../io/owner-tickets-store.js";
@@ -807,6 +807,252 @@ async function pollWechat(ctx: PollContext): Promise<WechatPoll> {
       });
     }
   return { pendingDirect: pendingWechatDirect, pendingGroups: pendingWechatGroups, spoke: wechatSpoke };
+}
+
+/** Write `mutate` into fresh state under the (retried) lock; false if the lock never came. */
+type CommitUnderLock = (mutate: (fresh: LoopState) => void) => Promise<boolean>;
+
+// ── PHASE 6a (UNLOCKED, no LLM): pull completions BACK from TickTick.
+//
+// Runs BEFORE the push, so a task the owner just finished is closed here and
+// is no longer eligible in the push below — rather than being re-written and
+// only closed on the next tick.
+//
+// Non-fatal, like the push: TickTick being unreachable must never stop a scan.
+async function applyTickTickReadback(
+  opts: ScanLoopOptions,
+  reader: TickTickReader,
+  commitUnderLock: CommitUnderLock,
+  startedAtMs: number,
+): Promise<void> {
+  try {
+    // EVERY list a tracked task lives in — see readAllActive for why this is
+    // derived from the map rather than named.
+    const syncMap = loadSyncMap(opts.statePath);
+    const { tasks: remote, complete } = await readAllActive(reader, syncMap);
+    const snapshot = loadState(opts.statePath);
+    const { ticked, closed, dismissed, closedUnitKeys, dismissedLedger, ownerNotes, map, unitsClosed } = readbackFromTickTick(
+      snapshot,
+      syncMap,
+      remote,
+      complete,
+    );
+    // His own tickets, for the drafter and the person pass (core/owner-tickets.ts).
+    // Only from a COMPLETE read: a partial one would drop tickets and uncover work.
+    if (complete) {
+      try {
+        saveOwnerTickets(opts.statePath, ownerTicketsFrom(remote, syncMap));
+      } catch (e) {
+        console.error(`[ticktick] owner tickets not saved: ${errString(e)}`);
+      }
+    }
+
+    // Tick-to-execute: a ticked executable line is his approval (executeTicked).
+    const executedNow =
+      ticked.length > 0 && opts.execute
+        ? await executeTicked(ticked, snapshot.actions, opts.execute, commitUnderLock, startedAtMs)
+        : [];
+
+    // Everything else the readback learned: whole-task closes always record
+    // done; ticked items record done too when no executor is configured
+    // (the pre-§1 behaviour — a tick means "I already did it").
+    const done = new Set([...closed, ...(opts.execute ? [] : ticked)]);
+
+    // CLOSE THE LOOP ON LEDGER ROWS. A ledger row is derived fresh from a
+    // persona commitment every tick, so finishing it in TickTick settled
+    // nothing: the commitment stayed `open`, the next tick re-derived the
+    // row, and the diff REOPENED the task. 50-70 rows came back every tick
+    // this way, which is why the same work kept reappearing after the owner
+    // had already closed it. The completion has to land on the commitment.
+    //
+    // actor "human": this is the owner's own gesture, not an inference.
+    const ledgerDone =
+      closedUnitKeys.length > 0 && opts.personaDir
+        ? markLedgerCommitmentsDone(closedUnitKeys, {
+            personaDir: opts.personaDir,
+            onError: (k, e) => console.error(`[ticktick] ledger close FAILED for ${k}: ${errString(e)}`),
+          })
+        : 0;
+    if (ledgerDone > 0) console.log(`[ticktick] ${ledgerDone} ledger commitment(s) marked done`);
+
+    // HIS NOTES after 「🚫 这条不该出现」 — on disk the moment they are seen
+    // (io/owner-notes-store.ts).
+    if (ownerNotes.length > 0) {
+      try {
+        const n = recordOwnerNotes(opts.statePath, ownerNotes);
+        if (n > 0) console.log(`[ticktick] ${n} new owner note(s) after 🚫 recorded`);
+      } catch (e) {
+        console.error(`[ticktick] owner notes NOT recorded: ${errString(e)}`);
+      }
+    }
+
+    // 🚫 on a LEDGER row: the commitment is dropped, so the next derive stops
+    // listing it and the ordinary complete path takes the task away.
+    const ledgerDropped =
+      dismissedLedger.length > 0 && opts.personaDir
+        ? markLedgerCommitmentsDropped(dismissedLedger, {
+            personaDir: opts.personaDir,
+            onError: (k, e) => console.error(`[ticktick] ledger dismiss FAILED for ${k}: ${errString(e)}`),
+          })
+        : 0;
+    if (ledgerDropped > 0) console.log(`[ticktick] ${ledgerDropped} ledger commitment(s) dropped by owner (🚫)`);
+
+    // THE ONLY VERDICT THE OWNER CAN GIVE FOR FREE. Every other exit a row has
+    // — 完成, deleted, aged out, superseded — says nothing about whether the
+    // row deserved to exist: the owner's own words are that he completes
+    // things only because there is no other way to clear them, and the data
+    // agrees (353 of 400 completions were engine rows, 0 of them meaningful).
+    // Ticking DISMISS_LINE is the one gesture that can only mean "this should
+    // not have been here", so it is the one that becomes a label.
+    //
+    // Written BEFORE the status change, per the labels.jsonl contract: if the
+    // append throws, the rows stay as they are and the next tick retries.
+    const dismissedSet = new Set(dismissed);
+    if (dismissedSet.size > 0) {
+      const rows = snapshot.actions.filter((a) => dismissedSet.has(a.id));
+      appendLabels(
+        labelsPathFor(opts.statePath),
+        rows.map((a) =>
+          buildLabel({
+            action: a,
+            decision: "rejected",
+            existence: "not_a_thing",
+            decided_at: new Date().toISOString(),
+            note: "owner ticked 这条不该出现",
+          }),
+        ),
+      );
+      console.log(`[ticktick] ${rows.length} row(s) dismissed by owner → not_a_thing`);
+    }
+
+    // THE OTHER HALF OF THE VERDICT. Before DISMISS_LINE existed, completing
+    // a row meant nothing — it was also the only way to clear noise, which is
+    // the owner's own account of why he completed 353 engine rows without
+    // meaning any of them. Now that a bad row has its own exit, a completion
+    // with the dismissal line UNTICKED says what it always should have: this
+    // was real work and it is finished. That is the positive class the label
+    // corpus never had (131 negative / 4 positive before this).
+    //
+    // Honest limit: a DELETED task is indistinguishable from a completed one
+    // here — both are simply absent from the active list. The owner does not
+    // delete (that absence is exactly why the dismissal line had to be built),
+    // so this is read as completion.
+    //
+    // Ledger rows are not labelled: they carry no ActionItem to snapshot, and
+    // their positive signal lands as `status: done` on the commitment above.
+    const closedSet = new Set(closed);
+    if (closedSet.size > 0) {
+      const rows = snapshot.actions.filter((a) => closedSet.has(a.id));
+      try {
+        appendLabels(
+          labelsPathFor(opts.statePath),
+          rows.map((a) =>
+            buildLabel({
+              action: a,
+              decision: "executed",
+              existence: "confirmed",
+              decided_at: new Date().toISOString(),
+              note: "owner completed without dismissing",
+            }),
+          ),
+        );
+      } catch (e) {
+        // A lost positive label is not worth failing the tick over; the row
+        // still closes. Loud, so a systematic failure cannot hide.
+        console.error(`[ticktick] confirmed-label append FAILED: ${errString(e)}`);
+      }
+    }
+
+    // The MAP is saved on its own signal. `done` counts card-derived actions,
+    // and a ledger row has no action behind it — gating the save on `done`
+    // threw away every tombstone the owner earned by finishing ledger tasks.
+    // Measured on the real account before this fix: 141 tracked records, 0
+    // tombstones, 87 tasks already gone from TickTick. No tombstone is what
+    // mints twins, because a re-listed to-do then creates instead of reopens.
+    // `unitsClosed` is exactly how many records were tombstoned this pass, so
+    // it is the map-changed signal.
+    if (unitsClosed > 0) saveSyncMap(opts.statePath, map);
+
+    if (done.size > 0 || executedNow.length > 0 || dismissedSet.size > 0) {
+      const byId = new Map(executedNow.map((a) => [a.id, a]));
+      await commitUnderLock((fresh) => {
+        fresh.actions = fresh.actions.map((a) => {
+          const exec = byId.get(a.id);
+          if (exec) return exec; // the executed action, receipt and all
+          if (a.status !== "suggested" && a.status !== "approved") return a;
+          // `rejected`, never `executed`: the owner did NOT do this work, he
+          // said it was never work. Recording it as executed is the lie the
+          // readback comment above warns about.
+          if (dismissedSet.has(a.id)) return { ...a, status: "rejected" as const };
+          return done.has(a.id) ? { ...a, status: "executed" as const } : a;
+        });
+      });
+    }
+    if (done.size > 0 || executedNow.length > 0 || unitsClosed > 0 || dismissedSet.size > 0) {
+      console.log(
+        `[ticktick] read back ${done.size} finished, ${executedNow.length} executed-by-tick, ${unitsClosed} task(s) closed`,
+      );
+    }
+    await commitUnderLock((fresh) => {
+      delete fresh.sourceErrors["llm:ticktick-readback"];
+    }).catch(() => undefined);
+  } catch (e) {
+    console.error(`[ticktick] read-back FAILED: ${errString(e)}`);
+    await commitUnderLock((fresh) => {
+      fresh.sourceErrors["llm:ticktick-readback"] = {
+        message: errString(e),
+        at: new Date(startedAtMs).toISOString(),
+      };
+    }).catch(() => undefined);
+  }
+}
+
+// TICK-TO-EXECUTE (specs/ticktick-migration.md §1): a ticked EXECUTABLE
+// line — the labelled invite/tool lines are the only tracked ones — is the
+// owner's approval, and it executes here. executeAction is idempotent by
+// receipt, and persistClaim writes the durable "executing" mark BEFORE the
+// side effect, so a crash between claim and receipt surfaces as
+// NeedsVerification instead of a silent double-send.
+async function executeTicked(
+  ticked: readonly string[],
+  actions: readonly ActionItem[],
+  execute: ExecuteDeps,
+  commitUnderLock: CommitUnderLock,
+  startedAtMs: number,
+): Promise<ActionItem[]> {
+  const executedNow: ActionItem[] = [];
+  for (const id of ticked) {
+    const action = actions.find((a) => a.id === id);
+    if (!action || action.status === "executed" || action.status === "rejected") continue;
+    if (action.action_type !== "calendar" && action.action_type !== "tool") continue;
+    try {
+      // The tick is the approval — but approveAction still runs the
+      // missing-info gate (ASK-not-GUESS): a card with unresolved params
+      // refuses here, loudly, instead of sending something half-built.
+      const approved = action.status === "suggested" ? approveAction(action) : action;
+      const r = await executeAction(approved, {
+        ...execute,
+        persistClaim: async (claimed) => {
+          await commitUnderLock((fresh) => {
+            fresh.actions = fresh.actions.map((a) => (a.id === claimed.id ? claimed : a));
+          });
+        },
+      });
+      executedNow.push(r.action);
+      console.log(`[ticktick] ticked → executed: ${action.action_type} "${String(action.params.title ?? action.headline ?? action.id)}" (${r.receipt?.ref ?? "no ref"})`);
+    } catch (e) {
+      // Loud, never silent: an invite the owner asked for that did NOT go
+      // out is exactly the failure that must not hide in a counter.
+      console.error(`[ticktick] ticked ${action.action_type} FAILED to execute: ${errString(e)}`);
+      await commitUnderLock((fresh) => {
+        fresh.sourceErrors["llm:tick-execute"] = {
+          message: `${action.id}: ${errString(e)}`,
+          at: new Date(startedAtMs).toISOString(),
+        };
+      }).catch(() => undefined);
+    }
+  }
+  return executedNow;
 }
 
 export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
@@ -1568,243 +1814,9 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   }
 
-  // ── PHASE 6a (UNLOCKED, no LLM): pull completions BACK from TickTick.
-  //
-  // Runs BEFORE the push, so a task the owner just finished is closed here and
-  // is no longer eligible in the push below — rather than being re-written and
-  // only closed on the next tick.
-  //
-  // Non-fatal, like the push: TickTick being unreachable must never stop a scan.
+  // ── PHASE 6a (UNLOCKED, no LLM): read back what he did in TickTick (applyTickTickReadback).
   if (!opts.dryRun && opts.ticktickReader) {
-    try {
-      // EVERY list a tracked task lives in — see readAllActive for why this is
-      // derived from the map rather than named.
-      const syncMap = loadSyncMap(opts.statePath);
-      const { tasks: remote, complete } = await readAllActive(opts.ticktickReader, syncMap);
-      const snapshot = loadState(opts.statePath);
-      const { ticked, closed, dismissed, closedUnitKeys, dismissedLedger, ownerNotes, map, unitsClosed } = readbackFromTickTick(
-        snapshot,
-        syncMap,
-        remote,
-        complete,
-      );
-      // His own tickets, for the drafter and the person pass (core/owner-tickets.ts).
-      // Only from a COMPLETE read: a partial one would drop tickets and uncover work.
-      if (complete) {
-        try {
-          saveOwnerTickets(opts.statePath, ownerTicketsFrom(remote, syncMap));
-        } catch (e) {
-          console.error(`[ticktick] owner tickets not saved: ${errString(e)}`);
-        }
-      }
-
-      // TICK-TO-EXECUTE (specs/ticktick-migration.md §1): a ticked EXECUTABLE
-      // line — the labelled invite/tool lines are the only tracked ones — is the
-      // owner's approval, and it executes here. executeAction is idempotent by
-      // receipt, and persistClaim writes the durable "executing" mark BEFORE the
-      // side effect, so a crash between claim and receipt surfaces as
-      // NeedsVerification instead of a silent double-send.
-      const executedNow: ActionItem[] = [];
-      if (ticked.length > 0 && opts.execute) {
-        for (const id of ticked) {
-          const action = snapshot.actions.find((a) => a.id === id);
-          if (!action || action.status === "executed" || action.status === "rejected") continue;
-          if (action.action_type !== "calendar" && action.action_type !== "tool") continue;
-          try {
-            // The tick is the approval — but approveAction still runs the
-            // missing-info gate (ASK-not-GUESS): a card with unresolved params
-            // refuses here, loudly, instead of sending something half-built.
-            const approved = action.status === "suggested" ? approveAction(action) : action;
-            const r = await executeAction(approved, {
-              ...opts.execute,
-              persistClaim: async (claimed) => {
-                await commitUnderLock((fresh) => {
-                  fresh.actions = fresh.actions.map((a) => (a.id === claimed.id ? claimed : a));
-                });
-              },
-            });
-            executedNow.push(r.action);
-            console.log(`[ticktick] ticked → executed: ${action.action_type} "${String(action.params.title ?? action.headline ?? action.id)}" (${r.receipt?.ref ?? "no ref"})`);
-          } catch (e) {
-            // Loud, never silent: an invite the owner asked for that did NOT go
-            // out is exactly the failure that must not hide in a counter.
-            console.error(`[ticktick] ticked ${action.action_type} FAILED to execute: ${errString(e)}`);
-            await commitUnderLock((fresh) => {
-              fresh.sourceErrors["llm:tick-execute"] = {
-                message: `${action.id}: ${errString(e)}`,
-                at: new Date(startedAtMs).toISOString(),
-              };
-            }).catch(() => undefined);
-          }
-        }
-      }
-
-      // Everything else the readback learned: whole-task closes always record
-      // done; ticked items record done too when no executor is configured
-      // (the pre-§1 behaviour — a tick means "I already did it").
-      const done = new Set([...closed, ...(opts.execute ? [] : ticked)]);
-
-      // CLOSE THE LOOP ON LEDGER ROWS. A ledger row is derived fresh from a
-      // persona commitment every tick, so finishing it in TickTick settled
-      // nothing: the commitment stayed `open`, the next tick re-derived the
-      // row, and the diff REOPENED the task. 50-70 rows came back every tick
-      // this way, which is why the same work kept reappearing after the owner
-      // had already closed it. The completion has to land on the commitment.
-      //
-      // actor "human": this is the owner's own gesture, not an inference.
-      const ledgerDone =
-        closedUnitKeys.length > 0 && opts.personaDir
-          ? markLedgerCommitmentsDone(closedUnitKeys, {
-              personaDir: opts.personaDir,
-              onError: (k, e) => console.error(`[ticktick] ledger close FAILED for ${k}: ${errString(e)}`),
-            })
-          : 0;
-      if (ledgerDone > 0) console.log(`[ticktick] ${ledgerDone} ledger commitment(s) marked done`);
-
-      // HIS NOTES after 「🚫 这条不该出现」, kept on disk the moment they are
-      // seen — the richest verdict this engine gets, and the task line they
-      // live on can be dismissed, completed or re-rendered. Append-only, one
-      // record per (row, note) the first time it appears.
-      if (ownerNotes.length > 0) {
-        try {
-          const file = join(dirname(opts.statePath), "owner-notes.jsonl");
-          const seen = new Set(
-            existsSync(file)
-              ? readFileSync(file, "utf8").split("\n").filter(Boolean).map((l) => {
-                  const o = JSON.parse(l) as { unitKey: string; note: string };
-                  return `${o.unitKey}\u0000${o.note}`;
-                })
-              : [],
-          );
-          const fresh = ownerNotes.filter((n) => !seen.has(`${n.unitKey}\u0000${n.note}`));
-          if (fresh.length > 0) {
-            appendFileSync(file, fresh.map((n) => JSON.stringify({ at: new Date().toISOString(), ...n })).join("\n") + "\n");
-            console.log(`[ticktick] ${fresh.length} new owner note(s) after 🚫 recorded`);
-          }
-        } catch (e) {
-          console.error(`[ticktick] owner notes NOT recorded: ${errString(e)}`);
-        }
-      }
-
-      // 🚫 on a LEDGER row: the commitment is dropped, so the next derive stops
-      // listing it and the ordinary complete path takes the task away.
-      const ledgerDropped =
-        dismissedLedger.length > 0 && opts.personaDir
-          ? markLedgerCommitmentsDropped(dismissedLedger, {
-              personaDir: opts.personaDir,
-              onError: (k, e) => console.error(`[ticktick] ledger dismiss FAILED for ${k}: ${errString(e)}`),
-            })
-          : 0;
-      if (ledgerDropped > 0) console.log(`[ticktick] ${ledgerDropped} ledger commitment(s) dropped by owner (🚫)`);
-
-      // THE ONLY VERDICT THE OWNER CAN GIVE FOR FREE. Every other exit a row has
-      // — 完成, deleted, aged out, superseded — says nothing about whether the
-      // row deserved to exist: the owner's own words are that he completes
-      // things only because there is no other way to clear them, and the data
-      // agrees (353 of 400 completions were engine rows, 0 of them meaningful).
-      // Ticking DISMISS_LINE is the one gesture that can only mean "this should
-      // not have been here", so it is the one that becomes a label.
-      //
-      // Written BEFORE the status change, per the labels.jsonl contract: if the
-      // append throws, the rows stay as they are and the next tick retries.
-      const dismissedSet = new Set(dismissed);
-      if (dismissedSet.size > 0) {
-        const rows = snapshot.actions.filter((a) => dismissedSet.has(a.id));
-        appendLabels(
-          labelsPathFor(opts.statePath),
-          rows.map((a) =>
-            buildLabel({
-              action: a,
-              decision: "rejected",
-              existence: "not_a_thing",
-              decided_at: new Date().toISOString(),
-              note: "owner ticked 这条不该出现",
-            }),
-          ),
-        );
-        console.log(`[ticktick] ${rows.length} row(s) dismissed by owner → not_a_thing`);
-      }
-
-      // THE OTHER HALF OF THE VERDICT. Before DISMISS_LINE existed, completing
-      // a row meant nothing — it was also the only way to clear noise, which is
-      // the owner's own account of why he completed 353 engine rows without
-      // meaning any of them. Now that a bad row has its own exit, a completion
-      // with the dismissal line UNTICKED says what it always should have: this
-      // was real work and it is finished. That is the positive class the label
-      // corpus never had (131 negative / 4 positive before this).
-      //
-      // Honest limit: a DELETED task is indistinguishable from a completed one
-      // here — both are simply absent from the active list. The owner does not
-      // delete (that absence is exactly why the dismissal line had to be built),
-      // so this is read as completion.
-      //
-      // Ledger rows are not labelled: they carry no ActionItem to snapshot, and
-      // their positive signal lands as `status: done` on the commitment above.
-      const closedSet = new Set(closed);
-      if (closedSet.size > 0) {
-        const rows = snapshot.actions.filter((a) => closedSet.has(a.id));
-        try {
-          appendLabels(
-            labelsPathFor(opts.statePath),
-            rows.map((a) =>
-              buildLabel({
-                action: a,
-                decision: "executed",
-                existence: "confirmed",
-                decided_at: new Date().toISOString(),
-                note: "owner completed without dismissing",
-              }),
-            ),
-          );
-        } catch (e) {
-          // A lost positive label is not worth failing the tick over; the row
-          // still closes. Loud, so a systematic failure cannot hide.
-          console.error(`[ticktick] confirmed-label append FAILED: ${errString(e)}`);
-        }
-      }
-
-      // The MAP is saved on its own signal. `done` counts card-derived actions,
-      // and a ledger row has no action behind it — gating the save on `done`
-      // threw away every tombstone the owner earned by finishing ledger tasks.
-      // Measured on the real account before this fix: 141 tracked records, 0
-      // tombstones, 87 tasks already gone from TickTick. No tombstone is what
-      // mints twins, because a re-listed to-do then creates instead of reopens.
-      // `unitsClosed` is exactly how many records were tombstoned this pass, so
-      // it is the map-changed signal.
-      if (unitsClosed > 0) saveSyncMap(opts.statePath, map);
-
-      if (done.size > 0 || executedNow.length > 0 || dismissedSet.size > 0) {
-        const byId = new Map(executedNow.map((a) => [a.id, a]));
-        await commitUnderLock((fresh) => {
-          fresh.actions = fresh.actions.map((a) => {
-            const exec = byId.get(a.id);
-            if (exec) return exec; // the executed action, receipt and all
-            if (a.status !== "suggested" && a.status !== "approved") return a;
-            // `rejected`, never `executed`: the owner did NOT do this work, he
-            // said it was never work. Recording it as executed is the lie the
-            // readback comment above warns about.
-            if (dismissedSet.has(a.id)) return { ...a, status: "rejected" as const };
-            return done.has(a.id) ? { ...a, status: "executed" as const } : a;
-          });
-        });
-      }
-      if (done.size > 0 || executedNow.length > 0 || unitsClosed > 0 || dismissedSet.size > 0) {
-        console.log(
-          `[ticktick] read back ${done.size} finished, ${executedNow.length} executed-by-tick, ${unitsClosed} task(s) closed`,
-        );
-      }
-      await commitUnderLock((fresh) => {
-        delete fresh.sourceErrors["llm:ticktick-readback"];
-      }).catch(() => undefined);
-    } catch (e) {
-      console.error(`[ticktick] read-back FAILED: ${errString(e)}`);
-      await commitUnderLock((fresh) => {
-        fresh.sourceErrors["llm:ticktick-readback"] = {
-          message: errString(e),
-          at: new Date(startedAtMs).toISOString(),
-        };
-      }).catch(() => undefined);
-    }
+    await applyTickTickReadback(opts, opts.ticktickReader, commitUnderLock, startedAtMs);
   }
 
   // ── PHASE 6b (UNLOCKED, no LLM): push the list — ledger rows + card rows —
