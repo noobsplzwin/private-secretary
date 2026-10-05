@@ -7,7 +7,8 @@
 //   who spoke   → the line's own speaker label (never the model's claim)
 //   when        → the line's own date
 //   hedged      → the wording of the quote
-//   closed      → a later line by the same speaker declaring it done
+//
+// (Closure — "a later line shows it done" — is core/closure-check.ts.)
 //
 // The bench measured why this matters: the production path, asked five
 // judgments at once, reproduced 5 of the owner's known-bad items and scored
@@ -77,39 +78,6 @@ const HEDGES = [
 export function isHedged(quote: string): boolean {
   const q = quote.toLowerCase();
   return HEDGES.some((h) => q.includes(h));
-}
-
-const DONE_WORDS =
-  /发你了|发了|寄了|搞定|弄完|做完|已经好|完成了|办好了|已下单|订好了|已付|付了|sent it|already sent|done|shipped|ordered it|paid/;
-
-/**
- * Did the performer later declare this finished?
- *
- * Evidence: a line AFTER the committing one, spoken by the SAME side, carrying
- * a completion word and either sharing a content token with the commitment or
- * sitting close behind it in the same stretch of talk. Terse Chinese
- * confirmations rarely repeat the subject — 「发你了」 names nothing — so
- * proximity is the second accepted signal.
- */
-export function closedLater(
-  lines: readonly CorpusLine[],
-  commitLine: CorpusLine,
-  what: string,
-  proximity = 5,
-): boolean {
-  const at = lines.indexOf(commitLine);
-  if (at < 0 || !commitLine.date) return false;
-  const tokens = new Set(fold(what).match(/[a-z0-9]{3,}|[一-鿿]{2}/g) ?? []);
-  for (let i = at + 1; i < lines.length; i++) {
-    const l = lines[i]!;
-    if (l.speaker !== commitLine.speaker) continue;
-    if (!l.date || l.date < commitLine.date) continue;
-    if (!DONE_WORDS.test(l.text)) continue;
-    const t = fold(l.text);
-    if ([...tokens].some((tok) => t.includes(tok))) return true;
-    if (i - at <= proximity) return true;
-  }
-  return false;
 }
 
 /** Days between a line's date and now — Infinity when the line has no date. */

@@ -95,11 +95,6 @@ export interface SlackTokenBundle {
   client_id: string;
 }
 
-// A Slack refresh_token dies 30 days after it was issued. Every refresh mints a
-// new one, so a daemon that runs at all keeps the window open indefinitely; the
-// case this matters for is a machine that sat closed.
-export const SLACK_REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-
 // Refresh this far ahead of expiry so a scan round never dies mid-flight on a
 // token that expired between the check and the call.
 const REFRESH_BUFFER_MS = 60_000;

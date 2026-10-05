@@ -15,7 +15,7 @@
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { _resetIdentity, type Identity } from "./identity.js";
+import { _resetIdentity } from "./identity.js";
 
 export interface IdentityInput {
   primaryEmail: string;
@@ -147,22 +147,3 @@ export function appendSlackAccount(
   return { added: true, account, label, path };
 }
 
-export interface IdentityStatus {
-  configured: boolean;
-  primaryEmail: string;
-  mailboxes: string[];
-  slackAccounts: Array<{ account: string; label: string }>;
-  calendarMailbox: string;
-  source: string;
-}
-
-export function identityStatus(id: Identity): IdentityStatus {
-  return {
-    configured: id.configured,
-    primaryEmail: id.primaryEmail,
-    mailboxes: [...id.mailboxes],
-    slackAccounts: id.slackAccounts.map((a) => ({ ...a })),
-    calendarMailbox: id.calendarMailbox,
-    source: id.source,
-  };
-}

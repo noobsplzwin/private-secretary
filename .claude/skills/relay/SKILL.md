@@ -175,9 +175,8 @@ one-line "no new messages".
    not an error. Anti-fabrication applies: no evidence in THIS round's messages =
    no write. Skip this step entirely when nothing new was learned.
 
-Scan interval when looping: default 30 minutes (`/loop 30m /relay`). The constant is
-`DEFAULT_SCAN_INTERVAL_MINUTES` in relay/core/action-item.ts; `SCAN_INTERVAL_MINUTES`
-env var overrides. No other configuration exists.
+Scan interval when looping: default 30 minutes (`/loop 30m /relay`). The daemon
+(`scripts/run-notify.ts`) polls on its own cadence; no other configuration exists.
 
 ## Review mode (the pending queue)
 

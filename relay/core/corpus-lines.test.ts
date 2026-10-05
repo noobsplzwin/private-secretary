@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ageInDays, capCorpus, closedLater, indexCorpus, isHedged, lineOf, mintable, theirOwnMove } from "./corpus-lines.js";
+import { ageInDays, capCorpus, indexCorpus, isHedged, lineOf, mintable, theirOwnMove } from "./corpus-lines.js";
 
 const NOW = Date.parse("2026-08-23T12:00:00Z");
 const CORPUS = [
@@ -48,27 +48,6 @@ describe("isHedged", () => {
   it("catches the English equivalents", () => {
     expect(isHedged("Maybe I can look at it")).toBe(true);
     expect(isHedged("I'll send it today")).toBe(false);
-  });
-});
-
-describe("closedLater", () => {
-  it("a later 发你了 by the same speaker closes the promise", () => {
-    const commit = lineOf(LINES, "好的我今天发你")!;
-    expect(closedLater(LINES, commit, "把BOM发给温总")).toBe(true);
-  });
-
-  it("the other side's completion word does NOT close my promise", () => {
-    const theirs = indexCorpus(
-      ["[2026-08-20] me: 我今天发你BOM", "[2026-08-21] 张工: 我发你了"].join("\n"),
-    );
-    expect(closedLater(theirs, theirs[0]!, "发BOM")).toBe(false);
-  });
-
-  it("an EARLIER completion word does not close a later promise", () => {
-    const rev = indexCorpus(
-      ["[2026-08-01] me: 发你了", "[2026-08-20] me: 我今天发你BOM"].join("\n"),
-    );
-    expect(closedLater(rev, rev[1]!, "发BOM")).toBe(false);
   });
 });
 

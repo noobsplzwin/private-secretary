@@ -24,14 +24,12 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { getJSON, setJSON, deleteSecret } from "./keychain.js";
-import type { ToolRunner } from "../proc/execute.js";
 
 // ─── the OAuth client provider (Keychain-backed) ────────────────────
 
 // A provider instance is bound to one authService (the Keychain slot holding
 // that tool's OAuth tokens) and one redirectUrl (the loopback callback).
 class McpOAuthProvider implements OAuthClientProvider {
-  private pendingCode: string | null = null;
   private pendingVerifier: string | null = null;
   private clientInfo: OAuthClientInformationMixed | undefined;
 
@@ -90,7 +88,6 @@ class McpOAuthProvider implements OAuthClientProvider {
   }
 
   async redirectToAuthorization(url: URL): Promise<void> {
-    this.pendingCode = null;
     // macOS `open`; other platforms fall through (the URL is also returned).
     spawn("open", [url.toString()], { detached: true, stdio: "ignore" }).unref();
   }
@@ -199,32 +196,6 @@ async function connect(url: string, authService: string, account: string): Promi
   return conn;
 }
 
-// ─── the ToolRunner ─────────────────────────────────────────────────
-
-export interface McpToolOptions {
-  url: string;
-  authService: string;
-  defaultTool?: string;
-}
-
-// Build a real-MCP ToolRunner for a URL-based (OAuth) server. The tool to call
-// is `params.mcp_tool` (the LLM names it), falling back to config.defaultTool.
-export function createMcpToolRunner(opts: McpToolOptions): ToolRunner {
-  return {
-    run: async (params: Record<string, unknown>) => {
-      const toolName =
-        (typeof params.mcp_tool === "string" && params.mcp_tool) || opts.defaultTool || "";
-      if (!toolName) {
-        throw new Error(`no mcp_tool in params and no defaultTool for ${opts.url}`);
-      }
-      // Strip our own envelope keys before they leak into the tool arguments.
-      const { mcp_tool: _t, ...args } = params;
-
-      const res = await callMcpTool(opts.url, opts.authService, toolName, args);
-      return { ref: extractRef(callResultText(res), toolName) };
-    },
-  };
-}
 
 // Connect, call one tool, close. The low-level primitive callers with
 // tool-specific field mapping (e.g. relay/io/jira-mcp.ts) build on instead of
@@ -360,15 +331,6 @@ function splitJsonDocuments(text: string): string[] {
   return docs;
 }
 
-// Trigger ONLY the OAuth handshake for a URL-based MCP tool (no tool call) —
-// the Settings page's "Connect" button. Runs the browser flow, stores the
-// token in Keychain, then disconnects. A tool whose token already exists
-// returns immediately (already authorized).
-export async function authorizeMcpTool(url: string, authService: string): Promise<void> {
-  const { client } = await connect(url, authService, url);
-  await client.close().catch(() => {});
-}
-
 // Debug / introspection: list the MCP server's tool names (to learn which
 // tool a card's params.mcp_tool should name).
 export async function listMcpTools(url: string, authService: string): Promise<string[]> {
@@ -390,11 +352,6 @@ export function extractRef(text: string, toolName: string): string {
 // The keychain service for a tool key's OAuth tokens, unless configured.
 export function mcpAuthServiceFor(toolKey: string, configured?: string): string {
   return configured || `taiv-secretary-mcp-${toolKey}`;
-}
-
-// Debug / manual revoke: drop a tool's stored OAuth tokens.
-export async function clearMcpTokens(authService: string, account: string): Promise<void> {
-  await deleteSecret(authService, account);
 }
 
 /**

@@ -3,7 +3,6 @@
 // Pure logic; fs lives in relay/io/bootstrap-progress.ts, MCP reads and
 // persona generation live in the persona-bootstrap skill (Claude is the LLM).
 
-export const DEFAULT_HISTORY_YEARS = 5;
 export const DEFAULT_TOP_N = 20;
 
 // ---------- ranking ----------

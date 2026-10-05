@@ -55,22 +55,6 @@ export function activityPathFor(statePath: string): string {
   return join(dirname(statePath), "activity-log.jsonl");
 }
 
-// All valid kinds — the cockpit server validates the ?kind= filter against
-// this so a stray query value can't silently filter to nothing.
-export const ACTIVITY_KINDS: ReadonlySet<string> = new Set<ActivityKind>([
-  "tick",
-  "supersede",
-  "auto-execute",
-  "approve",
-  "skip",
-  "edit",
-  "restore",
-  "mark-done",
-  "comment",
-  "re-time",
-  "error",
-]);
-
 // Append one record. Throws on I/O failure — the CALLER decides whether that
 // matters (daemon/cockpit wrap it so logging never breaks the operation).
 export function appendActivity(filePath: string, rec: ActivityRecord): void {

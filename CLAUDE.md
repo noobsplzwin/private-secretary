@@ -27,9 +27,9 @@ The layout is discoverable from the tree; what is NOT discoverable:
   writes, R1), `slack-oauth.readSlackToken` (Slack tokens),
   `createSlackClientFromKeychain` (every Slack caller), `identity` /
   `identity-store` (whose accounts this instance reads).
-- No feature flags, no config system. Scan interval is
-  `DEFAULT_SCAN_INTERVAL_MINUTES` (30) in `relay/core/action-item.ts`,
-  env-overridable. The scan's only output is queue rows — no notifications.
+- No feature flags, no config system. Poll cadence lives in
+  `scripts/run-notify.ts` (fetch lane per source; analyse lane on every queued
+  message and every 60s). The output is TickTick rows — no notifications.
 - **Every TickTick task ends with `DISMISS_LINE` ("🚫 这条不该出现").** It is the
   owner's ONLY free quality verdict: 完成 is also how he clears noise (his own
   words — there was no other way to get a row off the list), so a completion

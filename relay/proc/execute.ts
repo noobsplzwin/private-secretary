@@ -351,20 +351,6 @@ async function executeTool(action: ActionItem, deps: ExecuteDeps): Promise<Execu
 
 // ─── read-only conflict pre-check (the card's "有无冲突" line) ──────────
 
-// Runs the SAME conflict logic the approve path uses, but never inserts —
-// lets the cockpit show a conflict BEFORE the user approves. Deterministic
-// given the events list. Errors (list failure, no mailbox) surface to the
-// caller as a normal rejection, not a conflict.
-export async function checkCalendarConflicts(
-  action: ActionItem,
-  listEvents: (opts: { timeMin: string; timeMax: string }) => Promise<CalendarEvent[]>,
-): Promise<Conflict[]> {
-  const event = buildCalendarEvent(action);
-  const { timeMin, timeMax } = eventWindowForList(event);
-  const existing = await listEvents({ timeMin, timeMax });
-  return findConflictsForProposed(event, existing);
-}
-
 // ─── target resolution helpers ─────────────────────────────────────────
 
 // The Slack channel to post into. Priority:

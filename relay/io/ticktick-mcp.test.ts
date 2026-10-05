@@ -11,7 +11,7 @@ vi.mock("./mcp-tool.js", async (importOriginal) => {
 });
 
 const { createTickTickWriter, clearTickTickProjectCache } = await import("./ticktick-mcp.js");
-const { TICKTICK_BATCH_MAX } = await import("../core/mstodo.js");
+const { TICKTICK_BATCH_MAX } = await import("../core/ticktick.js");
 
 const textResult = (payload: unknown) => ({ content: [{ type: "text", text: JSON.stringify(payload) }] });
 const PROJECTS = [

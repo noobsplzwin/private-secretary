@@ -44,4 +44,3 @@ export function mergeToolSpecs(
   return merged;
 }
 
-export const DEFAULT_TOOL_KEYS: readonly string[] = Object.keys(DEFAULT_TOOL_SPECS);

@@ -1,9 +1,11 @@
 # PrivateSecretary
 
 A local AI chief-of-staff. It watches your own chat streams (Slack / Gmail /
-WeChat), works out what actually needs *you*, and keeps a prioritised daily
-to-do list. Each item can spawn AI-drafted sub-actions — a calendar event, an
-email draft, a ticket — which **you** send. Nothing goes out without a click.
+WeChat), works out what actually needs *you*, and keeps your to-do list in
+TickTick current: rows appear when something is yours, update as the
+conversation moves, and close when the conversation shows the work done. Your
+own big tickets are kept current too — steps ticked, progress quoted. Nothing
+is sent on your behalf.
 
 Runs entirely on your machine. Inference goes through the Claude Code CLI
 (`claude -p`), so with a Claude subscription there is no API bill.
@@ -21,19 +23,18 @@ curl -fsSL https://raw.githubusercontent.com/noobsplzwin/private-secretary/dev/s
 
 One line installs Node.js if needed (via Homebrew), clones into the hidden
 `~/.private-secretary` (so it never collides with your own dev checkout),
-builds the cockpit, starts the 24/7 daemon + the triage UI
-(`http://127.0.0.1:4317`) as launchd agents, and links the `/relay` skill into
-`~/.claude/skills`. Re-running it updates to the latest version. Then open the
-cockpit → Connections to link your accounts.
+starts the 24/7 daemon as a launchd agent, and links the `/relay` skill into
+`~/.claude/skills`. Re-running it updates to the latest version. Then connect
+your accounts — see SETUP.md.
 
 ## What it does
 
 | | |
 |---|---|
 | **Watches** | Slack DMs/MPIMs, Gmail (multi-mailbox), WeChat 1:1 + groups (macOS only) |
-| **Produces** | A ranked daily list (A/B/C/D) with, per item, a digest, the current state, and concrete next steps |
-| **Sub-actions** | Calendar event · email draft · reply draft · reminder. All human-confirmed |
-| **Learns** | Every approve / edit / skip is recorded as a label, so accuracy is measurable rather than vibes |
+| **Produces** | TickTick rows, each with a date, the evidence it stands on, and concrete next steps |
+| **Sub-actions** | Calendar events for times the thread confirmed · Jira tickets on your tick |
+| **Learns** | Your 「🚫 这条不该出现」 ticks and the note you write after them are recorded as labels and owner notes |
 
 Hard rules the engine will not break:
 
@@ -47,14 +48,14 @@ Hard rules the engine will not break:
 ```
 relay/core/      pure logic, no I/O — action schema + status machine, task
                  identity, trigger filter, recipient resolution, dedup cursors,
-                 executor rules, metrics, persona v3, anchors (validator)
+                 executor rules, metrics, persona v3, ledger/list derivation,
+                 closure check, plan progress
 relay/io/        filesystem + APIs — state, labels, Keychain, Slack/Gmail/
                  Calendar/WeChat clients, identity + business-context config
-relay/proc/      the passes — scan → draft → consolidate → refresh → plan →
-                 persona-update, plus execution
+relay/proc/      the passes — fetch lane → inbox → analyse lane (draft, person
+                 pass, closure check, plan progress) → TickTick sync
 relay/eval/      accuracy baseline + zero-token replay harness
-relay/cockpit/   the local web UI (localhost:4317) you triage in
-scripts/         daemon entrypoints, one-off migrations, smoke tests
+scripts/         the daemon (run-notify), auth, smoke tests, eval
 specs/           design docs; start with action-item-engine.md
 config/          YOUR accounts + business facts (gitignored; .example files committed)
 personas/        per-contact profiles (gitignored — see personas/README.md)
@@ -64,10 +65,9 @@ state/           queue, cursors, labels, audit log (gitignored)
 ## Commands
 
 ```bash
-npm test           # 552 tests, no credentials needed
+npm test           # no credentials needed
 npm run typecheck
 npm run relay -- queue state/loop-state.json     # show the pending queue
-npx tsx scripts/run-cockpit.ts --port 4317       # the triage UI
 npx tsx scripts/run-notify.ts                    # the daemon (needs setup)
 ```
 
@@ -76,7 +76,6 @@ npx tsx scripts/run-notify.ts                    # the daemon (needs setup)
 Because "it feels better" is not evidence, the engine ships an eval path:
 
 ```bash
-npx tsx scripts/export-labels.ts    # snapshot decided items into state/labels.jsonl
 npx tsx scripts/baseline.ts         # per-type precision + confidence calibration
 npx tsx scripts/freeze-corpus.ts    # freeze a replay corpus (read-only)
 ```
@@ -86,13 +85,12 @@ hides the type that is actually broken. See `eval/baseline-*.md` after a run.
 
 ## Status
 
-Working: scanning, drafting, task grouping, thread refresh, daily ranking,
-persona memory with an evidence-gated write path, the cockpit, calendar
-creation, Gmail drafts, Slack sends, the label/eval layer.
+Working: two-lane scanning, drafting, the commitment ledger (persona memory
+with an evidence-gated write path), TickTick sync with read-back of your ticks
+and notes, closure detection, plan-ticket upkeep, calendar creation, Jira, the
+label/eval layer.
 
-Known gaps are tracked in `specs/` and `docs/`. Notably: a to-do has no durable
-identity across ticks yet (it is regenerated each refresh), task identity is a
-title hash, and there is no Jira executor. Those are the next work items.
+Known gaps are tracked in `specs/`.
 
 ## License / privacy
 

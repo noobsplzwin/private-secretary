@@ -109,17 +109,3 @@ export function loadPersonas(dir: string): Persona[] {
   return files.map((f) => parsePersona(parse(readFileSync(join(dir, f), "utf8")), f));
 }
 
-// Raw v3 persona objects (NOT flattened). The cockpit People screen needs the
-// full schema — relationship_meta, communication, commitments, behavior,
-// personal, plus the provenance + evidence ledger — which the flat Persona drops.
-export function loadRawPersonas(dir: string): Array<Record<string, unknown>> {
-  let files: string[];
-  try {
-    files = readdirSync(dir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
-  } catch {
-    return [];
-  }
-  return files
-    .map((f) => parse(readFileSync(join(dir, f), "utf8")) as Record<string, unknown>)
-    .filter((o): o is Record<string, unknown> => !!o && typeof o === "object");
-}

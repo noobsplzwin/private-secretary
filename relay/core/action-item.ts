@@ -13,10 +13,6 @@ import { isValidTimeZone, resolveWallTime } from "./when.js";
 import { AUTO_SEND_PLATFORMS, type Attachment, type Platform } from "./types.js";
 import { DEFAULT_TOOL_SPECS, type ToolSpec } from "./tool-registry.js";
 
-// Scan interval: a single constant. Override with the SCAN_INTERVAL_MINUTES env var
-// at the call site if needed. No config system (V1 hard decision).
-export const DEFAULT_SCAN_INTERVAL_MINUTES = 30;
-
 export type ActionType =
   | "reply"
   | "relay"

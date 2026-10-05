@@ -32,7 +32,7 @@ import { diffTickTickReadback, dismissNote, type RemoteTask } from "../core/tick
 import { groupByTask } from "../core/tasks.js";
 import { unitKey, stableHash } from "../core/unit-key.js";
 import { ownLinesShown, parseLedgerUnitKey } from "../core/ledger-list.js";
-import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
+import { TICKTICK_BATCH_MAX } from "../core/ticktick.js";
 import type { TickTickTaskPayload } from "../core/ticktick.js";
 import type { TrackedApproval } from "../core/ticktick-approval.js";
 import type { PlanUpdate } from "../core/plan-progress.js";

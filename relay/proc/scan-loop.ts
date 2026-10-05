@@ -41,13 +41,12 @@ import {
   staleSuggestedCards,
   isCalendarRedundant,
   isSupersedeExempt,
-  redundantPendingCalendarIds,
 } from "../core/action-item.js";
 import { draftActions, type DraftDeps } from "./draft.js";
-import { clusterKey, unitKey, inheritSupersededTaskIds } from "../core/unit-key.js";
+import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { executeAction, type ExecuteDeps } from "./execute.js";
 import { approveAction } from "../core/action-item.js";
-import { syncToTickTick, cardRows, readbackFromTickTick, taskUnitsFrom, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
+import { syncToTickTick, cardRows, readbackFromTickTick, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
 import { enqueue, isLlmUnavailable, settle, takeForDraft, type InboxEntry } from "../core/inbox.js";
 import type { TaskUnit } from "../core/ticktick-plan.js";
@@ -291,17 +290,6 @@ function setGmailState(
 let officialAcctCache: { names: Set<string>; atMs: number } | null = null;
 const OFFICIAL_ACCT_TTL_MS = 10 * 60 * 1000;
 
-// Consolidation runs on every tick that drafted new cards; when nothing new was
-// drafted but pre-existing cards are still ungrouped, it re-attempts at most
-// once per this idle window (so we don't spend an LLM call every 30s tick).
-let lastConsolidateMs = 0;
-const CONSOLIDATE_IDLE_MS = 30 * 60 * 1000;
-
-// Daily-plan (ranking) re-runs when new cards were drafted, else at most once per
-// this idle window (ranking is global + costs an LLM call).
-let lastPlanMs = 0;
-const PLAN_IDLE_MS = 30 * 60 * 1000;
-
 // Error-only ticks repeat verbatim every poll while a source is down (a dead
 // WeChat MCP logs the same ERR line every 10s — ~8k/day of pure noise that
 // would bury the signal). Suppress exact repeats: the FIRST occurrence and
@@ -315,8 +303,8 @@ const lastErrorTickSigByScope = new Map<string, string>();
 // ─── one tick ───────────────────────────────────────────────────────
 
 // Acquire the state lock, retrying briefly. Used for the phase-3 re-acquire:
-// the only competitor is the cockpit, which holds the lock for a single fast
-// mutation, so a few short retries reliably win it back.
+// the competitor is the other lane's short commit, so a few short retries
+// reliably win it back.
 async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200): Promise<boolean> {
   for (let i = 0; i < tries; i++) {
     if (acquireLock(stateDir)) return true;

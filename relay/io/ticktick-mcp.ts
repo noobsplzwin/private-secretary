@@ -17,7 +17,7 @@
 
 import { callMcpTool, callResultObject, callResultRows } from "./mcp-tool.js";
 import { resolveTickTickProject, type TickTickProject } from "../core/ticktick.js";
-import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
+import { TICKTICK_BATCH_MAX } from "../core/ticktick.js";
 import type { TickTickWriter, TickTickReader } from "../proc/ticktick-sync.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
 import { applyPlanUpdate } from "../core/plan-progress.js";
@@ -267,7 +267,7 @@ export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter 
       if (tasks.length === 0) return;
       if (tasks.length > TICKTICK_BATCH_MAX) {
         // The caller chunks; this is the backstop, because exceeding the cap
-        // TRUNCATES SILENTLY (see core/mstodo.ts) — the failure that lost 803
+        // TRUNCATES SILENTLY (see core/ticktick.ts) — the failure that lost 803
         // tasks in the Microsoft To Do migration.
         throw new Error(
           `ticktick: ${tasks.length} completions exceeds TICKTICK_BATCH_MAX=${TICKTICK_BATCH_MAX}`,

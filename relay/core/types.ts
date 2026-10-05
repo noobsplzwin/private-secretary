@@ -10,14 +10,6 @@ import type { Correction } from "./persona-v3.js";
 // InboundMessage.platform.
 export type Platform = "slack" | "gmail" | "wechat" | "jira" | "notion";
 
-// Platforms an Action Item can ORIGINATE from (an inbound message). Reference/executor
-// targets (jira, notion) are excluded.
-export const MESSAGE_ORIGIN_PLATFORMS: ReadonlySet<Platform> = new Set([
-  "slack",
-  "gmail",
-  "wechat",
-]);
-
 // Platforms we can truly auto-send through in THIS runtime. Only Slack — the Slack MCP
 // has slack_send_message. The connected Gmail MCP exposes create_draft ONLY (no send),
 // so a Gmail reply/relay creates a draft the user sends from Gmail = manual. WeChat is

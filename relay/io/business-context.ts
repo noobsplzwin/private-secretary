@@ -37,7 +37,3 @@ export function loadBusinessContext(): string | null {
   return cached;
 }
 
-// Test seam.
-export function _resetBusinessContext(): void {
-  cached = undefined;
-}

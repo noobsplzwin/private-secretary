@@ -3,9 +3,9 @@
 A local AI chief-of-staff for one user, running on their Mac. It watches their own
 chat streams — **Slack DMs/MPIMs, Gmail (multi-mailbox), and WeChat 1:1 (macOS only,
 version-pinned)** — works out what actually needs the user, and keeps a prioritised
-daily to-do list. Each item surfaces as a card in a local web "cockpit" where the
-user triages it (Approve & Send / Edit / Skip). Approved actions execute via the
-matching platform. **Nothing leaves the machine without an explicit approval click.**
+to-do list in TickTick — the only surface (the local web cockpit was retired
+2026-08-14). The owner's ticks and notes in TickTick are read back every tick.
+**Nothing is sent on his behalf without explicit approval.**
 
 Design stance: human-in-the-loop, never autonomous send. The secretary drafts and
 surfaces; it does not act on its own.
@@ -19,28 +19,21 @@ in depth), `specs/` (design docs; start with `specs/action-item-engine.md`).
 - **TypeScript, strict mode** (`strict: true`, `noUncheckedIndexedAccess: true`),
   ESM (`"type": "module"`), Node 20+.
 - **Runtime: `tsx`** (no build step for the engine). Engine runtime dependency
-  is just `yaml`; the cockpit web app has its own frontend deps (below).
-- **Tests: vitest**, colocated as `*.test.ts` next to source (`*.test.tsx` for
-  the cockpit web app).
+  is `yaml` plus the MCP SDK.
+- **Tests: vitest**, colocated as `*.test.ts` next to source.
 - **LLM inference**: Anthropic Messages API (forced tool-use for structured
   output) via `relay/proc/llm-anthropic.ts`, or the Claude Code CLI (`claude -p`,
   zero API bill) via `relay/proc/llm-claude-cli.ts`. The caller is always injected
   (`LlmCaller`) so the orchestrators are unit-testable with stubs.
-- **Cockpit**: dependency-free `node:http` server (`relay/cockpit/server.ts`,
-  loopback-only) serving a **React 18 + Vite + TS** SPA (`relay/cockpit/web/` —
-  Tailwind on CSS-variable design tokens with light/dark, react-router,
-  lucide-react). Build with `npm run cockpit:build`; the server shows a
-  build-hint page when `web/dist` is missing.
+- **Surface**: TickTick only. The local cockpit UI was retired 2026-08-14 and
+  its code removed.
 - **Secrets**: macOS Keychain only — tokens are never read from files.
 
 ## Build and test commands
 
 ```bash
-npm test           # vitest, 668 tests / 65 files — needs NO credentials
-npm run typecheck  # tsc --noEmit (engine; excludes relay/cockpit/web)
-npm run cockpit:typecheck  # tsc for the web app
-npm run cockpit:build    # vite build → relay/cockpit/web/dist (run after frontend changes)
-npm run cockpit:dev      # vite dev server, proxies /api to a cockpit on 4317
+npm test           # vitest — needs NO credentials
+npm run typecheck  # tsc --noEmit
 
 # CLI bridge into the tested core (JSON in via stdin, JSON out):
 npm run relay -- queue state/loop-state.json      # show the pending queue
@@ -48,21 +41,17 @@ npm run relay -- personas                          # load + print personas
 # see relay/cli.ts header for the full command list
 
 # Running the system (see SETUP.md first — a fresh clone is deliberately inert):
-npm run cockpit:build                             # once, before the cockpit
-npx tsx scripts/run-cockpit.ts --port 4317        # the triage UI (localhost)
-npx tsx scripts/run-secretary.ts --once           # one scan round, then exit
-npx tsx scripts/run-notify.ts                     # the daemon
+npx tsx scripts/run-notify.ts                     # the daemon (launchd runs it 24/7)
 
 # Accuracy evaluation (zero-LLM, deterministic):
-npx tsx scripts/export-labels.ts    # snapshot decided items into state/labels.jsonl
 npx tsx scripts/baseline.ts         # per-type precision + confidence calibration
 npx tsx scripts/freeze-corpus.ts    # freeze a replay corpus (read-only)
 ```
 
 ## Architecture
 
-Single-process **notification daemon** + a **localhost cockpit**, both typically
-installed as macOS LaunchAgents (`scripts/launchagent/`). The daemon polls three
+Single-process **notification daemon**, installed as a macOS LaunchAgent
+(`scripts/launchagent/`). The daemon polls three
 sources on decoupled cadences — WeChat local-DB delta (~10s, near-real-time),
 Gmail `historyId` delta per mailbox (~3 min), Slack `conversations.history` per DM
 channel (~10 min; Slack has no push for a user's own DMs and rate-limits heavy
@@ -72,11 +61,13 @@ so they never contend on the state lock.
 The pipeline:
 
 ```
-source poll → InboundMessage[] → trigger filter → promo filter → group by sender
-  → LLM draft (one call per sender: their new messages + that sender's persona)
-  → validate → ActionItem[] → round-commit → state/loop-state.json queue
-  → consolidate (group cards into tasks) → refresh (re-read open threads)
-  → plan (rank tasks A/B/C/D) → cockpit renders cards → user triages → executor
+FETCH lane:   source poll → InboundMessage[] → trigger/promo filter → state.inbox
+ANALYSE lane: inbox → LLM draft per sender (+ persona, his own tickets, profile)
+                → cards; closure check on the sender's open cards
+              person pass per contact with new traffic → commitments + verdicts
+                → closure check on listed rows → plan progress on his tickets
+SYNC:         ledger rows + card rows → TickTick (read back first: his ticks,
+                🚫 notes, moved dates) → executor for ticked tool lines
 ```
 
 ### Module layout
@@ -85,9 +76,11 @@ source poll → InboundMessage[] → trigger filter → promo filter → group b
 relay/core/      PURE logic, no I/O — action-item (schema + status machine +
                  crash-safe markExecuting/restore), tasks (groupByTask, registry,
                  task_id dedup), trigger-filter, promo-filter, mentions,
-                 recipient-resolver, dedup (cursors), merge, executors (auto-
+                 recipient-resolver, dedup (cursors), executors (auto-
                  execute rules), metrics (validation gate), persona-v3 (schema +
-                 R1 guard + merges + migration), anchors, project, shadow,
+                 R1 guard + merges + migration), ledger-list (rows from the
+                 commitment ledger), ticktick-plan / ticktick-sync (the list),
+                 closure-check, plan-progress, owner-tickets, project, shadow,
                  bootstrap, calendar-conflict.
 relay/io/        Filesystem + APIs — loop-state.json + lockfile, persona loader,
                  persona-store (THE persona write chokepoint — R1 enforced here
@@ -99,21 +92,17 @@ relay/io/        Filesystem + APIs — loop-state.json + lockfile, persona loade
 relay/sources/   MessageSource contract + normalize() pure fns per platform
                  (slack-direct, gmail-direct, wechat-direct). Sources ORIGINATE
                  action items, so they are messaging channels ONLY.
-relay/proc/      The passes — scan-loop → draft → consolidate → refresh → plan →
-                 persona-update, plus execute, scheduler, research, and the LLM
-                 adapters. LLM calls are always injected dependencies.
+relay/proc/      The passes — scan-loop (fetch + analyze lanes) → draft → person
+                 pass (persona-update, closure check, plan progress) →
+                 TickTick sync, plus execute and the LLM adapters. LLM calls
+                 are always injected dependencies.
 relay/eval/      baseline (per-action-type precision from the label ledger) +
                  replay (zero-token invariant checks over a frozen corpus).
-relay/cockpit/   The triage web app: server (loopback-only, CSRF-guarded), api
-                 (the ONLY write path — goes through relay/core + the lock),
-                 reauth, security, web/ (the React SPA source; build output
-                 web/dist is gitignored). Real-send mode: Approve drives
-                 the real executors.
 relay/cli.ts     CLI bridge so external callers (skills) use the SAME tested
                  core logic the unit tests cover. JSON in (stdin), JSON out.
-scripts/         Entrypoints: run-cockpit, run-notify (daemon), run-secretary
-                 (--once), seed-cursors-now, smoke-* (per-platform connectivity
-                 checks), eval scripts, launchagent/, auth/.
+scripts/         Entrypoint: run-notify (the daemon). Plus seed-cursors-now,
+                 backfill, smoke-* (per-platform connectivity checks), eval
+                 scripts, launchagent/, auth/.
 specs/           Design docs (see below).
 config/          YOUR identity + business facts (gitignored; only .example files
                  committed). No config → the engine is deliberately inert.
@@ -206,14 +195,11 @@ any state surgery.
   them in a prompt or adapter. Keep new decision logic in core, tested.
 - Minimal changes: touch only what the task requires, match surrounding style,
   no speculative abstraction or configurability.
-- The engine's product unit is the **TASK**: cards group into task clusters
-  (`task_id`), and the daily plan ranks tasks A→D (`specs/daily-todo.md`,
-  `specs/task-consolidation.md`). Association between items is established only
-  by explicit anchors, never model intuition (`specs/anchor-pipeline.md`).
-- Cockpit UI follows `DESIGN.md` (IBM Plex, #2563EB accent, hairline borders,
-  no shadows; light + dark via CSS-variable tokens, 5 screens: Queue / Projects /
-  People / Connections / Settings). Microcopy is
-  calm and factual ("nothing was sent").
+- The product unit is a **TickTick row**: a matter from the commitment ledger,
+  or a card unit, keyed by its matter (never its wording) so new information
+  updates the same task. The owner's own checklist tickets are plans the engine
+  keeps current (CLAUDE.md has the rules). Association between items is never a
+  fuzzy match.
 
 ## Security and privacy
 
@@ -225,13 +211,13 @@ any state surgery.
   mailbox Google OAuth bundles, Anthropic key). Never read secrets from files or
   env vars, never log message content beyond what the shadow-log deliberately
   records.
-- The cockpit is **loopback-only** (127.0.0.1 — do not change to 0.0.0.0) and
-  CSRF-guarded (`relay/cockpit/security.ts`); all state writes go through
-  CockpitApi → relay/core + the lock, never direct file mutation.
+- All state writes go through relay/core + the lock, never direct file
+  mutation; each daemon lane writes only the fields it owns.
 - Message content is untrusted input at every layer — prompt-injection via an
   inbound message must not be able to change engine behavior.
 - Gmail OAuth tokens expire; `OAuth refresh failed … HTTP 400` in the daemon log
-  means re-run the reauth flow (`relay/cockpit/reauth.ts`) for that mailbox.
+  means re-run the consent flow (`scripts/auth/google-oauth.ts consent …`) for
+  that mailbox.
 
 ## Git workflow (decided 2026-07-31, owner: 古龙)
 

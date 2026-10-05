@@ -5,9 +5,9 @@
 # What it does:
 #   1. Ensures Node.js (>= 20) + Git (installs via Homebrew; installs Homebrew if missing)
 #   2. Clones (or updates) the repo into ~/private-secretary
-#   3. npm install + builds the cockpit bundle (npm run cockpit:build)
-#   4. Installs two launchd agents (24/7 daemon + cockpit UI on :4317)
-#   5. Prints next steps (connect Slack/Gmail/Jira inside the cockpit)
+#   3. npm install
+#   4. Installs the launchd agent (the 24/7 daemon; TickTick is the only surface)
+#   5. Prints next steps (connect accounts — SETUP.md)
 #
 # Idempotent: safe to re-run — it updates the checkout and reloads the agents.
 # macOS only for now (launchd); Linux support would swap step 4 for systemd.
@@ -144,12 +144,8 @@ ui_info "Installing dependencies (this can take a minute)…"
 npm install --no-fund --no-audit || abort "npm install failed"
 ui_success "Dependencies installed"
 
-ui_info "Building the cockpit UI…"
-npm run cockpit:build || abort "cockpit build failed"
-ui_success "Cockpit bundle built"
-
-# ── 4. launchd agents (24/7 daemon + cockpit) ────────────────────
-ui_stage "[3/5] Starting the 24/7 daemon + cockpit"
+# ── 4. launchd agent (24/7 daemon) ───────────────────────────────
+ui_stage "[3/5] Starting the 24/7 daemon"
 bash scripts/launchagent/install.sh || abort "launchd agent install failed"
 
 # ── 5. Claude Code skills (/relay etc.) ──────────────────────────
@@ -209,33 +205,21 @@ fi
 
 # ── 6. Done ──────────────────────────────────────────────────────
 ui_stage "[5/5] Verifying"
-# launchd spawns the cockpit as `npx tsx run-cockpit.ts` — npx resolution plus the
-# TS transpile regularly takes longer than a few seconds on a cold cache, so poll
-# instead of curling once after a fixed sleep (that reported a false failure on an
-# install that was in fact fine).
-cockpit_up=false
-for _ in $(seq 1 20); do
-    if curl -fsS -o /dev/null --max-time 2 http://127.0.0.1:4317/; then
-        cockpit_up=true
-        break
-    fi
-    sleep 1
-done
-if $cockpit_up; then
-    ui_success "Cockpit is up at http://127.0.0.1:4317"
+# The cockpit UI is retired (2026-08-14); the daemon is all there is to check.
+if launchctl list 2>/dev/null | grep -q "tv.taiv.secretary"; then
+    ui_success "Daemon loaded (tv.taiv.secretary)"
 else
-    ui_warn "Cockpit didn't answer within 20s — check: tail -F ~/Library/Logs/taiv-secretary/cockpit.err.log"
+    ui_warn "Daemon not loaded — check: tail -F ~/Library/Logs/taiv-secretary/secretary.err.log"
 fi
 
 # printf, not a heredoc: heredocs do not interpret the \033 escapes in $SUCCESS/$BOLD.
 printf '
 %b%bPrivate Secretary installed.%b
 
-  Cockpit (triage UI) : http://127.0.0.1:4317
-  Daemon + UI logs    : ~/Library/Logs/taiv-secretary/
+  Daemon logs         : ~/Library/Logs/taiv-secretary/
   Checkout            : %s
 
-Next: open the cockpit → Connections to link Slack / Gmail / Jira.
+Next: connect Slack / Gmail / TickTick — see SETUP.md.
 Re-run this script any time to update to the latest version.
 
 ' "$SUCCESS" "$BOLD" "$NC" "$INSTALL_DIR"

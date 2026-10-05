@@ -106,9 +106,7 @@ security add-generic-password -U -s taiv-secretary-google-client \
    `gmail.modify` + `calendar.events`):
 
 ```bash
-npx tsx scripts/run-cockpit.ts --port 4317   # then use the re-auth link in the UI
-# …or drive it directly:
-npx tsx -e 'import{startGmailReauth}from"./relay/cockpit/reauth.js";startGmailReauth("you@yourcompany.com")'
+npx tsx scripts/auth/google-oauth.ts consent <gcp-client> <owner-email> <mailbox>
 ```
 
 ```bash
@@ -150,8 +148,7 @@ before. With it, the card becomes a real TickTick to-do: title, notes, the
 `next_actions` as a checklist, and a priority mapped from the daily plan's tier
 (**A→high, B→medium, C→low, D→none**).
 
-Add a `ticktick` entry in the cockpit's **Settings → Tools**, or write
-`config/tools.json` directly:
+Add a `ticktick` entry to `config/tools.json`:
 
 ```json
 {
@@ -207,7 +204,7 @@ Four TickTick API limits worth knowing, all of which fail silently:
 
 - `batch_add_tasks` / `batch_update_tasks` **cap at 50 tasks per call and
   truncate without an error** — ask for 100 and you get 50 back with an *empty*
-  `id2error`. Pinned as `TICKTICK_BATCH_MAX` in `relay/core/mstodo.ts`.
+  `id2error`. Pinned as `TICKTICK_BATCH_MAX` in `relay/core/ticktick.ts`.
 - `create_task` **ignores `status: 2`** — a task cannot be created already
   completed; completion is a second `batch_update_tasks` pass.
 - There is **no `completedTime` field at all**, so an original completion date
@@ -215,38 +212,10 @@ Four TickTick API limits worth knowing, all of which fail silently:
 - Completing a task that carries a `repeatFlag` makes TickTick spawn the **next
   occurrence**, so recurrence must be stripped from anything being archived.
 
-### Migrating a Microsoft To Do export
+### Microsoft To Do
 
-```bash
-npx tsx scripts/migrate-mstodo-to-ticktick.ts --dry-run
-npx tsx scripts/migrate-mstodo-to-ticktick.ts
-```
-
-Reads `todo-export/todo_export.json`. Completed tasks go to the
-`📥 MS To Do Archive` list, open ones to `--open-list` (default `💼Work`), with
-notes, checklists, due dates and recurrence preserved. Because TickTick cannot
-accept a historical completion date, each task's **real** Microsoft dates are
-written into its notes, and the whole archive will show as completed on the day
-you run it.
-
-Idempotent: a Microsoft id is recorded in `state/mstodo-migration.jsonl` only
-after its whole chunk is confirmed created, and recorded ids are skipped on a
-re-run — so an interrupted, rate-limited or short-counted run just resumes. A
-chunk that comes back short is deliberately left *unrecorded* and the script
-exits non-zero; re-running finishes it.
-
-If a run ever leaves the archive inconsistent (active tasks that should be
-completed, or a ledger claiming more than TickTick holds), this reconciles it
-against TickTick rather than the ledger:
-
-```bash
-npx tsx scripts/repair-mstodo-migration.ts          # read-only report
-npx tsx scripts/repair-mstodo-migration.ts --apply
-```
-
-It matches rows by **fingerprint** (title + notes, `relay/core/mstodo.ts`), not
-by title — 42 of the exported titles repeat, one of them 43 times, so a title
-join would mark 317 uncreated rows as done.
+The one-time migration from Microsoft To Do finished in 2026-09; its scripts
+were removed afterwards (they are in git history if ever needed again).
 
 ---
 
@@ -288,28 +257,12 @@ skill). Without it drafts read as generically human rather than as you.
 ## 8. Run it
 
 ```bash
-# Build the cockpit web app first (React + Vite; only needed after checkout
-# or frontend changes). The server shows a build-hint page if you skip this.
-npm run cockpit:build
-
-# The triage UI — start here, it works with an empty queue.
-npx tsx scripts/run-cockpit.ts --port 4317
-
-# One scan round, then exit (safe first run: nothing sends).
-npx tsx scripts/run-secretary.ts --once
-
-# The daemon.
+# The daemon (TickTick is the only surface — there is no local UI).
 npx tsx scripts/run-notify.ts
 ```
 
-Frontend dev loop: `npm run cockpit:dev` starts Vite on its own port and
-proxies `/api` to a running cockpit on 4317 — edit React code with hot reload,
-no rebuild. `npm run cockpit:typecheck` type-checks the web app (the root
-`npm run typecheck` excludes it).
-
-Useful daemon flags: `--no-consolidate`, `--no-plan`, `--no-persona-update`,
-`--no-refresh`, `--refresh-max N`, `--max-draft N`, `--draft-model <model>`,
-`--wechat-ms / --gmail-ms / --slack-ms <interval>`.
+Useful daemon flags: `--no-persona-update`, `--max-draft N`,
+`--draft-model <model>`, `--wechat-ms / --gmail-ms / --slack-ms <interval>`.
 
 To run it at login, see `scripts/launchagent/install.sh`. One trap worth knowing:
 **launchd cannot write logs under `~/Documents`** (TCC blocks it) — the job dies
@@ -319,13 +272,14 @@ with exit 78 and no output. Keep log paths in `~/Library/Logs`.
 
 ## 9. Prove it works end-to-end
 
+Start the daemon, send yourself a message that needs action, and watch the log:
+
 ```bash
-npx tsx scripts/run-secretary.ts --once
-npm run relay -- queue state/loop-state.json    # rows should appear
+tail -F ~/Library/Logs/taiv-secretary/secretary.out.log   # "[ticktick] desired: …"
+npm run relay -- queue state/loop-state.json              # cards should appear
 ```
 
-Then open <http://127.0.0.1:4317>, pick a card, and press **Edit** (not Approve)
-to confirm the drafting looks sane before you let anything leave the machine.
+Then check your TickTick Work list for the new row.
 
 ---
 

@@ -164,3 +164,9 @@ export function resolveTickTickProject(
   if (hits.length > 1) return { status: "ambiguous", matches: hits.map((p) => p.id) };
   return { status: "not_found" };
 }
+
+// TickTick's real per-call ceiling for batch_add_tasks / batch_update_tasks.
+// Exceeding it TRUNCATES SILENTLY — 100 tasks in, 50 created, id2error empty —
+// which is how the first bulk run lost 803 tasks without an error. A hard
+// constant, never a tunable.
+export const TICKTICK_BATCH_MAX = 50;

@@ -19,7 +19,6 @@ import { findPlanProgress, type PlanUpdate } from "../core/plan-progress.js";
 import { capCorpus, indexCorpus, lineOf, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
-  type ExtractedCommitment,
   parseExtractedCommitments,
   parseExtractedUpdates,
   parseExtractedAssessments,

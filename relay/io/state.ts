@@ -288,20 +288,3 @@ export function releaseLock(stateDir: string): void {
   if (existsSync(lock)) rmSync(lock);
 }
 
-// acquireLock, but wait out a brief hold by the other writer instead of
-// failing instantly. The daemon holds the lock only for short scan/commit
-// windows (the slow LLM/vision step runs unlocked), so a few short retries
-// reliably win it back — used by the cockpit so an approve/skip/flush that
-// lands during a daemon commit doesn't bounce with "state is locked". Returns
-// false only if still held after every retry.
-export async function acquireLockWithRetry(
-  stateDir: string,
-  tries = 15,
-  delayMs = 200,
-): Promise<boolean> {
-  for (let i = 0; i < tries; i++) {
-    if (acquireLock(stateDir)) return true;
-    if (i < tries - 1) await new Promise((r) => setTimeout(r, delayMs));
-  }
-  return false;
-}

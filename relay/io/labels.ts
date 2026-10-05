@@ -39,13 +39,6 @@ export type ExistenceVerdict =
 // Field-level defects, independent of whether the item should exist.
 export type FieldError = "time" | "person" | "place" | "other";
 
-export const FIELD_ERRORS: ReadonlySet<string> = new Set<FieldError>([
-  "time",
-  "person",
-  "place",
-  "other",
-]);
-
 export const EXISTENCE_VERDICTS: ReadonlySet<string> = new Set<ExistenceVerdict>([
   "confirmed",
   "not_a_thing",

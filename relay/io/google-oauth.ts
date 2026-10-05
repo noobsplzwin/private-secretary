@@ -20,14 +20,6 @@ import { getJSON, setJSON } from "./keychain.js";
 
 export const TOKEN_KEYCHAIN_SERVICE = "taiv-secretary-token-google";
 
-// The Keychain entry holding the OAuth *client* JSON (the Google Cloud
-// "Desktop app" credential blob) — distinct from the per-mailbox token
-// bundles above. One default client covers every mailbox; SETUP.md §3
-// documents the convention, the consent script + the cockpit Settings
-// Google tab both resolve it through these constants.
-export const GOOGLE_CLIENT_SERVICE = "taiv-secretary-google-client";
-export const GOOGLE_CLIENT_ACCOUNT = "default";
-
 export interface OAuthClientJson {
   installed: {
     client_id: string;

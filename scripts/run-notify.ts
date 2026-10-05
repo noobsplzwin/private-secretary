@@ -10,13 +10,12 @@
 //
 //   npx tsx scripts/run-notify.ts [--state p] [--personas p]
 //     [--wechat-ms 10000] [--gmail-ms 180000] [--slack-ms 600000] [--max-draft N]
-//     [--once] [--no-draft] [--consolidate-timeout-ms 600000]
+//     [--once] [--no-draft]
 //
 // --once runs ONE tick per source, in order, then exits 0. This is the only
-// entry point that wires every pass (draft → refresh → consolidate → plan →
-// TickTick sync), so it is also how you re-run the full pipeline over existing
-// state after changing prompt or mapping logic. run-secretary.ts --once passes
-// `draft` ALONE: it produces cards that are never grouped, tiered, or synced.
+// entry point that wires every pass (fetch → draft → person pass → TickTick
+// sync), so it is also how you re-run the full pipeline over existing state
+// after changing prompt or mapping logic.
 
 import { loadOwnerTickets } from "../relay/io/owner-tickets-store.js";
 import { existsSync, mkdirSync, writeFileSync, readFileSync, unlinkSync, readdirSync, appendFileSync } from "node:fs";
@@ -42,7 +41,6 @@ import type { Commitment } from "../relay/core/persona-v3.js";
 import { buildPersonaResolver, type DraftDeps } from "../relay/proc/draft.js";
 import { loadProjects, loadLeoProfile } from "../relay/io/projects.js";
 import { activeMatterIds, closedMatterIds, readMatters } from "../relay/io/matters.js";
-import { renderProjectCatalog } from "../relay/core/project.js";
 import { createAnthropicLlmCaller, createAnthropicJsonCaller } from "../relay/proc/llm-anthropic.js";
 import { createClaudeCliLlmCaller, createClaudeCliJsonCaller } from "../relay/proc/llm-claude-cli.js";
 import { personCorpus, slackDmIndexes } from "../relay/io/person-corpus.js";
@@ -203,10 +201,6 @@ const llmFlag = strOpt("--llm");
 const llmMode = (llmFlag ?? fileSettings.llm.mode) === "anthropic" ? "api" : (llmFlag ?? fileSettings.llm.mode);
 const draftModel = strOpt("--draft-model") ?? fileSettings.llm.draftModel;
 const visionEnabled = process.argv.includes("--vision");
-// Task consolidation (specs/task-consolidation.md, Stage 1): group open cards
-// Task refresh (specs/task-consolidation.md, Stage 2): re-read the full thread
-// for conversations with an open card + emit calendar actions on agreed meetings.
-// ON by default; --no-refresh opts out. --refresh-ttl-min overrides the cooldown.
 const onceMode = process.argv.includes("--once");
 // --no-draft must ALSO stop polling, because a scan without a drafter still
 // ADVANCES CURSORS ("Absent = scan-only (shadow-log + cursors, no queue rows)"),
@@ -846,7 +840,7 @@ console.log(
     try {
       return activeMatterIds(readMatters(resolve(process.cwd(), "config/matters.yaml")));
     } catch (e) {
-      console.error(`[notify] matters.yaml unreadable — every row sinks to the pool: ${(e as Error).message}`);
+      console.error(`[notify] matters.yaml unreadable — no matter admits a row this tick: ${(e as Error).message}`);
       return new Set();
     }
   };
