@@ -1,13 +1,12 @@
-// Single scan tick. Fires on the scheduler's interval (or once via the
-// CLI), reads new messages from every Direct-API source, runs the
-// trigger filter, persists cursor advances + a shadow-log record, and
-// returns a per-source summary.
+// One scan tick, in one of two lanes (CLAUDE.md, 「收信和分析分开排队」):
 //
-// This is the FALLBACK PRE-LLM path: we record everything but don't yet
-// drive Claude to draft action items. Drafting lives in the cockpit/LLM
-// integration that ships in the T-cockpit / T-llm slabs. Until then the
-// shadow-log is the audit trail and the marks/sourceErrors fields
-// continue to track cursors per source.
+//   fetch   — polls every source, filters, writes new messages into
+//             state.inbox, then advances cursors. No LLM.
+//   analyse — drafts from the inbox, runs the person pass (commitments,
+//             closure check, plan progress), reads TickTick back and syncs.
+//
+// `all` runs both in one tick (tests, the CLI). The shadow-log is the audit
+// trail of what each round saw and drafted.
 //
 // Per-source fault isolation: a failing Slack channel or Gmail mailbox
 // records itself in sourceErrors and does NOT advance its cursor; the
@@ -126,20 +125,8 @@ export interface ScanLoopOptions {
   // the rest are reported in `draftSkipped` (NOT silently dropped). Undefined
   // = draft all candidates (steady state, where each tick's delta is small).
   maxDraftCandidates?: number;
-  // When provided, a task-consolidation pass runs after drafting: groups open
-  // cards that are the same real-world task under a shared task_id (cross-sender).
-  // Absent = no consolidation (each card stays its own cluster). See
-  // specs/task-consolidation.md (Stage 1).
-
-  // When provided, a task-refresh pass runs after consolidation: re-reads the
-  // full thread for conversations that already have an open card and re-decides
-  // the card (updates it, or emits a calendar action when a meeting was agreed).
-  // See specs/task-consolidation.md (Stage 2).
-  // When provided, a daily-plan pass runs after refresh: ranks all open task
-  // specs/daily-todo.md.
-  // When provided, the ranked to-do list is pushed into TickTick after the plan
-  // pass (specs/ticktick-migration.md). Absent = no sync, and the cockpit stays
-  // the only surface.
+  // When provided, the list is pushed into TickTick (specs/ticktick-migration.md).
+  // Absent = no sync.
   ticktickWriter?: TickTickWriter;
   /** Read side: completions the owner ticked off in TickTick (PHASE 6a). */
   ticktickReader?: TickTickReader;
@@ -154,7 +141,7 @@ export interface ScanLoopOptions {
   closedMatters?: () => ReadonlySet<string>;
   /** Owner's IANA zone for TickTick due dates / time labels. */
   ownerTimeZone?: string;
-  // When provided, a persona-update pass runs after planning: extracts NEW
+  // When provided, the person pass runs in the analyse lane: extracts NEW
   // commitments from each open contact's thread and writes them to the persona's
   // Commitments Ledger via the R1 chokepoint (Phase B, specs/persona-v3.md).
   personaUpdate?: PersonaUpdateDeps;
@@ -466,13 +453,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // PHASE 0 (UNLOCKED snapshot): take a consistent read of state WITHOUT the
   // lock. saveState writes atomically (tmp + rename) and carries a revision
   // guard, so an unlocked read sees old-or-new bytes, never a torn file —
-  // exactly like the cockpit's lockless getState. The daemon OWNS cursors /
-  // marks / sourceErrors (the cockpit only ever mutates state.actions), so
-  // reading them here lock-free is race-free; the brief phase-3 commit reloads
-  // fresh state under a (retrying) lock and transplants our daemon-owned fields.
+  // Each lane OWNS its fields (fetch: cursors, marks, sources' errors; analyse:
+  // actions, person cursors), so reading them here lock-free is race-free; the
+  // brief commit reloads fresh state under a (retrying) lock and transplants
+  // only this lane's fields.
   // Holding NO lock through the slow scan + draft + consolidate + refresh means a
-  // tick can never fail with "another tick is running" just because the cockpit
-  // (or a prior commit) briefly held the lock — that was the source of the
+  // tick can never fail with "another tick is running" just because the other
+  // lane (or a prior commit) briefly held the lock — that was the source of the
   // intermittent contention noise.
   // WeChat cursors, held between the scan and the drafter. A cursor committed
   // before drafting turns any draft failure into permanent data loss: the
@@ -959,8 +946,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
 
   // Commit our daemon-owned fields (cursors / marks / scan sourceErrors) onto a
   // FRESH reload, under a briefly re-acquired lock; `mutate` adds anything extra
-  // (drafted actions, the shadow record). Reloading fresh preserves the
-  // cockpit's concurrent approve/skip/edit — it only ever touches state.actions.
+  // (drafted actions, the shadow record). Reloading fresh preserves whatever the
+  // other lane committed meanwhile.
   // Returns false if the lock couldn't be re-acquired within the retry window.
   const commitUnderLock = async (mutate: (fresh: LoopState) => void): Promise<boolean> => {
     if (!(await acquireLockWithRetry(stateDir))) return false;
@@ -1085,8 +1072,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   };
 
   // ── PHASE 1.5 (re-locked, brief): commit cursors/marks NOW, BEFORE the slow
-  // draft. The draft is exactly when the cockpit is most likely to be holding
-  // the lock, so committing cursors first means a later phase-3 miss can only
+  // draft. The draft is exactly when the other lane is most likely to commit,
+  // so committing cursors first means a later phase-3 miss can only
   // drop drafts (re-drafted next tick) — never cursor progress (losing that
   // would re-surface + re-scan already-handled messages, breaking dedup).
   if (mode === "fetch") return await commitFetch();
@@ -1094,7 +1081,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   if (!opts.dryRun && mode === "all") await commitUnderLock(() => {});
 
   // ── PHASE 2 (UNLOCKED): the slow LLM drafting (+ vision decode). No lock is
-  // held, so the cockpit stays responsive even through a long or hung draft.
+  // held, so the other lane keeps committing even through a long or hung draft.
   let draftedActions: ActionItem[] = [];
   /** Senders whose draft call errored. Their cursors are NOT advanced. */
   let draftFailedSenders: string[] = [];
@@ -1324,8 +1311,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           supersedeExemptCount = exemptKept;
         }
         // P1 durable identity: a replacement card INHERITS the superseded
-        // card's task_id (copy, never mint) so the plan + cockpit cluster
-        // stay attached to the task across the supersede. Computed from the
+        // card's task_id (copy, never mint) so its TickTick row stays attached
+        // to the task across the supersede. Computed from the
         // superseded list regardless of whether the drop committed — the
         // cards are doomed next tick anyway, and a copied id is idempotent.
         fresh.actions.push(...inheritSupersededTaskIds(toCommit, superseded));
@@ -1375,7 +1362,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       }
       // Silent-empty drafts (LLM answered, zero cards) are the invisible
       // failure: the cursor advanced, so the message is gone unless someone
-      // notices. Surface the handles in the cockpit error strip; the raw
+      // notices. Surface the handles in sourceErrors; the raw
       // model responses are in llm-draft-raw.jsonl next to the state file.
       if (draftEmpty.length > 0) {
         fresh.sourceErrors["llm:draft-empty"] = {
@@ -1435,10 +1422,6 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   }
 
-  // Silent-empty drafts (LLM answered, zero cards — usually a parse-failure,
-  // see llm-draft-raw.jsonl) are the invisible permanent skip: the cursor is
-  // already past those messages. sourceErrors surfaces them in the cockpit but
-  // the next tick's phase-3 WIPES that entry — the durable record lives here.
   if (inboxGaveUp.length > 0) {
     // Loud by design: these messages failed every draft attempt and are no
     // longer queued. Never let that happen quietly.
@@ -1450,6 +1433,10 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     });
   }
 
+  // Silent-empty drafts (LLM answered, zero cards — usually a parse-failure,
+  // see llm-draft-raw.jsonl) are the invisible permanent skip. sourceErrors
+  // shows them, but the next commit WIPES that entry — the durable record
+  // lives here.
   if (draftEmpty.length > 0) {
     logActivity(
       "error",
@@ -1598,16 +1585,6 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // (the pre-§1 behaviour — a tick means "I already did it").
       const done = new Set([...closed, ...(opts.execute ? [] : ticked)]);
 
-      // THE ONLY VERDICT THE OWNER CAN GIVE FOR FREE. Every other exit a row has
-      // — 完成, deleted, aged out, superseded — says nothing about whether the
-      // row deserved to exist: the owner's own words are that he completes
-      // things only because there is no other way to clear them, and the data
-      // agrees (353 of 400 completions were engine rows, 0 of them meaningful).
-      // Ticking DISMISS_LINE is the one gesture that can only mean "this should
-      // not have been here", so it is the one that becomes a label.
-      //
-      // Written BEFORE the status change, per the labels.jsonl contract: if the
-      // append throws, the rows stay as they are and the next tick retries.
       // CLOSE THE LOOP ON LEDGER ROWS. A ledger row is derived fresh from a
       // persona commitment every tick, so finishing it in TickTick settled
       // nothing: the commitment stayed `open`, the next tick re-derived the
@@ -1661,6 +1638,16 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           : 0;
       if (ledgerDropped > 0) console.log(`[ticktick] ${ledgerDropped} ledger commitment(s) dropped by owner (🚫)`);
 
+      // THE ONLY VERDICT THE OWNER CAN GIVE FOR FREE. Every other exit a row has
+      // — 完成, deleted, aged out, superseded — says nothing about whether the
+      // row deserved to exist: the owner's own words are that he completes
+      // things only because there is no other way to clear them, and the data
+      // agrees (353 of 400 completions were engine rows, 0 of them meaningful).
+      // Ticking DISMISS_LINE is the one gesture that can only mean "this should
+      // not have been here", so it is the one that becomes a label.
+      //
+      // Written BEFORE the status change, per the labels.jsonl contract: if the
+      // append throws, the rows stay as they are and the next tick retries.
       const dismissedSet = new Set(dismissed);
       if (dismissedSet.size > 0) {
         const rows = snapshot.actions.filter((a) => dismissedSet.has(a.id));
@@ -1761,12 +1748,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   }
 
-  // ── PHASE 6b (UNLOCKED, no LLM): push the ranked to-do list into TickTick.
-  // Runs AFTER planning because the tier it writes as the TickTick priority is
-  // what planning just computed. No LLM call, so it is cheap enough to run every
-  // tick; the hash gate in core/ticktick-sync.ts means a tick where nothing
-  // changed makes ZERO API calls. Non-fatal — TickTick being down must never
-  // stop the scan (records llm:ticktick so the cockpit surfaces it).
+  // ── PHASE 6b (UNLOCKED, no LLM): push the list — ledger rows + card rows —
+  // into TickTick. No LLM call, so it is cheap enough to run every tick; the
+  // hash gate in core/ticktick-sync.ts means a tick where nothing changed makes
+  // ZERO API calls. Non-fatal — TickTick being down must never stop the scan
+  // (records llm:ticktick in sourceErrors).
   if (!opts.dryRun && opts.ticktickWriter) {
     try {
       const snapshot = loadState(opts.statePath);

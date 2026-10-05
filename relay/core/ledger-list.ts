@@ -84,7 +84,7 @@ type RowMode = "own" | "chase";
 // bugs this engine shipped: the readback read only Work, so every sunk row read
 // as finished (94 commitments closed behind his back), and orphan cleanup read
 // only Work, so 159 strays piled up in the pool. It also never worked as
-// designed — the writer cannot move a task, so a row stayed in whichever list
+// designed — the writer could not move a task then, so a row stayed in whichever list
 // it was BORN in, and the week's most important row sat in the pool. A list is
 // sticky; priority and date update in place. So weight now lives there:
 //
@@ -348,18 +348,6 @@ function itemFor(
 }
 
 /**
- * Where a matter stands right now, for the row's note.
- *
- * THIS IS THE SELF-UPDATING PART. The row's key no longer moves, so every new
- * link the conversation adds — and every link that closes — re-renders this
- * block and the sync writes it over the SAME TickTick task. 「后续有新的
- * information更新，直接更新目前ticket的Description区域」 (owner, 2026-09-27).
- *
- * It re-renders rather than appends: 「我不是要不断叠加」. Settled links are a
- * COUNT, not a list — the ledger records no completion date, so any "recently
- * finished" ordering would be array order dressed up as chronology.
- */
-/**
  * The links a row's description listed under 「我这边还有」 — read back so a 🚫
  * on the row drops what he was SHOWN, not just its title. Parses the block
  * matterProgress writes; anything else yields nothing.
@@ -375,6 +363,18 @@ export function ownLinesShown(desc: string | undefined): string[] {
   return out;
 }
 
+/**
+ * Where a matter stands right now, for the row's note.
+ *
+ * THIS IS THE SELF-UPDATING PART. The row's key no longer moves, so every new
+ * link the conversation adds — and every link that closes — re-renders this
+ * block and the sync writes it over the SAME TickTick task. 「后续有新的
+ * information更新，直接更新目前ticket的Description区域」 (owner, 2026-09-27).
+ *
+ * It re-renders rather than appends: 「我不是要不断叠加」. Settled links are a
+ * COUNT, not a list — the ledger records no completion date, so any "recently
+ * finished" ordering would be array order dressed up as chronology.
+ */
 function matterProgress(all: readonly Commitment[], lead: Commitment, them: string): string {
   const open = all.filter((c) => c.status === "open");
   const settled = all.length - open.length;
@@ -406,7 +406,7 @@ export function deriveLedgerTasks(
   activeMatters: ReadonlySet<string>,
   /** Matters the owner CLOSED. Work inside one sinks whatever the verdict says. */
   closedMatters: ReadonlySet<string> = new Set(),
-  /** When each persona last spoke (state.personTraffic) — the waiting clock. */
+  /** When each persona last spoke (state.personTraffic) — the review base, and what lifts an owner close. */
   lastSpoke: Readonly<Record<string, number>> = {},
 ): DesiredTask[] {
   const out: DesiredTask[] = [];
@@ -469,7 +469,7 @@ export function deriveLedgerTasks(
         continue;
       }
       // A dormant link of HIS, with no live verdict: listed only when the brain
-      // admits it (admitsLight). A matter whose open links all sit with OTHERS
+      // admits it — its matter is registered and active. A matter whose open links all sit with OTHERS
       // renders nothing — WAITING occupies no level (brain §5). Under the stable
       // matter key that means the sync completes its ticket, which is harmless:
       // a sync-side complete never touches the commitments (only the readback's

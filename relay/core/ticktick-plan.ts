@@ -7,17 +7,15 @@
 // mapping is shaped to avoid.
 //
 // So a TickTick task is a TaskCluster (task_id + its member actions) and the
-// checklist is the concrete steps. shouldSync() is the floor that keeps the
-// list short; it cannot manufacture quality, though — if the consolidate pass
-// leaves conversations ungrouped, this surfaces fewer of them rather than
-// pretending they are tasks.
+// checklist is the concrete steps. Most rows now come from the commitment
+// ledger (core/ledger-list.ts); a card unit renders only when it is
+// executable or persona-less (shouldRenderCardUnit).
 //
-// DUE DATES ARE NEVER INVENTED. A date is set only when the task really has a
-// deadline (a "deadline" entity, or the earliest dated calendar member).
-// TickTick's Today / Next 7 Days then sort themselves out: a real deadline
-// today lands in Today, one later this week lands in Next 7 Days, and a task
-// with no deadline carries no date and is ordered by priority alone. Inventing
-// "due today" for every A-tier item would make Today meaningless within a week.
+// DEADLINES ARE NEVER INVENTED. A real one (a task's own `due`, or the earliest
+// dated calendar member) is the row's date. Without one the row still carries
+// a date — a REVIEW date, made +3 days, said in the note to be no deadline
+// (owner, 2026-10-01: every row has a date). Once he moves a date, it is his
+// and is never written again (proc/ticktick-sync.ts ownerMovedDate).
 
 import type { ActionItem } from "./action-item.js";
 import { DAY_MS, zoneOffsetAt } from "./when.js";
@@ -60,19 +58,6 @@ export interface BuiltTask {
   executable: Array<{ sortOrder: number; actionId: string }>;
 }
 
-/**
- * Whether this unit earns a row in the owner's Work list.
- *
- * ONLY A and B (owner, 2026-08-13). At "drop D, keep the rest" the list reached
- * 23 rows, which is the 20-40 row list he asked not to have; C is "matters, no
- * immediate clock" and belongs in the queue, not in the list he works from. An
- * UNRANKED unit is also out: the ranking pass runs every tick, so a task the
- * plan has not judged yet simply waits a round rather than arriving unsorted.
- *
- * An UNGROUPED card is one message the consolidate pass could not attach to a
- * task — surfacing every one as a top-level to-do is the same failure, so a lone
- * card still needs top tier.
- */
 // The LEDGER is the list's source now (specs/person-first-consolidation.md §7
 // phase 4), so card units render only for the two jobs the ledger cannot do:
 //
@@ -281,7 +266,6 @@ function lineFor(a: ActionItem, zone: string): { title: string; actionId?: strin
   }
 }
 
-/** The task's real deadline, if it has one. Never invented — see the header. */
 const CARD_REVIEW_DAYS = 3;
 
 /** An instant's calendar date in a zone, YYYY-MM-DD — what dueFields reads as all-day. */
@@ -311,12 +295,13 @@ function reviewDateFor(unit: TaskUnit, zone: string): { date: string; line: stri
   };
 }
 
+/** The task's real deadline, if it has one. Never invented — see the header. */
 export function deadlineFor(unit: TaskUnit): string | null {
-  // The whole value must be a date or a datetime. A `deadline` entity is FREE
-  // TEXT the ranking model writes, and "2026-08-13 15:00 Portugal time" is one
-  // it really produced: the old PREFIX test matched it and sent that string as
-  // dueDate, TickTick rejected the create, and an A-tier task silently never
-  // reached the list. Salvaging the "15:00" would be worse than dropping it —
+  // The whole value must be a date or a datetime. A model-written deadline is
+  // FREE TEXT — "2026-08-13 15:00 Portugal time" is one the (since retired)
+  // ranking pass really produced: the old PREFIX test matched it and sent that
+  // string as dueDate, TickTick rejected the create, and the task silently
+  // never reached the list. Salvaging the "15:00" would be worse than dropping it —
   // that clock is Lisbon's, and stamping the owner's offset on it moves the call
   // six hours. The dated calendar member below is the trustworthy source.
   const dated = unit.members

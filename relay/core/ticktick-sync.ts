@@ -249,11 +249,11 @@ export interface SyncResult {
   ownerDated?: true;
 }
 
-/** The map after `ops` have been applied. Completed units leave the map. */
 // How many completed rows the map remembers. Enough to cover weeks of flapping
 // and regeneration; bounded so the map file cannot grow forever.
 const MAX_TOMBSTONES = 200;
 
+/** The map after `ops` have been applied. Completed units become tombstones (`done`), kept up to MAX_TOMBSTONES. */
 export function applySyncOps(
   map: SyncMap,
   ops: readonly SyncOp[],

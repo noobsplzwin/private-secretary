@@ -74,23 +74,15 @@ export function clearTickTickProjectCache(): void {
   projectIdCache.clear();
 }
 
-// ─── the sync writer ────────────────────────────────────────────────
+// ─── the read-back reader ───────────────────────────────────────────
 
-// The TickTickWriter relay/proc/ticktick-sync.ts drives: the real calls behind
-// its create / update / complete.
-//
-// itemIds are returned POSITIONALLY, in the order the checklist was sent, which
-// is how the sync pass pairs each executable line back to the action it
-// approves. TickTick echoes `items` in the order it received them; the pass
-// records the pairing and specs/ticktick-migration.md §1 explains why a wrong
-// pairing matters (a ticked item pointing at nothing, or at the wrong action).
 /**
  * The project's ACTIVE tasks, for the completion read-back.
  *
- * ONE call: get_project_with_undone_tasks returns every undone task with its
- * checklist items and their per-item status, which is exactly what
- * core/ticktick-readback.ts needs. Fetching each tracked task by id would be
- * ~20 round trips per poll for the same answer.
+ * ONE call per list: get_project_with_undone_tasks returns every undone task
+ * with its checklist items and their per-item status, which is what
+ * core/ticktick-readback.ts needs. Only a tracked task that LEFT the active
+ * list is fetched by id (getTask) — usually none or a handful per poll.
  */
 export function createTickTickReader(opts: TickTickToolOptions): TickTickReader {
   const reader: TickTickReader = {
@@ -147,6 +139,16 @@ function parseRemoteTask(t: unknown): RemoteTask[] {
   }];
 }
 
+// ─── the sync writer ────────────────────────────────────────────────
+
+// The TickTickWriter relay/proc/ticktick-sync.ts drives: the real calls behind
+// its create / update / complete.
+//
+// itemIds are returned POSITIONALLY, in the order the checklist was sent, which
+// is how the sync pass pairs each executable line back to the action it
+// approves. TickTick echoes `items` in the order it received them; the pass
+// records the pairing and specs/ticktick-migration.md §1 explains why a wrong
+// pairing matters (a ticked item pointing at nothing, or at the wrong action).
 export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter {
   const resolve = async (project?: string): Promise<string | undefined> => {
     const name = project ?? opts.project;

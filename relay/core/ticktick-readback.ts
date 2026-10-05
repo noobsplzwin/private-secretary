@@ -1,7 +1,7 @@
 // TickTick → engine: learn that work is DONE. Pure core, no I/O.
 //
 // THE GAP THIS CLOSES: a card left `suggested` only when a human clicked
-// approve or skip in the cockpit — and the cockpit is being retired. Every one
+// approve or skip in the cockpit — and the cockpit was retired. Every one
 // of the 73 open cards was `suggested`; the 211 executed / 190 rejected were all
 // historical cockpit clicks. So work finished in the real world never closed:
 // the owner's OSYX partner-page task was done and shipped, and its cards stayed
@@ -10,11 +10,9 @@
 //
 // The owner works in TickTick now, so completion comes from TickTick.
 //
-// TICKING NEVER EXECUTES. A ticked "🎫 创建：jira · …" line is recorded as DONE,
-// not run: the line reads as an instruction, so ticking it far more likely means
-// "I already created it" than "create it for me", and acting on that guess would
-// file a duplicate ticket. Tick-to-execute is a separate decision (see
-// specs/ticktick-migration.md §1), not something to slip in behind a checkbox.
+// This module only REPORTS what he ticked. Whether a ticked executable line
+// (an invite, a 🎫 tool line) runs is the caller's decision — tick-to-execute in
+// proc/scan-loop.ts, specs/ticktick-migration.md §1.
 
 import type { SyncMap } from "./ticktick-sync.js";
 import { DISMISS_LINE } from "./ticktick-plan.js";

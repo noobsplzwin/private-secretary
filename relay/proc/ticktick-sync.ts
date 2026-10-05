@@ -289,20 +289,6 @@ export async function syncToTickTick(
   };
 }
 
-
-/**
- * Pull completions back from TickTick: whatever the owner finished there is
- * marked `executed` here, so it stops being resurfaced.
- *
- * `executed` is the right status even though no executor ran: it is already what
- * a hand-completed action carries (an approved WeChat send waits at `approved`
- * until the owner marks it executed). There is no "done elsewhere" status, and
- * `rejected` would be a lie that also poisons the label corpus.
- *
- * Returns the ids to mark and the map with finished units dropped — a unit whose
- * task is gone must leave the map, or the next sync would try to complete a task
- * that no longer exists.
- */
 /**
  * Has HE set this task's date? Yes once flagged; else when TickTick shows a
  * date other than the one the engine last wrote — including none at all. A
@@ -337,6 +323,19 @@ function withoutDates(p: TickTickTaskPayload): TickTickTaskPayload {
   return rest;
 }
 
+/**
+ * Pull completions back from TickTick: whatever the owner finished there is
+ * marked `executed` here, so it stops being resurfaced.
+ *
+ * `executed` is the right status even though no executor ran: it is already what
+ * a hand-completed action carries (an approved WeChat send waits at `approved`
+ * until the owner marks it executed). There is no "done elsewhere" status, and
+ * `rejected` would be a lie that also poisons the label corpus.
+ *
+ * Returns the ids to mark and the map with finished units TOMBSTONED
+ * (`closedBy: "owner"`), not dropped — a re-listed row then reopens the same
+ * task instead of minting a twin, and an owner close holds (heldClosedByOwner).
+ */
 export function readbackFromTickTick(
   state: LoopState,
   map: SyncMap,
