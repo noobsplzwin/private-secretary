@@ -5,7 +5,6 @@ import { join } from "node:path";
 import { stringify, parse } from "yaml";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
 import { buildPersonaUpdateRequest, parseExtractedAssessments } from "./persona-update-prompt.js";
-import type { ActionItem } from "../core/action-item.js";
 import type { Persona } from "../core/types.js";
 import type { Commitment } from "../core/persona-v3.js";
 
@@ -19,20 +18,6 @@ const zech: Persona = {
   toneNotes: "upbeat",
   context: "partnerships",
 };
-
-const card = (over: Partial<ActionItem> = {}): ActionItem => ({
-  id: "c1",
-  source_message_id: "slack:D1:1",
-  action_type: "task",
-  target: {},
-  reason: "r",
-  confidence: 0.9,
-  params: {},
-  status: "suggested",
-  created_at: "2026-08-13T00:00:00Z",
-  context: { sender_handle: "U_ZECH" },
-  ...over,
-});
 
 // A minimal valid persona file with one OPEN commitment the tests transition.
 function personaDirWith(commitments: unknown[]): string {

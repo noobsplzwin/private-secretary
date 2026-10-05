@@ -25,25 +25,6 @@ export interface TaskMeta {
 
 export type TaskRegistry = Record<string, TaskMeta>;
 
-// Daily-plan layer (specs/daily-todo.md): the LLM ranking pass writes one per
-// open task. tier A→D + rank (0 = most important) + a one-line "why now"; entities
-// are the supporting materials the task references (a flight status, a file in a
-// chat, a price), each a pointer + last-known value. Stored in loop-state.plans.
-export interface TaskEntity {
-  kind: string; // flight | file | price | confirmation | deadline | person | doc | ...
-  label: string;
-  value?: string; // "Delayed 3h" / "¥6,712" / "due Aug 20"
-  source?: string; // "WeChat · 张工 · Jun 10" — a pointer, not a fetch
-}
-export interface TaskPlan {
-  tier: "A" | "B" | "C" | "D";
-  rank: number;
-  why: string;
-  entities?: TaskEntity[];
-  at: string; // ISO — when this plan was computed
-}
-export type TaskPlanMap = Record<string, TaskPlan>;
-
 // A2 — stable task_id dedup. The skill (LLM) decides whether each new action
 // joins an existing task or starts a new one; this function is the
 // deterministic guard that catches the mistake of minting a SECOND id for a

@@ -21,7 +21,6 @@ import { TICKTICK_BATCH_MAX } from "../core/ticktick.js";
 import type { TickTickWriter, TickTickReader } from "../proc/ticktick-sync.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
 import { applyPlanUpdate } from "../core/plan-progress.js";
-import type { ToolRunner } from "../proc/execute.js";
 
 const projectIdCache = new Map<string, string>();
 
@@ -67,29 +66,6 @@ export interface TickTickToolOptions {
   // Destination list NAME from the tool config. Applied when the card carries
   // no project of its own; unset → TickTick's Inbox.
   project?: string;
-}
-
-// Build the TickTick ToolRunner. `params` is the TickTickTaskPayload from
-// core/ticktick.ts — field names are already TickTick's, so the only work here
-// is swapping the project NAME for its id and wrapping the envelope.
-export function createTickTickToolRunner(opts: TickTickToolOptions): ToolRunner {
-  return {
-    run: async (params: Record<string, unknown>) => {
-      const { project, ...task } = params as { project?: string } & Record<string, unknown>;
-      const listName = project ?? opts.project;
-      const projectId = listName
-        ? await resolveProjectId(opts.url, opts.authService, listName)
-        : undefined;
-
-      const res = await callMcpTool(opts.url, opts.authService, "create_task", {
-        task: { ...task, ...(projectId ? { projectId } : {}) },
-      });
-      const created = callResultObject(res);
-      const id = typeof created.id === "string" ? created.id : "";
-      if (!id) throw new Error("ticktick: create_task returned no task id");
-      return { ref: `ticktick:${id}` };
-    },
-  };
 }
 
 // Test seam: the project-id cache is process-wide, so a test that stubs

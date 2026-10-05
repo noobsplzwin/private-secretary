@@ -1,7 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { readbackFromTickTick, syncToTickTick, cardRows, taskUnitsFrom, type TickTickWriter } from "./ticktick-sync.js";
 import { DISMISS_LINE } from "../core/ticktick-plan.js";
-import type { SyncMap } from "../core/ticktick-sync.js";
 import type { ActionItem } from "../core/action-item.js";
 import type { LoopState } from "../io/state.js";
 
