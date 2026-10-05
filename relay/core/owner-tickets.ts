@@ -23,6 +23,8 @@ export interface OwnerTicket {
   steps: string[];
   /** TickTick item ids of `steps`, same order — how a proven step is ticked. */
   stepIds?: string[];
+  /** Its description — what the plan already knows, so news is not news twice. */
+  desc?: string;
 }
 
 /** His open tasks among those read: neither tagged by the engine nor tracked by it. */
@@ -32,7 +34,13 @@ export function ownerTicketsFrom(remote: readonly RemoteTask[], map: SyncMap): O
     .filter((t) => t.status === 0 && !tracked.has(t.id) && !(t.tags ?? []).includes(ENGINE_TAG) && !!t.title?.trim())
     .map((t) => {
       const open = (t.items ?? []).filter((i) => i.status === 0 && !!i.title?.trim());
-      return { id: t.id, title: t.title!.trim(), steps: open.map((i) => i.title!.trim()), stepIds: open.map((i) => i.id) };
+      return {
+        id: t.id,
+        title: t.title!.trim(),
+        steps: open.map((i) => i.title!.trim()),
+        stepIds: open.map((i) => i.id),
+        ...(t.desc?.trim() ? { desc: t.desc.trim() } : {}),
+      };
     });
 }
 

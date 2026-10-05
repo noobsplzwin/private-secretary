@@ -96,11 +96,24 @@ const SCHEMA: Record<string, unknown> = {
   required: ["done", "news"],
 };
 
+// A line whose text already opens with its speaker is shown as it is.
+const SPEAKER_PREFIX = /^(?:\[[^\]]*\]\s*)?[^:：]{1,40}[:：]/;
+
 export function buildPlanRequest(name: string, tickets: readonly OwnerTicket[], spoken: readonly Spoken[]): PlanRequest {
-  const talk = spoken.map((s) => `${s.who ?? (s.speaker === "me" ? "我" : name)}: ${s.text}`).join("\n");
+  const talk = spoken
+    .map((s) => (SPEAKER_PREFIX.test(s.text) ? s.text : `${s.who ?? (s.speaker === "me" ? "我" : name)}: ${s.text}`))
+    .join("\n");
+  // What each plan already says, so a fact it holds is not reported as news.
+  const known = tickets
+    .filter((t) => t.desc)
+    .map((t) => `T${tickets.indexOf(t) + 1} already says:\n${t.desc!.slice(0, 1500)}`)
+    .join("\n\n");
   return {
     system: SYSTEM,
-    userText: `HIS PLANS:\n${ticketBlock(tickets)}\n\nNEW LINES (with ${name}, oldest first):\n${talk}\n\nWhat do these lines change in his plans?`,
+    userText:
+      `HIS PLANS:\n${ticketBlock(tickets)}\n\n` +
+      (known ? `WHAT THE PLANS ALREADY SAY (never report these as news):\n${known}\n\n` : "") +
+      `NEW LINES (with ${name}, oldest first):\n${talk}\n\nWhat do these lines change in his plans?`,
     toolInputSchema: SCHEMA,
   };
 }
