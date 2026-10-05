@@ -16,7 +16,7 @@
 // error and continues with the others (same shape as source faults).
 
 import { ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
-import type { PlanUpdate } from "../core/plan-progress.js";
+import { planUpdate, type PlanUpdate } from "../core/plan-progress.js";
 import { randomUUID } from "node:crypto";
 import {
   validateActionItem,
@@ -374,7 +374,7 @@ export async function draftActions(
         senderErrors.push(`dropped "${s.headline}": ${listed ? "already a step of" : "added as a step to"} his own ticket 「${ticket.title}」`);
         if (!listed) {
           const title = String((s.params as Record<string, unknown> | undefined)?.title ?? s.headline ?? "").trim();
-          if (title) planSteps.push({ ticketId: ticket.id, check: [], notes: [], addSteps: [title] });
+          if (title) planSteps.push(planUpdate(ticket.id, [title]));
         }
         continue;
       }

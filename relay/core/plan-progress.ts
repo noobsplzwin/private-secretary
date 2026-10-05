@@ -18,6 +18,8 @@
 import type { OwnerTicket } from "./owner-tickets.js";
 import { ticketBlock, ticketByHandle } from "./owner-tickets.js";
 import type { Spoken } from "./closure-check.js";
+import { fold, lineOf } from "./corpus-lines.js";
+import type { JsonRequest } from "./types.js";
 
 export const PROGRESS_HEADER = "■ 进展（秘书自动更新）";
 export const ADDED_PREFIX = "＋ ";
@@ -32,25 +34,17 @@ export interface PlanUpdate {
   addSteps: string[];
 }
 
-const fold = (s: string): string => s.toLowerCase().replace(/\s+/g, "");
-
-/** The ONE spoken line a quote comes from, or undefined — the quote gate. */
-function lineFor(spoken: readonly Spoken[], quote: string): Spoken | undefined {
-  const q = fold(quote);
-  if (q.length < (/[一-鿿]/.test(q) ? 2 : 4)) return undefined;
-  return spoken.find((s) => fold(s.text).includes(q));
+/** An update to one ticket — empty, or adding the given steps. */
+export function planUpdate(ticketId: string, addSteps: string[] = []): PlanUpdate {
+  return { ticketId, check: [], notes: [], addSteps };
 }
+
 
 function md(stamp: string | undefined, today: string): string {
   const [, m, d] = (stamp ?? today).slice(0, 10).split("-");
   return `${Number(m)}/${Number(d)}`;
 }
 
-export interface PlanRequest {
-  system: string;
-  userText: string;
-  toolInputSchema: Record<string, unknown>;
-}
 
 const SYSTEM = `You keep Leo's PLANS current. Each plan is a ticket he wrote himself, with
 numbered steps. From the NEW lines of conversation, report only:
@@ -99,7 +93,7 @@ const SCHEMA: Record<string, unknown> = {
 // A line whose text already opens with its speaker is shown as it is.
 const SPEAKER_PREFIX = /^(?:\[[^\]]*\]\s*)?[^:：]{1,40}[:：]/;
 
-export function buildPlanRequest(name: string, tickets: readonly OwnerTicket[], spoken: readonly Spoken[]): PlanRequest {
+function buildPlanRequest(name: string, tickets: readonly OwnerTicket[], spoken: readonly Spoken[]): JsonRequest {
   const talk = spoken
     .map((s) => (SPEAKER_PREFIX.test(s.text) ? s.text : `${s.who ?? (s.speaker === "me" ? "我" : name)}: ${s.text}`))
     .join("\n");
@@ -127,7 +121,7 @@ export async function findPlanProgress(
   name: string,
   tickets: readonly OwnerTicket[],
   spoken: readonly Spoken[],
-  json: (req: PlanRequest) => Promise<unknown>,
+  json: (req: JsonRequest) => Promise<unknown>,
   today: string,
 ): Promise<PlanUpdate[]> {
   const plans = tickets.filter((t) => t.steps.length > 0 && (t.stepIds?.length ?? 0) === t.steps.length);
@@ -140,7 +134,7 @@ export async function findPlanProgress(
   }
   const out = new Map<string, PlanUpdate>();
   const at = (t: OwnerTicket): PlanUpdate => {
-    const u = out.get(t.id) ?? { ticketId: t.id, check: [], notes: [], addSteps: [] };
+    const u = out.get(t.id) ?? planUpdate(t.id);
     out.set(t.id, u);
     return u;
   };
@@ -149,7 +143,7 @@ export async function findPlanProgress(
     const t = ticketByHandle(plans, (d as { ticket?: unknown }).ticket);
     const step = (d as { step?: unknown }).step;
     const ev = (d as { evidence?: unknown }).evidence;
-    if (!t || !Number.isInteger(step) || typeof ev !== "string" || !lineFor(spoken, ev)) continue;
+    if (!t || !Number.isInteger(step) || typeof ev !== "string" || !lineOf(spoken, ev)) continue;
     const id = t.stepIds?.[(step as number) - 1];
     if (id && !at(t).check.includes(id)) at(t).check.push(id);
   }
@@ -157,7 +151,7 @@ export async function findPlanProgress(
     const t = ticketByHandle(plans, (n as { ticket?: unknown }).ticket);
     const ev = (n as { evidence?: unknown }).evidence;
     if (!t || typeof ev !== "string") continue;
-    const line = lineFor(spoken, ev);
+    const line = lineOf(spoken, ev);
     if (!line) continue;
     at(t).notes.push(`${md(line.stamp, today)} ${line.who ?? (line.speaker === "me" ? "我" : name)}：「${ev.trim()}」`);
   }
@@ -168,7 +162,7 @@ export async function findPlanProgress(
 export function mergePlanUpdates(updates: readonly PlanUpdate[]): PlanUpdate[] {
   const by = new Map<string, PlanUpdate>();
   for (const u of updates) {
-    const m = by.get(u.ticketId) ?? { ticketId: u.ticketId, check: [], notes: [], addSteps: [] };
+    const m = by.get(u.ticketId) ?? planUpdate(u.ticketId);
     for (const c of u.check) if (!m.check.includes(c)) m.check.push(c);
     for (const n of u.notes) if (!m.notes.includes(n)) m.notes.push(n);
     for (const s of u.addSteps) if (!m.addSteps.includes(s)) m.addSteps.push(s);

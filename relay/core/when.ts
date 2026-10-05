@@ -11,6 +11,8 @@
 // zone's actual offset on that date, so a summer meeting is not shifted an
 // hour by a winter offset.
 
+export const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** Offset of an IANA zone at a given instant, in minutes east of UTC. */
 function zoneOffsetMinutes(zone: string, atUtcMs: number): number {
   // Intl is the only DST-correct table available without a dependency: format

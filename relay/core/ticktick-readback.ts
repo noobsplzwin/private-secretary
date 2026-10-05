@@ -115,6 +115,13 @@ export function diffTickTickReadback(
   const doneUnitKeys: string[] = [];
   const dismissedUnitKeys: string[] = [];
   const ownerNotes: ReadbackResult["ownerNotes"] = [];
+  // The task's 🚫 line: records his note if he wrote one, and says whether he ticked it.
+  const readDismiss = (unitKey: string, task: RemoteTask | undefined): boolean => {
+    const line = (task?.items ?? []).find((i) => dismissNote(i.title) !== null);
+    const note = dismissNote(line?.title);
+    if (note) ownerNotes.push({ unitKey, note, dismissed: line!.status === 1 });
+    return line?.status === 1;
+  };
 
   for (const [unitKey, rec] of Object.entries(map)) {
     // A tombstone is a task WE completed and chose to remember (the duplicate-
@@ -132,11 +139,7 @@ export function diffTickTickReadback(
       // were read, so all 15 read as finished work: commitments marked done, no
       // not_a_thing label, every note lost. The caller fetches a vanished task
       // when it can (scan-loop readAllActive), and its 🚫 line is honoured here.
-      const gone = finished.get(rec.ticktickId);
-      const goneLine = (gone?.items ?? []).find((i) => dismissNote(i.title) !== null);
-      const goneNote = dismissNote(goneLine?.title);
-      if (goneNote) ownerNotes.push({ unitKey, note: goneNote, dismissed: goneLine!.status === 1 });
-      if (goneLine && goneLine.status === 1) dismissedUnitKeys.push(unitKey);
+      if (readDismiss(unitKey, finished.get(rec.ticktickId))) dismissedUnitKeys.push(unitKey);
       continue;
     }
     const itemStatus = new Map((task.items ?? []).map((i) => [i.id, i.status]));
@@ -148,10 +151,7 @@ export function diffTickTickReadback(
     // was often no id to record. DISMISS_LINE is a constant we control, so the
     // title is the stable handle, and it works on tasks already carrying the
     // line without waiting for a re-sync.
-    const line = (task.items ?? []).find((i) => dismissNote(i.title) !== null);
-    const note = dismissNote(line?.title);
-    if (note) ownerNotes.push({ unitKey, note, dismissed: line!.status === 1 });
-    if (line && line.status === 1) {
+    if (readDismiss(unitKey, task)) {
       dismissedUnitKeys.push(unitKey);
       continue;
     }

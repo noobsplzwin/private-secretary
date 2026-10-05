@@ -15,7 +15,7 @@ import { evidenceGrounded } from "../core/quote-check.js";
 import { isLlmUnavailable } from "../core/inbox.js";
 import { coveredByTicket, ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
 import { findClosures, spokenFromCorpus, stampOf, type OpenItem } from "../core/closure-check.js";
-import { findPlanProgress, type PlanUpdate } from "../core/plan-progress.js";
+import { findPlanProgress, planUpdate, type PlanUpdate } from "../core/plan-progress.js";
 import { capCorpus, indexCorpus, lineOf, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
@@ -26,6 +26,16 @@ import {
 } from "./persona-update-prompt.js";
 
 export type PersonaUpdateJsonCaller = (req: PersonaUpdateRequest) => Promise<unknown>;
+
+/** A thrown-away extraction or verdict, with why (see extractCommitmentsOnce). */
+export interface DiscardRecord {
+  at: string;
+  persona: string;
+  kind: "commitment" | "transition" | "assessment";
+  reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance";
+  evidence: string;
+  index?: number;
+}
 
 export interface PersonaUpdateDeps {
   json: PersonaUpdateJsonCaller;
@@ -51,14 +61,7 @@ export interface PersonaUpdateDeps {
   /** Dates the ASSESS verdicts. */
   now?: () => string;
   /** Where a discarded extraction/verdict is recorded. See extractCommitmentsOnce. */
-  onDiscard?: (rec: {
-    at: string;
-    persona: string;
-    kind: "commitment" | "transition" | "assessment";
-    reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance";
-    evidence: string;
-    index?: number;
-  }) => void;
+  onDiscard?: (rec: DiscardRecord) => void;
 }
 
 const norm = (s: string): string => s.trim().toLowerCase().replace(/\s+/g, " ");
@@ -175,7 +178,9 @@ export async function updatePersonaCommitments(
     attempted.push(entry);
     discarded += r.discarded;
     assessed += r.assessed;
-    closedDone += await closeDoneCommitments(personaPath(deps.personaDir, entry.personaKey), persona.displayName, corpus, json);
+    // Capped like the assess call: an uncapped corpus is the 400k-character
+    // timeout capCorpus exists to prevent.
+    closedDone += await closeDoneCommitments(personaPath(deps.personaDir, entry.personaKey), persona.displayName, capCorpus(corpus), json);
     planUpdates.push(...r.newSteps);
     // His plans, from what is NEW since this person was last assessed. No
     // cursor yet → nothing: the first pass must not replay all of history.
@@ -307,14 +312,7 @@ export async function extractCommitmentsOnce(opts: {
    * of them. A discard rate is a number; a discarded quote is a diagnosis.
    * Absent = no logging (tests, one-off scripts).
    */
-  onDiscard?: (rec: {
-    at: string;
-    persona: string;
-    kind: "commitment" | "transition" | "assessment";
-    reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance";
-    evidence: string;
-    index?: number;
-  }) => void;
+  onDiscard?: (rec: DiscardRecord) => void;
 }): Promise<{ added: number; statusChanged: number; discarded: number; assessed: number; newSteps: PlanUpdate[] } | null> {
   let existing: Commitment[];
   try {
@@ -372,7 +370,7 @@ export async function extractCommitmentsOnce(opts: {
   const nowIso = (opts.now ?? (() => new Date().toISOString()))();
   const note = (
     kind: "commitment" | "transition" | "assessment",
-    reason: "ungrounded" | "incoherent" | "their-own-move" | "same-utterance",
+    reason: DiscardRecord["reason"],
     evidence: string,
     index?: number,
   ): void =>
@@ -433,7 +431,7 @@ export async function extractCommitmentsOnce(opts: {
 
   // STRUCTURAL GATES — core/corpus-lines.ts `mintable`, the ONE implementation
   // the bench also runs, so what ships here is what the scorecard measures.
-  const lines = indexCorpus(corpus);
+  const lines = corpusLines;
   const nowMs = Date.parse(at);
   let gated = 0;
   const fresh = okExtracted.filter((e) => !seen.has(norm(e.what))).filter((e) => {
@@ -505,6 +503,7 @@ export async function extractCommitmentsOnce(opts: {
   if (minted.length === 0 && statusChanged === 0 && assessed === 0)
     return { added: 0, statusChanged: 0, discarded, assessed: 0, newSteps: [] };
 
+  const ticketOf = (e: { covered_by_ticket?: string }) => ticketByHandle(opts.ownerTickets ?? [], e.covered_by_ticket);
   const merged: Commitment[] = [
     ...withStatus,
     ...minted.map((e) => ({
@@ -513,7 +512,7 @@ export async function extractCommitmentsOnce(opts: {
       status: e.status ?? "open",
       ...(e.due ? { due: e.due } : {}),
       ...(e.matter_id ? { matter_id: e.matter_id.trim() } : {}),
-      ...((t) => (t ? { covered_by: coveredByTicket(t) } : {}))(ticketByHandle(opts.ownerTickets ?? [], e.covered_by_ticket)),
+      ...((t) => (t ? { covered_by: coveredByTicket(t) } : {}))(ticketOf(e)),
       ...((src) => (src ? { source_line: src } : {}))(sourceOf(e)),
     })),
   ];
@@ -546,10 +545,8 @@ export async function extractCommitmentsOnce(opts: {
   // becomes one (core/plan-progress.ts ADDED_PREFIX). Only his own work, and
   // only once it is written.
   const newSteps: PlanUpdate[] = minted.flatMap((e) => {
-    const t = ticketByHandle(opts.ownerTickets ?? [], e.covered_by_ticket);
-    return t && e.who === "me" && e.ticket_step === undefined
-      ? [{ ticketId: t.id, check: [], notes: [], addSteps: [e.what.trim()] }]
-      : [];
+    const t = ticketOf(e);
+    return t && e.who === "me" && e.ticket_step === undefined ? [planUpdate(t.id, [e.what.trim()])] : [];
   });
   return { added: minted.length, statusChanged, discarded, assessed, newSteps };
 }

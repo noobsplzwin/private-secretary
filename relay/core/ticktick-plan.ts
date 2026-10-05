@@ -20,7 +20,7 @@
 // "due today" for every A-tier item would make Today meaningless within a week.
 
 import type { ActionItem } from "./action-item.js";
-import { zoneOffsetAt } from "./when.js";
+import { DAY_MS, zoneOffsetAt } from "./when.js";
 import { ENGINE_TAG, type TickTickTaskPayload } from "./ticktick.js";
 
 // The owner's ONLY way to say "this should never have been here". Before it, a
@@ -137,7 +137,7 @@ export function isExecutableAction(a: ActionItem): boolean {
 // The grace window is a day. params.start is a wall clock whose zone lives in
 // params.tz, so parsing it here is accurate only to within a day's offsets; a
 // day of slack also keeps something happening later today on the list.
-const PAST_EVENT_GRACE_MS = 24 * 60 * 60 * 1000;
+const PAST_EVENT_GRACE_MS = DAY_MS;
 
 function isPastEvent(m: ActionItem, nowMs: number): boolean {
   if (m.action_type !== "calendar") return false;
@@ -284,6 +284,19 @@ function lineFor(a: ActionItem, zone: string): { title: string; actionId?: strin
 /** The task's real deadline, if it has one. Never invented — see the header. */
 const CARD_REVIEW_DAYS = 3;
 
+/** An instant's calendar date in a zone, YYYY-MM-DD — what dueFields reads as all-day. */
+export function localDate(ms: number, zone: string): string {
+  return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+    new Date(ms),
+  );
+}
+
+/** The same date as a note writes it: 10/7. */
+export function monthDay(ms: number, zone: string): string {
+  const [, m, d] = localDate(ms, zone).split("-");
+  return `${Number(m)}/${Number(d)}`;
+}
+
 /** The review date of an undated card: made + CARD_REVIEW_DAYS, in his zone. */
 function reviewDateFor(unit: TaskUnit, zone: string): { date: string; line: string } | null {
   const made = unit.members
@@ -291,14 +304,11 @@ function reviewDateFor(unit: TaskUnit, zone: string): { date: string; line: stri
     .filter((t) => !Number.isNaN(t))
     .sort((a, b) => a - b)[0];
   if (made === undefined) return null;
-  const day = (ms: number): string =>
-    new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(ms));
-  const md = (ms: number): string => {
-    const [, m, d] = day(ms).split("-");
-    return `${Number(m)}/${Number(d)}`;
+  const at = made + CARD_REVIEW_DAYS * DAY_MS;
+  return {
+    date: localDate(at, zone),
+    line: `回看日 ${monthDay(at, zone)}(建卡 ${monthDay(made, zone)} +${CARD_REVIEW_DAYS} 天),不是截止。`,
   };
-  const at = made + CARD_REVIEW_DAYS * 24 * 60 * 60 * 1000;
-  return { date: day(at), line: `回看日 ${md(at)}(建卡 ${md(made)} +${CARD_REVIEW_DAYS} 天),不是截止。` };
 }
 
 export function deadlineFor(unit: TaskUnit): string | null {

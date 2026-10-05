@@ -36,7 +36,7 @@ export interface InboxEntry {
  * bounds the damage if the drafter is down for days. Overflow drops the OLDEST
  * and says so — never silently.
  */
-export const MAX_INBOX = 300;
+const MAX_INBOX = 300;
 
 /**
  * Failed attempts after which a message is given up on. A message that breaks

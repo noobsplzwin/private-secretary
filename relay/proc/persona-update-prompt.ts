@@ -4,6 +4,7 @@
 // one-line evidence quote; never invent. The orchestrator merges them into the
 // persona via the R1 write chokepoint (manual fields stay untouched).
 
+import type { JsonRequest } from "../core/types.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { ITEM_STANDARD } from "./item-standard.js";
 
@@ -41,11 +42,10 @@ export interface ExtractedAssessment {
   covered_by_ticket?: string;
 }
 
-export interface PersonaUpdateRequest {
-  system: string;
-  userText: string;
-  toolInputSchema: Record<string, unknown>;
-}
+export type PersonaUpdateRequest = JsonRequest;
+
+const COVERED_BY_TICKET =
+  "ONLY when this work is already a step in, or the same work as, one of THE OWNER'S OWN TICKETS listed in the message: that ticket's handle (e.g. \"T2\"). Omit otherwise.";
 
 const SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -71,7 +71,7 @@ const SCHEMA: Record<string, unknown> = {
               "ONLY when this commitment is one link of a matter already tracked (reuse that matter id from the list) or of another commitment you are returning now (invent one short kebab-case id and put it on both). Omit for standalone work.",
           },
           ticket_step: { type: "integer", description: "With covered_by_ticket: the number of the step in that ticket this IS, when it is one of the listed steps. Omit when it is work the ticket does not list yet." },
-          covered_by_ticket: { type: "string", description: "ONLY when this work is already a step in, or the same work as, one of THE OWNER'S OWN TICKETS listed in the message: that ticket's handle (e.g. \"T2\"). Omit otherwise." },
+          covered_by_ticket: { type: "string", description: COVERED_BY_TICKET },
         },
         required: ["who", "what", "evidence"],
       },
@@ -133,7 +133,7 @@ const SCHEMA: Record<string, unknown> = {
         description:
           "VERBATIM quote from the conversation showing the CURRENT state of this commitment. Ungrounded verdicts are discarded. Leave empty ONLY when unseen is true.",
       },
-      covered_by_ticket: { type: "string", description: "ONLY when this work is already a step in, or the same work as, one of THE OWNER'S OWN TICKETS listed in the message: that ticket's handle (e.g. \"T2\"). Omit otherwise." },
+      covered_by_ticket: { type: "string", description: COVERED_BY_TICKET },
       unseen: {
         type: "boolean",
         description:

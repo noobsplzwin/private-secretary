@@ -11,7 +11,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { OwnerTicket } from "../core/owner-tickets.js";
 
-export function ownerTicketsPathFor(statePath: string): string {
+function ownerTicketsPathFor(statePath: string): string {
   return join(dirname(statePath), "owner-tickets.json");
 }
 

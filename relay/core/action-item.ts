@@ -9,7 +9,7 @@
 //                  (terminal) │ for manual paste; auto-send platforms execute
 //                             │ immediately after approve, then markExecuted
 
-import { isValidTimeZone, resolveWallTime } from "./when.js";
+import { DAY_MS, isValidTimeZone, resolveWallTime } from "./when.js";
 import { AUTO_SEND_PLATFORMS, type Attachment, type Platform } from "./types.js";
 import { DEFAULT_TOOL_SPECS, type ToolSpec } from "./tool-registry.js";
 
@@ -270,7 +270,7 @@ export const SILENT_RETIRE_DAYS = 7;
 // it landed. The signal that a card is dead is that the OWNER never touched it,
 // not that the contact stopped talking.
 export function staleSuggestedCards(actions: readonly ActionItem[], nowMs: number): ActionItem[] {
-  const cutoff = nowMs - SILENT_RETIRE_DAYS * 86_400_000;
+  const cutoff = nowMs - SILENT_RETIRE_DAYS * DAY_MS;
   return actions.filter((a) => {
     // A user-touched card is never "suggested", so it stays — same rule
     // supersede uses. A pending calendar with a real start is a commitment.

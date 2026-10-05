@@ -9,14 +9,15 @@
 
 import type { ActionItem } from "../core/action-item.js";
 import type { InboundMessage } from "../core/types.js";
-import { findClosures, spokenFromBatch, type ClosureRequest } from "../core/closure-check.js";
+import { findClosures, spokenFromBatch } from "../core/closure-check.js";
+import type { JsonRequest } from "../core/types.js";
 
 export async function closeDoneCards(
   actions: readonly ActionItem[],
   batch: readonly InboundMessage[],
   /** Senders whose draft call failed — their batch was not read, so nothing is concluded. */
   skip: ReadonlySet<string>,
-  json: (req: ClosureRequest) => Promise<unknown>,
+  json: (req: JsonRequest) => Promise<unknown>,
 ): Promise<Array<{ id: string; evidence: string }>> {
   const bySender = new Map<string, InboundMessage[]>();
   for (const m of batch) {

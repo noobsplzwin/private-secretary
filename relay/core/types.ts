@@ -110,3 +110,10 @@ export function hasAttachments(m: InboundMessage): boolean {
 // Action Item Engine (specs/action-item-engine.md): relay is now just one
 // action_type in relay/core/action-item.ts, executed after approval like
 // every other action.
+
+/** A structured-output LLM request: instructions, the per-call text, and the tool schema the answer must fit. */
+export interface JsonRequest {
+  system: string;
+  userText: string;
+  toolInputSchema: Record<string, unknown>;
+}

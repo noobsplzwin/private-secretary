@@ -58,6 +58,7 @@ import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraf
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { saveOwnerTickets } from "../io/owner-tickets-store.js";
+import { localDate } from "../core/ticktick-plan.js";
 import { closeDoneCards } from "./card-closure.js";
 import { loadOwnerTickets } from "../io/owner-tickets-store.js";
 import { findPlanProgress, mergePlanUpdates, type PlanUpdate } from "../core/plan-progress.js";
@@ -311,6 +312,23 @@ async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200)
     await new Promise((r) => setTimeout(r, delayMs));
   }
   return false;
+}
+
+/**
+ * Drop cards as SUPERSEDED: the label first, then the cards. If the label
+ * cannot be written the cards stay (the next tick retries) — the labels.jsonl
+ * contract is that no card leaves without its label. Returns how many left.
+ */
+function dropSuperseded(statePath: string, fresh: LoopState, cards: readonly ActionItem[]): number {
+  if (cards.length === 0) return 0;
+  try {
+    appendLabels(labelsPathFor(statePath), cards.map((a) => buildLabel({ action: a, decision: "superseded" })));
+  } catch {
+    return 0;
+  }
+  const doomed = new Set(cards.map((a) => a.id));
+  fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
+  return cards.length;
 }
 
 /** A mailbox failure in one line — the part that says what to DO about it. */
@@ -999,19 +1017,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           // Cards Leo already answered. The signal — when he last spoke in the
           // conversation — only exists here, at fetch, so this lane applies it.
           const done = cardsAnsweredSince(fresh.actions, ownerSpokeAt);
-          if (done.length > 0) {
-            try {
-              appendLabels(
-                labelsPathFor(opts.statePath),
-                done.map((a) => buildLabel({ action: a, decision: "superseded" })),
-              );
-              const doomed = new Set(done.map((a) => a.id));
-              fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
-              answered = done.length;
-            } catch {
-              /* label write failed — keep the cards; the next fetch retries */
-            }
-          }
+          answered = dropSuperseded(opts.statePath, fresh, done);
           // What the trigger filter dropped is recorded HERE, where it was seen;
           // the analyser records what it drafted.
           if (filteredOut.length > 0) {
@@ -1144,7 +1150,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             m.text.split("\n").map((t) => t.trim()).filter(Boolean).map((text) => ({ speaker: "them" as const, who: name, text })),
           );
           try {
-            planUpdates.push(...(await findPlanProgress(name, tickets, spoken, opts.personaUpdate.json, new Date().toISOString().slice(0, 10))));
+            planUpdates.push(...(await findPlanProgress(name, tickets, spoken, opts.personaUpdate.json, localDate(Date.now(), machineTimeZone()))));
           } catch (e) {
             console.error(`[plan] ${name}: ${errString(e)}`);
           }
@@ -1312,20 +1318,8 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         // bigger of the two leaks (502 shadow ids → 173 surviving). Write the
         // label BEFORE dropping; if the append fails, keep the cards (a duplicate
         // card beats a lost label) and let the next tick supersede them.
-        let supersedeOk = true;
-        if (superseded.length > 0) {
-          try {
-            appendLabels(
-              labelsPathFor(opts.statePath),
-              superseded.map((a) => buildLabel({ action: a, decision: "superseded" })),
-            );
-          } catch {
-            supersedeOk = false;
-          }
-        }
+        const supersedeOk = superseded.length === 0 || dropSuperseded(opts.statePath, fresh, superseded) > 0;
         if (supersedeOk) {
-          const doomed = new Set(superseded.map((a) => a.id));
-          fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
           supersededCount = superseded.length;
           supersedeExemptCount = exemptKept;
         }
@@ -1360,22 +1354,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         const retired = [...staleSuggestedCards(fresh.actions, Date.now()), ...answered].filter(
           (a) => !justDrafted.has(a.id),
         );
-        if (retired.length > 0) {
-          let ok = true;
-          try {
-            appendLabels(
-              labelsPathFor(opts.statePath),
-              retired.map((a) => buildLabel({ action: a, decision: "superseded" })),
-            );
-          } catch {
-            ok = false;
-          }
-          if (ok) {
-            const doomed = new Set(retired.map((a) => a.id));
-            fresh.actions = fresh.actions.filter((a) => !doomed.has(a.id));
-            staleRetiredCount = retired.length;
-          }
-        }
+        staleRetiredCount = dropSuperseded(opts.statePath, fresh, retired);
       }
       if (llmDraftError !== undefined) {
         fresh.sourceErrors["llm:draft"] = { message: llmDraftError, at: new Date(startedAtMs).toISOString() };

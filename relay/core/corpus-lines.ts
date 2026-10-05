@@ -16,6 +16,8 @@
 //
 // Pure. No I/O, no LLM.
 
+import { DAY_MS } from "./when.js";
+
 export type Speaker = "me" | "them" | "unknown";
 
 export interface CorpusLine {
@@ -45,7 +47,17 @@ export function indexCorpus(corpus: string): CorpusLine[] {
   });
 }
 
-const fold = (s: string): string => s.toLowerCase().replace(/\s+/g, "");
+/** Case- and whitespace-insensitive form a quote is matched in. */
+export const fold = (s: string): string => s.toLowerCase().replace(/\s+/g, "");
+
+/**
+ * Is a folded quote long enough to mean anything? CJK carries far more per
+ * character — 「发你了」 is a complete closure utterance in three. Latin needs
+ * more before a match means anything.
+ */
+export function quoteLongEnough(folded: string): boolean {
+  return folded.length >= (/[一-鿿]/.test(folded) ? 2 : 4);
+}
 
 /**
  * The single line containing this quote, or null.
@@ -53,12 +65,9 @@ const fold = (s: string): string => s.toLowerCase().replace(/\s+/g, "");
  * A quote that spans lines resolves to nothing: it was stitched together, so
  * no one line said it and no speaker or date can be claimed for it.
  */
-export function lineOf(lines: readonly CorpusLine[], quote: string): CorpusLine | null {
+export function lineOf<T extends { text: string }>(lines: readonly T[], quote: string): T | null {
   const q = fold(quote);
-  // CJK carries far more per character — 「发你了」 is a complete closure
-  // utterance in three. Latin needs more before a match means anything.
-  const min = /[一-鿿]/.test(q) ? 2 : 4;
-  if (q.length < min) return null;
+  if (!quoteLongEnough(q)) return null;
   return lines.find((l) => fold(l.text).includes(q)) ?? null;
 }
 
@@ -85,7 +94,7 @@ export function ageInDays(line: CorpusLine, nowMs: number): number {
   if (!line.date) return Infinity;
   const t = Date.parse(`${line.date}T00:00:00Z`);
   if (Number.isNaN(t)) return Infinity;
-  return (nowMs - t) / 86_400_000;
+  return (nowMs - t) / DAY_MS;
 }
 
 /**

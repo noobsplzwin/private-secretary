@@ -43,7 +43,8 @@
 // how work is FILED; a verdict is how it is DECIDED.
 
 import { stableHash } from "./unit-key.js";
-import { dueFields, DISMISS_LINE } from "./ticktick-plan.js";
+import { dueFields, DISMISS_LINE, localDate, monthDay as md } from "./ticktick-plan.js";
+import { DAY_MS } from "./when.js";
 import { MINT_WINDOW_DAYS } from "./corpus-lines.js";
 import type { TickTickTaskPayload } from "./ticktick.js";
 import type { Commitment } from "./persona-v3.js";
@@ -58,7 +59,6 @@ export interface LedgerPersona {
 /** How a row reads — see itemFor's `mode`. */
 type RowMode = "own" | "chase";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * What may put a row on the list at all (owner, 2026-09-29: 「全都是错的」 about
@@ -113,18 +113,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
  */
 const OWN_REVIEW_DAYS = 3;
 const ROLL_DAYS = 7;
-
-function localDate(ms: number, zone: string): string {
-  // en-CA formats as YYYY-MM-DD, which dueFields reads as an all-day date.
-  return new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
-    new Date(ms),
-  );
-}
-
-function md(ms: number, zone: string): string {
-  const [, m, d] = localDate(ms, zone).split("-");
-  return `${Number(m)}/${Number(d)}`;
-}
 
 /** Who a row belongs to, plus the one fact about them the review clock needs. */
 interface RowOwner {

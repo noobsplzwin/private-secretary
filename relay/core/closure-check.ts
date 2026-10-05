@@ -18,8 +18,8 @@
 //     is part of the row's own origin never closes it.
 // Brain §6: closure detection, not forgetting, is the answer to stale rows.
 
-import { indexCorpus } from "./corpus-lines.js";
-import type { InboundMessage } from "./types.js";
+import { fold, indexCorpus, quoteLongEnough } from "./corpus-lines.js";
+import type { InboundMessage, JsonRequest } from "./types.js";
 
 export interface OpenItem {
   /** R1, R2 … — what the model answers with. */
@@ -42,7 +42,6 @@ export interface Spoken {
   stamp?: string;
 }
 
-const fold = (s: string): string => s.toLowerCase().replace(/\s+/g, "");
 const STAMP = /^\[(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2})/;
 
 /** The stamp of a corpus line, "YYYY-MM-DD HH:MM", or undefined. */
@@ -93,14 +92,14 @@ export function spokenFromBatch(msgs: readonly InboundMessage[]): Spoken[] {
 }
 
 /** Could any line close this item at all? No → no model call. */
-export function closable(spoken: readonly Spoken[], item: OpenItem): boolean {
+function closable(spoken: readonly Spoken[], item: OpenItem): boolean {
   return spoken.some((s) => s.speaker === item.side && (!item.after || !s.stamp || s.stamp > item.after));
 }
 
 /** Does this quote prove the item done? The gate — see the header. */
 export function closureProven(spoken: readonly Spoken[], item: OpenItem, quote: string): boolean {
   const q = fold(quote);
-  if (q.length < (/[一-鿿]/.test(q) ? 2 : 4)) return false;
+  if (!quoteLongEnough(q)) return false;
   if ((item.origin ?? []).some((o) => fold(o).includes(q))) return false;
   return spoken.some(
     (s) =>
@@ -110,11 +109,6 @@ export function closureProven(spoken: readonly Spoken[], item: OpenItem, quote: 
   );
 }
 
-export interface ClosureRequest {
-  system: string;
-  userText: string;
-  toolInputSchema: Record<string, unknown>;
-}
 
 const SYSTEM = `You check whether open to-dos are ALREADY DONE, from what was said.
 
@@ -148,7 +142,7 @@ const SCHEMA: Record<string, unknown> = {
   required: ["closed"],
 };
 
-export function buildClosureRequest(name: string, items: readonly OpenItem[], spoken: readonly Spoken[]): ClosureRequest {
+function buildClosureRequest(name: string, items: readonly OpenItem[], spoken: readonly Spoken[]): JsonRequest {
   const list = items.map((i) => `${i.handle}. [${i.side === "me" ? "Leo owes" : `${name} owes`}] ${i.what}`).join("\n");
   const talk = spoken.map((s) => `${s.speaker === "me" ? "我" : name}: ${s.text}`).join("\n");
   return {
@@ -159,7 +153,7 @@ export function buildClosureRequest(name: string, items: readonly OpenItem[], sp
 }
 
 /** The model's answer, shape-checked. The proof gate is closureProven. */
-export function parseClosures(raw: unknown): Array<{ item: string; evidence: string }> {
+function parseClosures(raw: unknown): Array<{ item: string; evidence: string }> {
   const arr = (raw as { closed?: unknown } | null)?.closed;
   if (!Array.isArray(arr)) return [];
   return arr.filter(
@@ -177,7 +171,7 @@ export async function findClosures(
   name: string,
   items: readonly OpenItem[],
   spoken: readonly Spoken[],
-  json: (req: ClosureRequest) => Promise<unknown>,
+  json: (req: JsonRequest) => Promise<unknown>,
 ): Promise<Array<{ item: OpenItem; evidence: string }>> {
   const live = items.filter((i) => closable(spoken, i));
   if (live.length === 0) return [];

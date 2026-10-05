@@ -230,18 +230,16 @@ export async function syncToTickTick(
         // checklist, so a note he typed after 「🚫 这条不该出现」 would be wiped by
         // the next re-render of anything on the task — on 2026-10-03 he had just
         // annotated every ticket. His version of that line is sent back as-is.
-        const remoteLine = remoteActive
-          ?.find((t) => t.id === op.ticktickId)
-          ?.items?.find((i) => dismissNote(i.title));
+        const remote = remoteActive?.find((t) => t.id === op.ticktickId);
+        const remoteLine = remote?.items?.find((i) => dismissNote(i.title) !== null);
         const withNote =
-          remoteLine && dismissNote(remoteLine.title) && base.items
+          remoteLine && base.items
             ? { ...base, items: base.items.map((i) => (dismissNote(i.title) !== null ? { ...i, title: remoteLine.title! } : i)) }
             : base;
         // NEVER OVERWRITE THE DAY HE PICKED. The date on the task is when he
         // plans to do it; once he has moved it (or cleared it), every later
         // update leaves the date fields out — update_task is a partial patch.
         const rec = map[op.unitKey] ?? (op.adoptedFrom ? map[op.adoptedFrom] : undefined);
-        const remote = remoteActive?.find((t) => t.id === op.ticktickId);
         const owner = ownerMovedDate(rec, remote);
         const sent = owner ? withoutDates(withNote) : withNote;
         const written = await writer.updateTask(op.ticktickId, op.projectId, sent);
@@ -397,6 +395,9 @@ export function readbackFromTickTick(
   // Owner-finished units become TOMBSTONES, not deletions: forgetting is what
   // minted calendar twins. The task may be completed (reopenable) or deleted
   // (a reopen attempt will fail and fall through to create — acceptable).
+  // The remote task a map key points at — one index, not a scan per lookup.
+  const byId = new Map(remote.map((t) => [t.id, t]));
+  const taskOf = (unitKey: string): RemoteTask | undefined => byId.get(map[unitKey]?.ticktickId ?? "");
   const nowMs = Date.now();
   const next: SyncMap = {};
   for (const [k, v] of Object.entries(map)) next[k] = gone.has(k) ? { ...v, done: nowMs, closedBy: "owner" as const } : v;
@@ -412,13 +413,13 @@ export function readbackFromTickTick(
     // dropped, and the label would say he did it).
     closedUnitKeys: doneUnitKeys.filter((k) => !tossed.has(k)),
     ownerNotes: ownerNotes.map((n) => {
-      const title = remote.find((t) => t.id === map[n.unitKey]?.ticktickId)?.title;
+      const title = taskOf(n.unitKey)?.title;
       return { ...n, ...(title ? { title } : {}) };
     }),
     dismissedLedger: dismissedUnitKeys
       .filter((k) => parseLedgerUnitKey(k) !== null)
       .map((k) => {
-        const task = remote.find((t) => t.id === map[k]?.ticktickId);
+        const task = taskOf(k);
         const shown = ownLinesShown(task?.desc);
         return { unitKey: k, ...(task?.title ? { title: task.title } : {}), ...(shown.length ? { shown } : {}) };
       }),
