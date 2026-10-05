@@ -388,219 +388,171 @@ export async function readAllActive(
   return { tasks, complete };
 }
 
-export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
-  const startedAtMs = Date.now();
-  const mode = opts.mode ?? "all";
-  const perSource: SourceSummary[] = [];
-  // `platform:handle` → when the OWNER last spoke in that conversation. Each
-  // source pass fills its own platform, only for conversations that have a
-  // reply-only card waiting (params.answered_closes); empty otherwise. Keyed
-  // exactly as core/action-item.ts conversationKey builds it.
-  const ownerSpokeAt = new Map<string, number>();
-  const waitingCards = (platform: string) =>
-    state.actions.filter(
-      (a) =>
-        a.status === "suggested" &&
-        a.params?.answered_closes === true &&
-        (a.target?.platform ?? a.source_message_id.split(":")[0]) === platform,
-    );
-  const sourceMessages: InboundMessage[] = [];
-  // P0: carry the message TEXT of everything we filter out. Without it the
-  // trigger filter's recall is unmeasurable (and recall cannot be recovered from
-  // the approve/skip log — that only covers what was surfaced).
-  const filteredOut: ShadowFilterRejection[] = [];
-  const sourceErrors: Record<string, string> = {};
-  let promoFiltered = 0; // Gmail non-primary mail dropped at ingestion this tick
-  // Hoisted so phase 2 (drafting, unlocked) + phase 3 (commit) can read them.
-  let draftInput: InboundMessage[] = [];
-  let draftSkipped = 0;
+// ─── the three source polls (FETCH lane) ────────────────────────────
+//
+// Each poll reads one platform, files what it read into the tick's shared
+// accumulators, and records its own cursor advance in state.marks (Slack,
+// Gmail) or hands it back held (WeChat — committed only after drafting).
+// A poll never throws: a failure is recorded against its source and the
+// other sources still run.
 
-  const stateDir = dirname(opts.statePath);
-  // Activity-log sink for this tick (F3): one JSONL line per engine event,
-  // beside the state file. NEVER throws — the log narrates the engine, it
-  // must never break it; dryRun narrates nothing.
-  const activityPath = activityPathFor(opts.statePath);
-  const logActivity = (kind: ActivityKind, summary: string, data?: Record<string, unknown>): void => {
-    if (opts.dryRun) return;
-    try {
-      appendActivity(activityPath, {
-        at: new Date().toISOString(),
-        kind,
-        summary,
-        ...(data ? { data } : {}),
+/** What every poll reads from, and the accumulators it files into. */
+interface PollContext {
+  opts: ScanLoopOptions;
+  /** The tick's snapshot; polls advance their cursors in state.marks. */
+  state: LoopState;
+  stateDir: string;
+  startedAtMs: number;
+  /** Suggested reply-only cards per platform (answered-closes). */
+  waitingCards: (platform: string) => ActionItem[];
+  ownerSpokeAt: Map<string, number>;
+  sourceMessages: InboundMessage[];
+  filteredOut: ShadowFilterRejection[];
+  sourceErrors: Record<string, string>;
+  perSource: SourceSummary[];
+}
+
+// WeChat cursors, held between the scan and the drafter. A cursor committed
+// before drafting turns any draft failure into permanent data loss: the
+// messages are marked read and nothing ever looks at them again.
+type PendingBook<T> = { prev: T; next: T };
+
+interface WechatPoll {
+  pendingDirect?: PendingBook<DirectBook>;
+  pendingGroups?: PendingBook<GroupBook>;
+  /** Who took part in what the pass read (sources/wechat-direct.ts Participation). */
+  spoke: Participation[];
+}
+
+// ── Slack pass (one per workspace account) ─────────────────
+// Each configured workspace is scanned via its own Keychain token, its own
+// selfId (authTest inside scanSlackDirect → self-message filter is correct
+// per account), its own cursor slice, and its own source label. A failing
+// account is isolated and never sinks the others. An injected client (tests)
+// scans as the single Taiv account.
+async function pollSlack(ctx: PollContext): Promise<void> {
+  const { opts, state, stateDir, waitingCards, ownerSpokeAt, sourceMessages, filteredOut, sourceErrors, perSource } = ctx;
+    const slackMarks = state.marks as Record<string, { lastTimestampMs: number; seenIds: string[] }>;
+    const slackAccounts = opts.slackClient
+      ? [{ account: SLACK_TOKEN_ACCOUNT, label: "slack:direct", client: opts.slackClient }]
+      : SLACK_ACCOUNTS.map((a) => ({ ...a, client: undefined as SlackClient | undefined }));
+    // Default scope: just DMs and group DMs. Iterating all 400+ workspace
+    // channels would take minutes per tick and most wouldn't address the user.
+    const scope = opts.slackChannelScope ?? "ims-and-mpims";
+    for (const acct of slackAccounts) try {
+      const slack = acct.client ?? (await createSlackClientFromKeychain({}, acct.account));
+      const prev = getSlackState(slackMarks, acct.account);
+      const allChannels = await slack.listAllConversations();
+      const channels = scope === "all"
+        ? allChannels
+        : allChannels.filter((c) => {
+            if (scope === "ims-only") return c.is_im === true;
+            return c.is_im === true || c.is_mpim === true;
+          });
+      const r = await scanSlackDirect({
+        client: slack,
+        channels,
+        state: prev,
+        perChannelLimit: opts.onWake ? 500 : 200,
+        // A wake tick is the catch-up pass: the machine was asleep, so even a
+        // dormant channel may hold something. Every other tick polls hot
+        // channels plus a slice of the cold rotation — see
+        // selectChannelsToPoll for why all 447 every minute was the bug.
+        ...(opts.onWake ? { pollAll: true } : {}),
       });
-    } catch {
-      /* logging is observability, never a failure mode */
-    }
-  };
-  // Write updates to HIS plan tickets (core/plan-progress.ts). Best-effort and
-  // loud: a failed write changes nothing on his ticket and is retried only by
-  // the next conversation that carries the same news.
-  const writePlans = async (updates: readonly PlanUpdate[]): Promise<void> => {
-    if (opts.dryRun || !opts.ticktickWriter?.patchPlan || updates.length === 0) return;
-    const titles = new Map(loadOwnerTickets(opts.statePath).map((t) => [t.id, t.title]));
-    for (const u of mergePlanUpdates(updates)) {
+      // Cosmetic display names: resolve this tick's distinct sender IDs →
+      // Slack display names via a 24h disk cache (relay/io/slack-users.ts),
+      // so cards show a name instead of "U0B…". Cost is bounded — one
+      // users.info per uncached id — and every failure is silent (the raw
+      // ID fallback remains). Self messages never reach r.inbound
+      // (pollResultToInbound drops them).
       try {
-        if (!(await opts.ticktickWriter.patchPlan(u.ticketId, u))) continue;
-        const what = `「${titles.get(u.ticketId) ?? u.ticketId}」: ${u.check.length} step(s) ticked, ${u.notes.length} note(s), ${u.addSteps.length} step(s) added`;
-        console.log(`[plan] ${what}`);
-        logActivity("supersede", `plan updated ${what}`, { phase: "plan", ...u });
-      } catch (e) {
-        console.error(`[plan] update of ${u.ticketId} failed: ${errString(e)}`);
-      }
-    }
-  };
-  // PHASE 0 (UNLOCKED snapshot): take a consistent read of state WITHOUT the
-  // lock. saveState writes atomically (tmp + rename) and carries a revision
-  // guard, so an unlocked read sees old-or-new bytes, never a torn file —
-  // Each lane OWNS its fields (fetch: cursors, marks, sources' errors; analyse:
-  // actions, person cursors), so reading them here lock-free is race-free; the
-  // brief commit reloads fresh state under a (retrying) lock and transplants
-  // only this lane's fields.
-  // Holding NO lock through the slow scan + draft + consolidate + refresh means a
-  // tick can never fail with "another tick is running" just because the other
-  // lane (or a prior commit) briefly held the lock — that was the source of the
-  // intermittent contention noise.
-  // WeChat cursors, held between the scan and the drafter. A cursor committed
-  // before drafting turns any draft failure into permanent data loss: the
-  // messages are marked read and nothing ever looks at them again.
-  type PendingBook<T> = { prev: T; next: T };
-  let pendingWechatDirect: PendingBook<DirectBook> | undefined;
-  let pendingWechatGroups: PendingBook<GroupBook> | undefined;
-  // Who took part in what the WeChat pass read (sources/wechat-direct.ts Participation).
-  const wechatSpoke: Participation[] = [];
-
-  let state: LoopState;
-  try {
-    state = loadState(opts.statePath);
-    // The analyser polls nothing: its input is the inbox.
-    const sources = mode === "analyze" ? [] : (opts.sources ?? ["slack", "gmail"]);
-
-    // ── Slack pass (one per workspace account) ─────────────────
-    // Each configured workspace is scanned via its own Keychain token, its own
-    // selfId (authTest inside scanSlackDirect → self-message filter is correct
-    // per account), its own cursor slice, and its own source label. A failing
-    // account is isolated and never sinks the others. An injected client (tests)
-    // scans as the single Taiv account.
-    if (sources.includes("slack")) {
-      const slackMarks = state.marks as Record<string, { lastTimestampMs: number; seenIds: string[] }>;
-      const slackAccounts = opts.slackClient
-        ? [{ account: SLACK_TOKEN_ACCOUNT, label: "slack:direct", client: opts.slackClient }]
-        : SLACK_ACCOUNTS.map((a) => ({ ...a, client: undefined as SlackClient | undefined }));
-      // Default scope: just DMs and group DMs. Iterating all 400+ workspace
-      // channels would take minutes per tick and most wouldn't address the user.
-      const scope = opts.slackChannelScope ?? "ims-and-mpims";
-      for (const acct of slackAccounts) try {
-        const slack = acct.client ?? (await createSlackClientFromKeychain({}, acct.account));
-        const prev = getSlackState(slackMarks, acct.account);
-        const allChannels = await slack.listAllConversations();
-        const channels = scope === "all"
-          ? allChannels
-          : allChannels.filter((c) => {
-              if (scope === "ims-only") return c.is_im === true;
-              return c.is_im === true || c.is_mpim === true;
-            });
-        const r = await scanSlackDirect({
-          client: slack,
-          channels,
-          state: prev,
-          perChannelLimit: opts.onWake ? 500 : 200,
-          // A wake tick is the catch-up pass: the machine was asleep, so even a
-          // dormant channel may hold something. Every other tick polls hot
-          // channels plus a slice of the cold rotation — see
-          // selectChannelsToPoll for why all 447 every minute was the bug.
-          ...(opts.onWake ? { pollAll: true } : {}),
-        });
-        // Cosmetic display names: resolve this tick's distinct sender IDs →
-        // Slack display names via a 24h disk cache (relay/io/slack-users.ts),
-        // so cards show a name instead of "U0B…". Cost is bounded — one
-        // users.info per uncached id — and every failure is silent (the raw
-        // ID fallback remains). Self messages never reach r.inbound
-        // (pollResultToInbound drops them).
-        try {
-          const names = await resolveSlackUserNames(
-            slack,
-            r.inbound.map((m) => m.senderHandle),
-            join(stateDir, "slack-users.json"),
-          );
-          for (const m of r.inbound) {
-            const n = names.get(m.senderHandle);
-            if (n) m.senderName = n;
-          }
-        } catch {
-          // name resolution is best-effort
-        }
-        if (!opts.dryRun) setSlackState(slackMarks, acct.account, r.nextState);
-        // ANSWERED-CLOSES for Slack: one conversations.history per waiting card,
-        // this workspace only (a foreign channel id is skipped inside).
-        try {
-          const cards = waitingCards("slack");
-          if (cards.length > 0) {
-            const byChannel = new Map<string, { handle: string; since: number }>();
-            for (const a of cards) {
-              const channel = a.source_message_id.split(":")[1];
-              const handle = a.context?.sender_handle;
-              const since = Date.parse(a.created_at);
-              if (!channel || !handle || !Number.isFinite(since)) continue;
-              const cur = byChannel.get(channel);
-              byChannel.set(channel, { handle, since: cur ? Math.min(cur.since, since) : since });
-            }
-            const sinceMs = Math.min(...[...byChannel.values()].map((v) => v.since));
-            const spoke = await ownerLastSpokeInChannels(slack, r.raw.selfId, [...byChannel.keys()], sinceMs);
-            for (const [channel, ms] of spoke) ownerSpokeAt.set(`slack:${byChannel.get(channel)!.handle}`, ms);
-          }
-        } catch (e) {
-          console.log(`[slack] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
-        }
-        let triggered = 0;
-        let filtered = 0;
+        const names = await resolveSlackUserNames(
+          slack,
+          r.inbound.map((m) => m.senderHandle),
+          join(stateDir, "slack-users.json"),
+        );
         for (const m of r.inbound) {
-          const decision = evaluateTrigger(m);
-          if (decision.relay) {
-            triggered++;
-            sourceMessages.push(m);
-          } else if (decision.reason === "already-answered") {
-            // NOT dropped any more. evaluateTrigger only answers "does this
-            // deserve a REPLY" — using it as the total gate discarded 1,550
-            // messages unseen, and those are where the owner's own commitments
-            // live ("好", "我去订", a confirmed appointment). Analysed here for
-            // task / calendar; core/trigger-filter.mayProduceActionType blocks
-            // a second reply deterministically.
-            triggered++;
-            sourceMessages.push(m);
-          } else {
-            filtered++;
-            filteredOut.push({ id: m.id, reason: decision.reason, text: m.text, sender: m.senderHandle, platform: m.platform });
-          }
+          const n = names.get(m.senderHandle);
+          if (n) m.senderName = n;
         }
-        // Per-channel failures are isolated inside scanSlackDirect: the
-        // healthy channels still advanced their cursors above. Surface the
-        // failures without discarding those successes.
-        const partialErr = r.errors.length
-          ? r.errors.map((e) => `channel=${e.channelId}: ${e.error}`).join("; ")
-          : undefined;
-        if (partialErr) sourceErrors[acct.label] = partialErr;
-        perSource.push({
-          source: acct.label,
-          inboundCount: r.inbound.length,
-          triggered,
-          filtered,
-          ...(partialErr ? { error: partialErr } : {}),
-        });
-      } catch (e) {
-        sourceErrors[acct.label] = errString(e);
-        perSource.push({
-          source: acct.label,
-          inboundCount: 0,
-          triggered: 0,
-          filtered: 0,
-          error: errString(e),
-        });
+      } catch {
+        // name resolution is best-effort
       }
+      if (!opts.dryRun) setSlackState(slackMarks, acct.account, r.nextState);
+      // ANSWERED-CLOSES for Slack: one conversations.history per waiting card,
+      // this workspace only (a foreign channel id is skipped inside).
+      try {
+        const cards = waitingCards("slack");
+        if (cards.length > 0) {
+          const byChannel = new Map<string, { handle: string; since: number }>();
+          for (const a of cards) {
+            const channel = a.source_message_id.split(":")[1];
+            const handle = a.context?.sender_handle;
+            const since = Date.parse(a.created_at);
+            if (!channel || !handle || !Number.isFinite(since)) continue;
+            const cur = byChannel.get(channel);
+            byChannel.set(channel, { handle, since: cur ? Math.min(cur.since, since) : since });
+          }
+          const sinceMs = Math.min(...[...byChannel.values()].map((v) => v.since));
+          const spoke = await ownerLastSpokeInChannels(slack, r.raw.selfId, [...byChannel.keys()], sinceMs);
+          for (const [channel, ms] of spoke) ownerSpokeAt.set(`slack:${byChannel.get(channel)!.handle}`, ms);
+        }
+      } catch (e) {
+        console.log(`[slack] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
+      }
+      let triggered = 0;
+      let filtered = 0;
+      for (const m of r.inbound) {
+        const decision = evaluateTrigger(m);
+        if (decision.relay) {
+          triggered++;
+          sourceMessages.push(m);
+        } else if (decision.reason === "already-answered") {
+          // NOT dropped any more. evaluateTrigger only answers "does this
+          // deserve a REPLY" — using it as the total gate discarded 1,550
+          // messages unseen, and those are where the owner's own commitments
+          // live ("好", "我去订", a confirmed appointment). Analysed here for
+          // task / calendar; core/trigger-filter.mayProduceActionType blocks
+          // a second reply deterministically.
+          triggered++;
+          sourceMessages.push(m);
+        } else {
+          filtered++;
+          filteredOut.push({ id: m.id, reason: decision.reason, text: m.text, sender: m.senderHandle, platform: m.platform });
+        }
+      }
+      // Per-channel failures are isolated inside scanSlackDirect: the
+      // healthy channels still advanced their cursors above. Surface the
+      // failures without discarding those successes.
+      const partialErr = r.errors.length
+        ? r.errors.map((e) => `channel=${e.channelId}: ${e.error}`).join("; ")
+        : undefined;
+      if (partialErr) sourceErrors[acct.label] = partialErr;
+      perSource.push({
+        source: acct.label,
+        inboundCount: r.inbound.length,
+        triggered,
+        filtered,
+        ...(partialErr ? { error: partialErr } : {}),
+      });
+    } catch (e) {
+      sourceErrors[acct.label] = errString(e);
+      perSource.push({
+        source: acct.label,
+        inboundCount: 0,
+        triggered: 0,
+        filtered: 0,
+        error: errString(e),
+      });
     }
+}
 
-    // ── Gmail pass (all 4 mailboxes via google-oauth.KNOWN_MAILBOXES) ─
-    if (sources.includes("gmail")) try {
+// ── Gmail pass (all 4 mailboxes via google-oauth.KNOWN_MAILBOXES) ─
+async function pollGmail(ctx: PollContext): Promise<number> {
+  const { opts, state, startedAtMs, waitingCards, ownerSpokeAt, sourceMessages, filteredOut, sourceErrors, perSource } = ctx;
+  let promoFiltered = 0; // non-primary mail dropped at ingestion
+    try {
       const { KNOWN_MAILBOXES } = await import("../io/google-oauth.js");
       const clients: Record<string, GmailClient> =
         opts.gmailClients ??
@@ -729,11 +681,18 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         error: errString(e),
       });
     }
+  return promoFiltered;
+}
 
-    // ── WeChat pass (local-DB; 1:1 only) ───────────────────────────
-    // Trigger on unread sessions (get_recent_sessions), pull the actual
-    // incoming messages with direction + full context (get_chat_history).
-    if (sources.includes("wechat")) try {
+// ── WeChat pass (local-DB; 1:1 only) ───────────────────────────
+// Trigger on unread sessions (get_recent_sessions), pull the actual
+// incoming messages with direction + full context (get_chat_history).
+async function pollWechat(ctx: PollContext): Promise<WechatPoll> {
+  const { opts, state, startedAtMs, ownerSpokeAt, sourceMessages, filteredOut, sourceErrors, perSource } = ctx;
+  let pendingWechatDirect: PendingBook<DirectBook> | undefined;
+  let pendingWechatGroups: PendingBook<GroupBook> | undefined;
+  const wechatSpoke: Participation[] = [];
+    try {
       const { scanWechatInbox, scanWechatGroups, ownerLastSpokeIn, parseOfficialAccountNames } = await import("../sources/wechat-direct.js");
       const { wechatSessions, wechatHistory, wechatRaw } = await import("../io/wechat-cli.js");
       // 公众号/服务号 set (gh_ accounts) to drop. get_contacts is heavy, so cache
@@ -846,6 +805,106 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         filtered: 0,
         error: errString(e),
       });
+    }
+  return { pendingDirect: pendingWechatDirect, pendingGroups: pendingWechatGroups, spoke: wechatSpoke };
+}
+
+export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
+  const startedAtMs = Date.now();
+  const mode = opts.mode ?? "all";
+  const perSource: SourceSummary[] = [];
+  // `platform:handle` → when the OWNER last spoke in that conversation. Each
+  // source pass fills its own platform, only for conversations that have a
+  // reply-only card waiting (params.answered_closes); empty otherwise. Keyed
+  // exactly as core/action-item.ts conversationKey builds it.
+  const ownerSpokeAt = new Map<string, number>();
+  const waitingCards = (platform: string) =>
+    state.actions.filter(
+      (a) =>
+        a.status === "suggested" &&
+        a.params?.answered_closes === true &&
+        (a.target?.platform ?? a.source_message_id.split(":")[0]) === platform,
+    );
+  const sourceMessages: InboundMessage[] = [];
+  // P0: carry the message TEXT of everything we filter out. Without it the
+  // trigger filter's recall is unmeasurable (and recall cannot be recovered from
+  // the approve/skip log — that only covers what was surfaced).
+  const filteredOut: ShadowFilterRejection[] = [];
+  const sourceErrors: Record<string, string> = {};
+  let promoFiltered = 0; // Gmail non-primary mail dropped at ingestion this tick
+  // Hoisted so phase 2 (drafting, unlocked) + phase 3 (commit) can read them.
+  let draftInput: InboundMessage[] = [];
+  let draftSkipped = 0;
+
+  const stateDir = dirname(opts.statePath);
+  // Activity-log sink for this tick (F3): one JSONL line per engine event,
+  // beside the state file. NEVER throws — the log narrates the engine, it
+  // must never break it; dryRun narrates nothing.
+  const activityPath = activityPathFor(opts.statePath);
+  const logActivity = (kind: ActivityKind, summary: string, data?: Record<string, unknown>): void => {
+    if (opts.dryRun) return;
+    try {
+      appendActivity(activityPath, {
+        at: new Date().toISOString(),
+        kind,
+        summary,
+        ...(data ? { data } : {}),
+      });
+    } catch {
+      /* logging is observability, never a failure mode */
+    }
+  };
+  // Write updates to HIS plan tickets (core/plan-progress.ts). Best-effort and
+  // loud: a failed write changes nothing on his ticket and is retried only by
+  // the next conversation that carries the same news.
+  const writePlans = async (updates: readonly PlanUpdate[]): Promise<void> => {
+    if (opts.dryRun || !opts.ticktickWriter?.patchPlan || updates.length === 0) return;
+    const titles = new Map(loadOwnerTickets(opts.statePath).map((t) => [t.id, t.title]));
+    for (const u of mergePlanUpdates(updates)) {
+      try {
+        if (!(await opts.ticktickWriter.patchPlan(u.ticketId, u))) continue;
+        const what = `「${titles.get(u.ticketId) ?? u.ticketId}」: ${u.check.length} step(s) ticked, ${u.notes.length} note(s), ${u.addSteps.length} step(s) added`;
+        console.log(`[plan] ${what}`);
+        logActivity("supersede", `plan updated ${what}`, { phase: "plan", ...u });
+      } catch (e) {
+        console.error(`[plan] update of ${u.ticketId} failed: ${errString(e)}`);
+      }
+    }
+  };
+  // PHASE 0 (UNLOCKED snapshot): take a consistent read of state WITHOUT the
+  // lock. saveState writes atomically (tmp + rename) and carries a revision
+  // guard, so an unlocked read sees old-or-new bytes, never a torn file —
+  // Each lane OWNS its fields (fetch: cursors, marks, sources' errors; analyse:
+  // actions, person cursors), so reading them here lock-free is race-free; the
+  // brief commit reloads fresh state under a (retrying) lock and transplants
+  // only this lane's fields.
+  // Holding NO lock through the slow scan + draft + consolidate + refresh means a
+  // tick can never fail with "another tick is running" just because the other
+  // lane (or a prior commit) briefly held the lock — that was the source of the
+  // intermittent contention noise.
+  let pendingWechatDirect: PendingBook<DirectBook> | undefined;
+  let pendingWechatGroups: PendingBook<GroupBook> | undefined;
+  // Who took part in what the WeChat pass read (sources/wechat-direct.ts Participation).
+  const wechatSpoke: Participation[] = [];
+
+  let state: LoopState;
+  try {
+    state = loadState(opts.statePath);
+    // The analyser polls nothing: its input is the inbox.
+    const sources = mode === "analyze" ? [] : (opts.sources ?? ["slack", "gmail"]);
+
+    const poll: PollContext = {
+      opts, state, stateDir, startedAtMs, waitingCards, ownerSpokeAt,
+      sourceMessages, filteredOut, sourceErrors, perSource,
+    };
+
+    if (sources.includes("slack")) await pollSlack(poll);
+    if (sources.includes("gmail")) promoFiltered += await pollGmail(poll);
+    if (sources.includes("wechat")) {
+      const w = await pollWechat(poll);
+      pendingWechatDirect = w.pendingDirect;
+      pendingWechatGroups = w.pendingGroups;
+      wechatSpoke.push(...w.spoke);
     }
 
     // ── persist sourceErrors + advance per-message marks ────────
