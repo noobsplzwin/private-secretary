@@ -1055,6 +1055,154 @@ async function executeTicked(
   return executedNow;
 }
 
+/** Append to the activity log; a dry run logs nothing. */
+function activityLogger(opts: ScanLoopOptions): (kind: ActivityKind, summary: string, data?: Record<string, unknown>) => void {
+  const activityPath = activityPathFor(opts.statePath);
+  return (kind, summary, data) => {
+    if (opts.dryRun) return;
+    try {
+      appendActivity(activityPath, {
+        at: new Date().toISOString(),
+        kind,
+        summary,
+        ...(data ? { data } : {}),
+      });
+    } catch {
+      /* logging is observability, never a failure mode */
+    }
+  };
+}
+
+// Write updates to HIS plan tickets (core/plan-progress.ts). Best-effort and
+// loud: a failed write changes nothing on his ticket and is retried only by
+// the next conversation that carries the same news.
+async function writePlans(opts: ScanLoopOptions, updates: readonly PlanUpdate[]): Promise<void> {
+  if (opts.dryRun || !opts.ticktickWriter?.patchPlan || updates.length === 0) return;
+  const logActivity = activityLogger(opts);
+  const titles = new Map(loadOwnerTickets(opts.statePath).map((t) => [t.id, t.title]));
+  for (const u of mergePlanUpdates(updates)) {
+    try {
+      if (!(await opts.ticktickWriter.patchPlan(u.ticketId, u))) continue;
+      const what = `「${titles.get(u.ticketId) ?? u.ticketId}」: ${u.check.length} step(s) ticked, ${u.notes.length} note(s), ${u.addSteps.length} step(s) added`;
+      console.log(`[plan] ${what}`);
+      logActivity("supersede", `plan updated ${what}`, { phase: "plan", ...u });
+    } catch (e) {
+      console.error(`[plan] update of ${u.ticketId} failed: ${errString(e)}`);
+    }
+  }
+}
+
+// ── PHASE 7: the PERSON pass. Writes persona YAML files through R1, plus the
+// assessment cursor in loop-state.
+//
+// Triggered by WHO SPOKE, not by who has a card open. The card-driven version
+// could not see a contact whose traffic never became a card — and it re-ran on
+// a 10-minute TTL whether or not anything had been said, which is the same
+// clock-gated waste that made refresh 69% of the token bill. A quiet tick now
+// costs nothing, which is the cost argument for person-first (spec §5).
+async function runPersonPass(
+  opts: ScanLoopOptions,
+  personaUpdate: PersonaUpdateDeps,
+  commitUnderLock: CommitUnderLock,
+  startedAtMs: number,
+): Promise<void> {
+  const logActivity = activityLogger(opts);
+  const cursors = loadState(opts.statePath);
+  const queue = personsNeedingAssessment(
+    cursors.personTraffic ?? {},
+    cursors.personAssessed ?? {},
+    opts.maxPersonsPerTick ?? 3,
+  );
+  if (queue.length > 0) {
+    try {
+      console.log(`[progress] assessing ${queue.length} contact(s) with new traffic…`);
+      const pu = await updatePersonaCommitments(queue, personaUpdate);
+      await writePlans(opts, pu.planUpdates);
+      if (pu.closedDone > 0) {
+        console.log(`[closure] ${pu.closedDone} listed commitment(s) already done per the conversation`);
+        logActivity("supersede", `closed ${pu.closedDone} listed commitment(s) the conversation showed done`, { phase: "person-pass", closedDone: pu.closedDone });
+      }
+      // Cursors advance for everyone the pass FINISHED with, including the
+      // unreadable — otherwise one contact with no mapped handle sits at the
+      // head of the oldest-first queue every tick and starves the rest.
+      //
+      // A FAILED call is different: its traffic was never read. It holds its
+      // cursor and is retried, up to PERSON_ASSESS_RETRIES consecutive
+      // failures — then it gives up loudly, because a contact whose call
+      // always fails (a corpus too big to answer in time) would otherwise
+      // hold one of the few slots per tick forever.
+      let gaveUp: string[] = [];
+      if (pu.attempted.length > 0 || pu.failed.length > 0) {
+        await commitUnderLock((fresh) => {
+          const fails = { ...(fresh.personAssessFailures ?? {}) };
+          for (const e of pu.attempted) delete fails[e.personaKey];
+          const giveUp = pu.failed.filter((e) => (fails[e.personaKey] = (fails[e.personaKey] ?? 0) + 1) >= PERSON_ASSESS_RETRIES);
+          for (const e of giveUp) delete fails[e.personaKey];
+          gaveUp = giveUp.map((e) => e.personaKey);
+          fresh.personAssessed = markAssessed(fresh.personAssessed ?? {}, [...pu.attempted, ...giveUp]);
+          fresh.personAssessFailures = fails;
+        });
+      }
+      if (pu.unavailable.length > 0) {
+        console.error(
+          `[persona] LLM unavailable — ${pu.unavailable.map((e) => e.personaKey).join(", ")} held, not counted as failures`,
+        );
+      }
+      if (pu.failed.length > 0) {
+        console.error(
+          `[persona] assessment FAILED for ${pu.failed.map((e) => e.personaKey).join(", ")} — retrying next tick`,
+        );
+      }
+      if (gaveUp.length > 0) {
+        console.error(
+          `[persona] GAVE UP after ${PERSON_ASSESS_RETRIES} failed assessments: ${gaveUp.join(", ")} — their latest traffic is unread until they speak again`,
+        );
+      }
+      // Spec §6.2 wants this reported, never a silent skip: a contact
+      // reachable on no mapped handle is invisible to their own pass, and that
+      // is a data bug about the persona file, not a quiet no-op.
+      if (pu.unreadable.length > 0) {
+        console.log(
+          `[persona] no corpus for ${pu.unreadable.length} contact(s) — unmapped handles or every source down: ${pu.unreadable.join(", ")}`,
+        );
+      }
+      // The discard rate is a FINDING, not noise: each one is a commitment or
+      // status change whose supporting quote was not in the corpus — i.e. the
+      // model creating. Silent-failure lessons apply (consolidate timed out
+      // invisibly for days), so it goes to the console, not just a counter.
+      if (pu.discarded > 0) {
+        console.log(`[persona] discarded ${pu.discarded} ungrounded extraction(s) (evidence quote not in corpus)`);
+      }
+      // The ASSESS verdicts are what the derived list is built from, so the
+      // count and the discard rate beside it are the signal for whether the
+      // model is judging or inventing. Printed even at zero when work was
+      // read: silently assessing NOTHING would look identical to a healthy
+      // quiet tick, and the derived list would just be empty.
+      if (pu.assessed > 0 || pu.discarded > 0) {
+        console.log(`[persona] assessed ${pu.assessed} open commitment(s), ${pu.discarded} discarded`);
+      }
+      if (pu.updated.some((u) => u.statusChanged > 0)) {
+        console.log(
+          `[persona] status transitions: ${pu.updated
+            .filter((u) => u.statusChanged > 0)
+            .map((u) => `${u.key}×${u.statusChanged}`)
+            .join(", ")}`,
+        );
+      }
+      await commitUnderLock((fresh) => {
+        delete fresh.sourceErrors["llm:persona"];
+      }).catch(() => undefined);
+    } catch (e) {
+      await commitUnderLock((fresh) => {
+        fresh.sourceErrors["llm:persona"] = {
+          message: errString(e),
+          at: new Date(startedAtMs).toISOString(),
+        };
+      }).catch(() => undefined);
+    }
+  }
+}
+
 export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult> {
   const startedAtMs = Date.now();
   const mode = opts.mode ?? "all";
@@ -1086,37 +1234,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // Activity-log sink for this tick (F3): one JSONL line per engine event,
   // beside the state file. NEVER throws — the log narrates the engine, it
   // must never break it; dryRun narrates nothing.
-  const activityPath = activityPathFor(opts.statePath);
-  const logActivity = (kind: ActivityKind, summary: string, data?: Record<string, unknown>): void => {
-    if (opts.dryRun) return;
-    try {
-      appendActivity(activityPath, {
-        at: new Date().toISOString(),
-        kind,
-        summary,
-        ...(data ? { data } : {}),
-      });
-    } catch {
-      /* logging is observability, never a failure mode */
-    }
-  };
-  // Write updates to HIS plan tickets (core/plan-progress.ts). Best-effort and
-  // loud: a failed write changes nothing on his ticket and is retried only by
-  // the next conversation that carries the same news.
-  const writePlans = async (updates: readonly PlanUpdate[]): Promise<void> => {
-    if (opts.dryRun || !opts.ticktickWriter?.patchPlan || updates.length === 0) return;
-    const titles = new Map(loadOwnerTickets(opts.statePath).map((t) => [t.id, t.title]));
-    for (const u of mergePlanUpdates(updates)) {
-      try {
-        if (!(await opts.ticktickWriter.patchPlan(u.ticketId, u))) continue;
-        const what = `「${titles.get(u.ticketId) ?? u.ticketId}」: ${u.check.length} step(s) ticked, ${u.notes.length} note(s), ${u.addSteps.length} step(s) added`;
-        console.log(`[plan] ${what}`);
-        logActivity("supersede", `plan updated ${what}`, { phase: "plan", ...u });
-      } catch (e) {
-        console.error(`[plan] update of ${u.ticketId} failed: ${errString(e)}`);
-      }
-    }
-  };
+  const logActivity = activityLogger(opts);
   // PHASE 0 (UNLOCKED snapshot): take a consistent read of state WITHOUT the
   // lock. saveState writes atomically (tmp + rename) and carries a revision
   // guard, so an unlocked read sees old-or-new bytes, never a torn file —
@@ -1685,7 +1803,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       }
     });
     if (committed) {
-      await writePlans(planUpdates);
+      await writePlans(opts, planUpdates);
       draftedCount = draftedActions.length;
       if (closedByConversation.length > 0) {
         console.log(`[closure] ${closedByConversation.length} card(s) already done per the conversation: ${closedByConversation.join("; ")}`);
@@ -1904,109 +2022,9 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     }
   }
 
-  // ── PHASE 7: the PERSON pass. Writes persona YAML files through R1, plus the
-  // assessment cursor in loop-state.
-  //
-  // Triggered by WHO SPOKE, not by who has a card open. The card-driven version
-  // could not see a contact whose traffic never became a card — and it re-ran on
-  // a 10-minute TTL whether or not anything had been said, which is the same
-  // clock-gated waste that made refresh 69% of the token bill. A quiet tick now
-  // costs nothing, which is the cost argument for person-first (spec §5).
+  // ── PHASE 7: the PERSON pass (runPersonPass).
   if (!opts.dryRun && opts.personaUpdate) {
-    const cursors = loadState(opts.statePath);
-    const queue = personsNeedingAssessment(
-      cursors.personTraffic ?? {},
-      cursors.personAssessed ?? {},
-      opts.maxPersonsPerTick ?? 3,
-    );
-    if (queue.length > 0) {
-      try {
-        console.log(`[progress] assessing ${queue.length} contact(s) with new traffic…`);
-        const pu = await updatePersonaCommitments(queue, opts.personaUpdate);
-        await writePlans(pu.planUpdates);
-        if (pu.closedDone > 0) {
-          console.log(`[closure] ${pu.closedDone} listed commitment(s) already done per the conversation`);
-          logActivity("supersede", `closed ${pu.closedDone} listed commitment(s) the conversation showed done`, { phase: "person-pass", closedDone: pu.closedDone });
-        }
-        // Cursors advance for everyone the pass FINISHED with, including the
-        // unreadable — otherwise one contact with no mapped handle sits at the
-        // head of the oldest-first queue every tick and starves the rest.
-        //
-        // A FAILED call is different: its traffic was never read. It holds its
-        // cursor and is retried, up to PERSON_ASSESS_RETRIES consecutive
-        // failures — then it gives up loudly, because a contact whose call
-        // always fails (a corpus too big to answer in time) would otherwise
-        // hold one of the few slots per tick forever.
-        let gaveUp: string[] = [];
-        if (pu.attempted.length > 0 || pu.failed.length > 0) {
-          await commitUnderLock((fresh) => {
-            const fails = { ...(fresh.personAssessFailures ?? {}) };
-            for (const e of pu.attempted) delete fails[e.personaKey];
-            const giveUp = pu.failed.filter((e) => (fails[e.personaKey] = (fails[e.personaKey] ?? 0) + 1) >= PERSON_ASSESS_RETRIES);
-            for (const e of giveUp) delete fails[e.personaKey];
-            gaveUp = giveUp.map((e) => e.personaKey);
-            fresh.personAssessed = markAssessed(fresh.personAssessed ?? {}, [...pu.attempted, ...giveUp]);
-            fresh.personAssessFailures = fails;
-          });
-        }
-        if (pu.unavailable.length > 0) {
-          console.error(
-            `[persona] LLM unavailable — ${pu.unavailable.map((e) => e.personaKey).join(", ")} held, not counted as failures`,
-          );
-        }
-        if (pu.failed.length > 0) {
-          console.error(
-            `[persona] assessment FAILED for ${pu.failed.map((e) => e.personaKey).join(", ")} — retrying next tick`,
-          );
-        }
-        if (gaveUp.length > 0) {
-          console.error(
-            `[persona] GAVE UP after ${PERSON_ASSESS_RETRIES} failed assessments: ${gaveUp.join(", ")} — their latest traffic is unread until they speak again`,
-          );
-        }
-        // Spec §6.2 wants this reported, never a silent skip: a contact
-        // reachable on no mapped handle is invisible to their own pass, and that
-        // is a data bug about the persona file, not a quiet no-op.
-        if (pu.unreadable.length > 0) {
-          console.log(
-            `[persona] no corpus for ${pu.unreadable.length} contact(s) — unmapped handles or every source down: ${pu.unreadable.join(", ")}`,
-          );
-        }
-        // The discard rate is a FINDING, not noise: each one is a commitment or
-        // status change whose supporting quote was not in the corpus — i.e. the
-        // model creating. Silent-failure lessons apply (consolidate timed out
-        // invisibly for days), so it goes to the console, not just a counter.
-        if (pu.discarded > 0) {
-          console.log(`[persona] discarded ${pu.discarded} ungrounded extraction(s) (evidence quote not in corpus)`);
-        }
-        // The ASSESS verdicts are what the derived list is built from, so the
-        // count and the discard rate beside it are the signal for whether the
-        // model is judging or inventing. Printed even at zero when work was
-        // read: silently assessing NOTHING would look identical to a healthy
-        // quiet tick, and the derived list would just be empty.
-        if (pu.assessed > 0 || pu.discarded > 0) {
-          console.log(`[persona] assessed ${pu.assessed} open commitment(s), ${pu.discarded} discarded`);
-        }
-        if (pu.updated.some((u) => u.statusChanged > 0)) {
-          console.log(
-            `[persona] status transitions: ${pu.updated
-              .filter((u) => u.statusChanged > 0)
-              .map((u) => `${u.key}×${u.statusChanged}`)
-              .join(", ")}`,
-          );
-        }
-        await commitUnderLock((fresh) => {
-          delete fresh.sourceErrors["llm:persona"];
-        }).catch(() => undefined);
-      } catch (e) {
-        await commitUnderLock((fresh) => {
-          fresh.sourceErrors["llm:persona"] = {
-            message: errString(e),
-            at: new Date(startedAtMs).toISOString(),
-          };
-        }).catch(() => undefined);
-      }
-    }
+    await runPersonPass(opts, opts.personaUpdate, commitUnderLock, startedAtMs);
   }
 
   // ── tick summary (activity log). One line per tick that DID something —
