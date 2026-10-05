@@ -115,6 +115,15 @@ The layout is discoverable from the tree; what is NOT discoverable:
   mapped back by code — an unknown handle covers nothing. A covered card is
   dropped with its reason; a covered commitment stays open with `covered_by`.
   2026-10-03 he struck two steps of his own 「股权变更」 ticket as rows.
+- **His checklist tickets are PLANS the engine keeps current**
+  (`core/plan-progress.ts`). Three moves only, all on TickTick, none touching
+  his text or dates: tick a step a NEW line shows done; append 「date speaker：
+  「quote」」 under 「■ 进展（秘书自动更新）」; append a step marked 「＋」 for work
+  of his that belongs to the plan but is not listed (`covered_by_ticket`
+  without `ticket_step`). Quotes are gated to one line of what is new — the
+  person pass reads only lines after `sinceMs` (no cursor → no plan update),
+  persona-less senders their fresh messages. `patchPlan` reads the ticket fresh
+  and writes desc + items only.
 - **One corpus line mints one commitment** (`source_line`). A group line sits
   in every member's corpus, so the same utterance used to mint once per person
   (「买恒温箱」 under Leo.yang and 何修池). Only dated, attributed lines count.

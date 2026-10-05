@@ -4,7 +4,7 @@ import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraf
 describe("personsNeedingAssessment", () => {
   it("selects a person who spoke since their last assessment", () => {
     const out = personsNeedingAssessment({ zech: 200 }, { zech: 100 }, 10);
-    expect(out).toEqual([{ personaKey: "zech", trafficMs: 200 }]);
+    expect(out).toEqual([{ personaKey: "zech", trafficMs: 200, sinceMs: 100 }]);
   });
 
   it("skips a person whose assessment already covers their traffic", () => {
@@ -80,7 +80,7 @@ describe("markAssessed", () => {
     const assessed = markAssessed({}, queue);
     // 500 arrived after the corpus was read, so the person is owed another pass.
     expect(personsNeedingAssessment(traffic, assessed, 10)).toEqual([
-      { personaKey: "zech", trafficMs: 500 },
+      { personaKey: "zech", trafficMs: 500, sinceMs: 200 },
     ]);
   });
 

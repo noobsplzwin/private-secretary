@@ -16,6 +16,7 @@
 // error and continues with the others (same shape as source faults).
 
 import { ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
+import type { PlanUpdate } from "../core/plan-progress.js";
 import { randomUUID } from "node:crypto";
 import {
   validateActionItem,
@@ -113,6 +114,8 @@ export interface DraftResult {
   // down", which is how an expired subscription session hid for two days
   // (2026-09-02 → 09-04): the recorded error named one arbitrary contact.
   senders: number;
+  /** Work that belongs to one of his plans but is not a step there yet (core/plan-progress.ts). */
+  planSteps: PlanUpdate[];
 }
 
 // Per-sender LLM calls run concurrently up to this cap. Bounded so a big
@@ -186,6 +189,7 @@ export async function draftActions(
   const errors: DraftResult["errors"] = [];
   const dropped: DraftResult["dropped"] = [];
   const empty: string[] = [];
+  const planSteps: PlanUpdate[] = [];
 
   // One self-contained unit of work per sender. Returned shape is folded
   // back into actions/errors/dropped in sender order below, so concurrency
@@ -366,7 +370,12 @@ export async function draftActions(
       // handle names the ticket, and an unknown handle covers nothing.
       const ticket = ticketByHandle(tickets, (s.params as Record<string, unknown> | undefined)?.covered_by_ticket);
       if (ticket) {
-        senderErrors.push(`dropped "${s.headline}": already a step of his own ticket 「${ticket.title}」`);
+        const listed = (s.params as Record<string, unknown> | undefined)?.ticket_step !== undefined;
+        senderErrors.push(`dropped "${s.headline}": ${listed ? "already a step of" : "added as a step to"} his own ticket 「${ticket.title}」`);
+        if (!listed) {
+          const title = String((s.params as Record<string, unknown> | undefined)?.title ?? s.headline ?? "").trim();
+          if (title) planSteps.push({ ticketId: ticket.id, check: [], notes: [], addSteps: [title] });
+        }
         continue;
       }
       const target = s.target ?? {};
@@ -508,7 +517,7 @@ export async function draftActions(
     if (r.empty) empty.push(r.sender);
   }
 
-  return { actions, errors, dropped, empty, senders: bySender.size };
+  return { actions, errors, dropped, empty, senders: bySender.size, planSteps };
 }
 
 // Build a resolvePersona function from a persona list. Indexes every

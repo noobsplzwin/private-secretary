@@ -35,6 +35,8 @@ export interface OpenItem {
 
 export interface Spoken {
   speaker: "me" | "them";
+  /** Who said it, as the conversation names them, when known. */
+  who?: string;
   text: string;
   /** "YYYY-MM-DD HH:MM" when the line carries one. */
   stamp?: string;
@@ -53,7 +55,15 @@ export function stampOf(text: string): string | undefined {
 export function spokenFromCorpus(corpus: string): Spoken[] {
   return indexCorpus(corpus)
     .filter((l) => l.speaker !== "unknown")
-    .map((l) => ({ speaker: l.speaker as "me" | "them", text: l.text, ...(stampOf(l.text) ? { stamp: stampOf(l.text)! } : {}) }));
+    .map((l) => {
+      const who = /^\[[^\]]*\]\s*([^:]{1,40}):/.exec(l.text.trim())?.[1]?.trim();
+      return {
+        speaker: l.speaker as "me" | "them",
+        ...(who ? { who: who === "me" ? "我" : who } : {}),
+        text: l.text,
+        ...(stampOf(l.text) ? { stamp: stampOf(l.text)! } : {}),
+      };
+    });
 }
 
 // Thread context lines read 「我: …」 for Leo (WeChat and Slack threads alike).

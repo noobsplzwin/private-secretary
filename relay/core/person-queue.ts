@@ -25,6 +25,8 @@ export interface PersonQueueEntry {
   personaKey: string;
   /** When this person last spoke — epoch ms. Oldest first, so nobody starves. */
   trafficMs: number;
+  /** Where the last finished assessment of them stopped — what is NEW starts after it. */
+  sinceMs?: number;
 }
 
 export function personsNeedingAssessment(
@@ -38,7 +40,11 @@ export function personsNeedingAssessment(
     .filter(([key, ms]) => ms > (assessed[key] ?? 0))
     .sort(([aKey, a], [bKey, b]) => a - b || aKey.localeCompare(bKey))
     .slice(0, maxPerTick)
-    .map(([personaKey, trafficMs]) => ({ personaKey, trafficMs }));
+    .map(([personaKey, trafficMs]) => ({
+      personaKey,
+      trafficMs,
+      ...(assessed[personaKey] ? { sinceMs: assessed[personaKey] } : {}),
+    }));
 }
 
 /**

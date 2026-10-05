@@ -154,6 +154,8 @@ describe("draftActions orchestrator", () => {
     expect(seenText).toContain("T1. 股权变更");
     expect(r.actions.map((a) => a.params.title)).toEqual(["别的事"]); // an unknown handle covers nothing
     expect(r.dropped.flatMap((d) => d.errors).join()).toContain("股权变更");
+    // Not one of the listed steps → it becomes one.
+    expect(r.planSteps).toEqual([{ ticketId: "tt1", check: [], notes: [], addSteps: ["审阅投资协议"] }]);
   });
 
   it("turns a valid suggested task into an ActionItem with id + context", async () => {

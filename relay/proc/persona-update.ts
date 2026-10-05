@@ -15,6 +15,7 @@ import { evidenceGrounded } from "../core/quote-check.js";
 import { isLlmUnavailable } from "../core/inbox.js";
 import { coveredByTicket, ticketBlock, ticketByHandle, type OwnerTicket } from "../core/owner-tickets.js";
 import { findClosures, spokenFromCorpus, stampOf, type OpenItem } from "../core/closure-check.js";
+import { findPlanProgress, type PlanUpdate } from "../core/plan-progress.js";
 import { capCorpus, indexCorpus, lineOf, mintable, theirOwnMove } from "../core/corpus-lines.js";
 import {
   buildPersonaUpdateRequest,
@@ -96,6 +97,8 @@ export interface PersonaUpdateResult {
   unreadable: string[];
   /** Listed commitments the conversation showed DONE (core/closure-check.ts). */
   closedDone: number;
+  /** Changes to his plan tickets this pass found (core/plan-progress.ts); the caller writes them. */
+  planUpdates: PlanUpdate[];
 }
 
 export async function updatePersonaCommitments(
@@ -122,6 +125,7 @@ export async function updatePersonaCommitments(
   let discarded = 0;
   let assessed = 0;
   let closedDone = 0;
+  const planUpdates: PlanUpdate[] = [];
   // Which corpus lines already minted a commitment, and for whom — so a group
   // line read in several members' corpora mints once (source_line).
   const claimed = claimedLines(deps.personaDir);
@@ -173,6 +177,15 @@ export async function updatePersonaCommitments(
     discarded += r.discarded;
     assessed += r.assessed;
     closedDone += await closeDoneCommitments(personaPath(deps.personaDir, entry.personaKey), persona.displayName, corpus, json);
+    planUpdates.push(...r.newSteps);
+    // His plans, from what is NEW since this person was last assessed. No
+    // cursor yet → nothing: the first pass must not replay all of history.
+    const tickets = deps.ownerTickets?.() ?? [];
+    if (tickets.length > 0 && entry.sinceMs) {
+      const since = localStamp(entry.sinceMs);
+      const fresh = spokenFromCorpus(corpus).filter((s) => s.stamp !== undefined && s.stamp > since);
+      planUpdates.push(...(await findPlanProgress(persona.displayName, tickets, fresh, json, localStamp(Date.now()))));
+    }
     if (r.added > 0 || r.statusChanged > 0 || r.assessed > 0)
       updated.push({
         key: entry.personaKey,
@@ -182,7 +195,14 @@ export async function updatePersonaCommitments(
       });
   }
 
-  return { updated, discarded, assessed, attempted, failed, unavailable, unreadable, closedDone };
+  return { updated, discarded, assessed, attempted, failed, unavailable, unreadable, closedDone, planUpdates };
+}
+
+/** "YYYY-MM-DD HH:MM" in the machine's zone — the stamp corpus lines carry. */
+function localStamp(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number): string => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /**
@@ -296,7 +316,7 @@ export async function extractCommitmentsOnce(opts: {
     evidence: string;
     index?: number;
   }) => void;
-}): Promise<{ added: number; statusChanged: number; discarded: number; assessed: number } | null> {
+}): Promise<{ added: number; statusChanged: number; discarded: number; assessed: number; newSteps: PlanUpdate[] } | null> {
   let existing: Commitment[];
   try {
     existing = readPersonaV3File(opts.file).commitments ?? [];
@@ -484,7 +504,7 @@ export async function extractCommitmentsOnce(opts: {
   }
 
   if (minted.length === 0 && statusChanged === 0 && assessed === 0)
-    return { added: 0, statusChanged: 0, discarded, assessed: 0 };
+    return { added: 0, statusChanged: 0, discarded, assessed: 0, newSteps: [] };
 
   const merged: Commitment[] = [
     ...withStatus,
@@ -512,9 +532,9 @@ export async function extractCommitmentsOnce(opts: {
       { set: { commitments: merged }, evidence: { commitments: evidence } },
       "llm",
     );
-    if (!res.applied.includes("commitments")) return { added: 0, statusChanged: 0, discarded, assessed: 0 };
+    if (!res.applied.includes("commitments")) return { added: 0, statusChanged: 0, discarded, assessed: 0, newSteps: [] };
   } catch {
-    return { added: 0, statusChanged: 0, discarded, assessed: 0 };
+    return { added: 0, statusChanged: 0, discarded, assessed: 0, newSteps: [] };
   }
   // Claimed only once written, so a later persona in this pass sees it.
   if (opts.claimedLines && opts.personaKey) {
@@ -523,5 +543,14 @@ export async function extractCommitmentsOnce(opts: {
       if (src) opts.claimedLines.set(src, opts.personaKey);
     }
   }
-  return { added: minted.length, statusChanged, discarded, assessed };
+  // Work of his that belongs to one of his plans but is not a step there yet
+  // becomes one (core/plan-progress.ts ADDED_PREFIX). Only his own work, and
+  // only once it is written.
+  const newSteps: PlanUpdate[] = minted.flatMap((e) => {
+    const t = ticketByHandle(opts.ownerTickets ?? [], e.covered_by_ticket);
+    return t && e.who === "me" && e.ticket_step === undefined
+      ? [{ ticketId: t.id, check: [], notes: [], addSteps: [e.what.trim()] }]
+      : [];
+  });
+  return { added: minted.length, statusChanged, discarded, assessed, newSteps };
 }

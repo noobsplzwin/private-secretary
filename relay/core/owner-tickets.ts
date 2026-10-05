@@ -21,6 +21,8 @@ export interface OwnerTicket {
   title: string;
   /** Its open checklist steps, in his order. */
   steps: string[];
+  /** TickTick item ids of `steps`, same order — how a proven step is ticked. */
+  stepIds?: string[];
 }
 
 /** His open tasks among those read: neither tagged by the engine nor tracked by it. */
@@ -28,17 +30,16 @@ export function ownerTicketsFrom(remote: readonly RemoteTask[], map: SyncMap): O
   const tracked = new Set(Object.values(map).map((r) => r.ticktickId));
   return remote
     .filter((t) => t.status === 0 && !tracked.has(t.id) && !(t.tags ?? []).includes(ENGINE_TAG) && !!t.title?.trim())
-    .map((t) => ({
-      id: t.id,
-      title: t.title!.trim(),
-      steps: (t.items ?? []).filter((i) => i.status === 0 && !!i.title?.trim()).map((i) => i.title!.trim()),
-    }));
+    .map((t) => {
+      const open = (t.items ?? []).filter((i) => i.status === 0 && !!i.title?.trim());
+      return { id: t.id, title: t.title!.trim(), steps: open.map((i) => i.title!.trim()), stepIds: open.map((i) => i.id) };
+    });
 }
 
 /** The tickets as a prompt block, one handle each. Empty when there are none. */
 export function ticketBlock(tickets: readonly OwnerTicket[]): string {
   return tickets
-    .map((t, i) => [`T${i + 1}. ${t.title}`, ...t.steps.map((s) => `    · ${s}`)].join("\n"))
+    .map((t, i) => [`T${i + 1}. ${t.title}`, ...t.steps.map((s, j) => `    [${j + 1}] ${s}`)].join("\n"))
     .join("\n");
 }
 

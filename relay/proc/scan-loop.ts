@@ -60,6 +60,8 @@ import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
 import { saveOwnerTickets } from "../io/owner-tickets-store.js";
 import { closeDoneCards } from "./card-closure.js";
+import { loadOwnerTickets } from "../io/owner-tickets-store.js";
+import { findPlanProgress, mergePlanUpdates, type PlanUpdate } from "../core/plan-progress.js";
 import { ownerTicketsFrom } from "../core/owner-tickets.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
@@ -436,6 +438,23 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       });
     } catch {
       /* logging is observability, never a failure mode */
+    }
+  };
+  // Write updates to HIS plan tickets (core/plan-progress.ts). Best-effort and
+  // loud: a failed write changes nothing on his ticket and is retried only by
+  // the next conversation that carries the same news.
+  const writePlans = async (updates: readonly PlanUpdate[]): Promise<void> => {
+    if (opts.dryRun || !opts.ticktickWriter?.patchPlan || updates.length === 0) return;
+    const titles = new Map(loadOwnerTickets(opts.statePath).map((t) => [t.id, t.title]));
+    for (const u of mergePlanUpdates(updates)) {
+      try {
+        if (!(await opts.ticktickWriter.patchPlan(u.ticketId, u))) continue;
+        const what = `「${titles.get(u.ticketId) ?? u.ticketId}」: ${u.check.length} step(s) ticked, ${u.notes.length} note(s), ${u.addSteps.length} step(s) added`;
+        console.log(`[plan] ${what}`);
+        logActivity("supersede", `plan updated ${what}`, { phase: "plan", ...u });
+      } catch (e) {
+        console.error(`[plan] update of ${u.ticketId} failed: ${errString(e)}`);
+      }
     }
   };
   // PHASE 0 (UNLOCKED snapshot): take a consistent read of state WITHOUT the
@@ -1087,6 +1106,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   let draftFailedSenders: string[] = [];
   let draftUnavailableSenders: string[] = [];
   let doneCards: Array<{ id: string; evidence: string }> = [];
+  const planUpdates: PlanUpdate[] = [];
   let closedByConversation: string[] = [];
   let llmDraftError: string | undefined;
   // Every sender failed — a systemic outage, not a per-sender fault.
@@ -1115,6 +1135,31 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
           doneCards = await closeDoneCards(state.actions, toDraft, new Set(draftFailedSenders), opts.personaUpdate.json);
         } catch (e) {
           console.error(`[closure] card check failed: ${errString(e)}`);
+        }
+      }
+      // His plans: steps the drafter placed in them, and — for senders with no
+      // persona, whom the person pass never reads — what their new messages
+      // change (core/plan-progress.ts). A persona's plan news comes from the
+      // person pass, so it is not asked twice.
+      planUpdates.push(...r.planSteps);
+      if (opts.personaUpdate && opts.ticktickWriter?.patchPlan) {
+        const tickets = loadOwnerTickets(opts.statePath);
+        const failed = new Set(draftFailedSenders);
+        const strangers = new Map<string, InboundMessage[]>();
+        for (const m of toDraft) {
+          if (failed.has(m.senderHandle) || opts.draft.resolvePersona(m.senderHandle)) continue;
+          strangers.set(m.senderHandle, [...(strangers.get(m.senderHandle) ?? []), m]);
+        }
+        for (const [sender, msgs] of strangers) {
+          const name = msgs[0]!.senderName ?? sender;
+          const spoken = msgs.flatMap((m) =>
+            m.text.split("\n").map((t) => t.trim()).filter(Boolean).map((text) => ({ speaker: "them" as const, who: name, text })),
+          );
+          try {
+            planUpdates.push(...(await findPlanProgress(name, tickets, spoken, opts.personaUpdate.json, new Date().toISOString().slice(0, 10))));
+          } catch (e) {
+            console.error(`[plan] ${name}: ${errString(e)}`);
+          }
         }
       }
       draftUnavailableSenders = r.errors.filter((e) => isLlmUnavailable(e.error)).map((e) => e.sender);
@@ -1381,6 +1426,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       }
     });
     if (committed) {
+      await writePlans(planUpdates);
       draftedCount = draftedActions.length;
       if (closedByConversation.length > 0) {
         console.log(`[closure] ${closedByConversation.length} card(s) already done per the conversation: ${closedByConversation.join("; ")}`);
@@ -1853,6 +1899,7 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       try {
         console.log(`[progress] assessing ${queue.length} contact(s) with new traffic…`);
         const pu = await updatePersonaCommitments(queue, opts.personaUpdate);
+        await writePlans(pu.planUpdates);
         if (pu.closedDone > 0) {
           console.log(`[closure] ${pu.closedDone} listed commitment(s) already done per the conversation`);
           logActivity("supersede", `closed ${pu.closedDone} listed commitment(s) the conversation showed done`, { phase: "person-pass", closedDone: pu.closedDone });

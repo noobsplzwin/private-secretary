@@ -17,6 +17,8 @@ export interface ExtractedCommitment {
   matter_id?: string;
   /** A handle from THE OWNER'S OWN TICKETS (core/owner-tickets.ts). */
   covered_by_ticket?: string;
+  /** Which listed step of that ticket this is; absent = work the ticket does not list yet. */
+  ticket_step?: number;
 }
 
 /** A status transition for an ALREADY-TRACKED commitment, by its list index. */
@@ -68,6 +70,7 @@ const SCHEMA: Record<string, unknown> = {
             description:
               "ONLY when this commitment is one link of a matter already tracked (reuse that matter id from the list) or of another commitment you are returning now (invent one short kebab-case id and put it on both). Omit for standalone work.",
           },
+          ticket_step: { type: "integer", description: "With covered_by_ticket: the number of the step in that ticket this IS, when it is one of the listed steps. Omit when it is work the ticket does not list yet." },
           covered_by_ticket: { type: "string", description: "ONLY when this work is already a step in, or the same work as, one of THE OWNER'S OWN TICKETS listed in the message: that ticket's handle (e.g. \"T2\"). Omit otherwise." },
         },
         required: ["who", "what", "evidence"],

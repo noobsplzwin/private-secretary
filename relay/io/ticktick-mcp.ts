@@ -20,6 +20,7 @@ import { resolveTickTickProject, type TickTickProject } from "../core/ticktick.j
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
 import type { TickTickWriter, TickTickReader } from "../proc/ticktick-sync.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
+import { applyPlanUpdate } from "../core/plan-progress.js";
 import type { ToolRunner } from "../proc/execute.js";
 
 const projectIdCache = new Map<string, string>();
@@ -227,6 +228,39 @@ export function createTickTickWriter(opts: TickTickToolOptions): TickTickWriter 
         task: { ...task, id: taskId, projectId: where },
       });
       return { itemIds: itemIdsOf(callResultObject(res)), projectId: where };
+    },
+
+    // One of HIS plan tickets (core/plan-progress.ts): read it fresh, apply the
+    // update, write back only desc + items. Dates, title and everything he
+    // wrote are left exactly as they are.
+    async patchPlan(taskId, update) {
+      const t = callResultObject(await callMcpTool(opts.url, opts.authService, "get_task_by_id", { task_id: taskId }));
+      if (t.status !== 0 || typeof t.projectId !== "string") return false;
+      const items = (Array.isArray(t.items) ? t.items : []).flatMap((i) => {
+        const it = i as { id?: unknown; title?: unknown; status?: unknown; sortOrder?: unknown };
+        return typeof it.title === "string"
+          ? [{
+              ...(typeof it.id === "string" ? { id: it.id } : {}),
+              title: it.title,
+              status: typeof it.status === "number" ? it.status : 0,
+              sortOrder: typeof it.sortOrder === "number" ? it.sortOrder : 0,
+            }]
+          : [];
+      });
+      const next = applyPlanUpdate({ desc: typeof t.desc === "string" ? t.desc : "", items }, update);
+      if (!next) return false;
+      await callMcpTool(opts.url, opts.authService, "update_task", {
+        task_id: taskId,
+        task: {
+          id: taskId,
+          projectId: t.projectId,
+          kind: "CHECKLIST",
+          desc: next.desc,
+          items: next.items,
+          ...(typeof t.etag === "string" ? { etag: t.etag } : {}),
+        },
+      });
+      return true;
     },
 
     async completeTasks(tasks) {

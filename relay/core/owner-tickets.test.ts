@@ -10,7 +10,7 @@ describe("ownerTicketsFrom", () => {
       { id: "done", status: 2, title: "finished" },
     ];
     const t = ownerTicketsFrom(remote, { k: { ticktickId: "tracked", projectId: "p", hash: "h" } });
-    expect(t).toEqual([{ id: "mine", title: "股权变更", steps: ["A 启动"] }]);
+    expect(t).toEqual([{ id: "mine", title: "股权变更", steps: ["A 启动"], stepIds: ["a"] }]);
   });
 });
 
@@ -20,7 +20,7 @@ describe("handles", () => {
     { id: "x2", title: "AGV", steps: [] },
   ];
   it("render as T1, T2 with their steps", () => {
-    expect(ticketBlock(tickets)).toBe("T1. 股权变更\n    · A 启动\nT2. AGV");
+    expect(ticketBlock(tickets)).toBe("T1. 股权变更\n    [1] A 启动\nT2. AGV");
   });
   it("map back to the real ticket; anything else covers nothing", () => {
     expect(ticketByHandle(tickets, "T2")?.id).toBe("x2");

@@ -35,6 +35,7 @@ import { ownLinesShown, parseLedgerUnitKey } from "../core/ledger-list.js";
 import { TICKTICK_BATCH_MAX } from "../core/mstodo.js";
 import type { TickTickTaskPayload } from "../core/ticktick.js";
 import type { TrackedApproval } from "../core/ticktick-approval.js";
+import type { PlanUpdate } from "../core/plan-progress.js";
 import type { LoopState } from "../io/state.js";
 
 /** The TickTick calls this pass needs. Narrow on purpose. */
@@ -76,6 +77,8 @@ export interface TickTickWriter {
   ): Promise<{ itemIds: string[]; projectId?: string }>;
   /** Mark tasks complete, batched by the caller to TICKTICK_BATCH_MAX. */
   completeTasks(tasks: ReadonlyArray<{ id: string; projectId: string }>): Promise<void>;
+  /** Apply a plan update to one of HIS tickets (core/plan-progress.ts). True when it changed. */
+  patchPlan?(taskId: string, update: PlanUpdate): Promise<boolean>;
 }
 
 export interface SyncReport {

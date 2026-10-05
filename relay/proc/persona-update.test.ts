@@ -715,6 +715,49 @@ describe("the assess pass reads who does what", () => {
   });
 });
 
+// His plans update themselves from what is NEW (core/plan-progress.ts).
+describe("the person pass keeps his plans current", () => {
+  const PLAN = { id: "tk1", title: "零跑 Benchmarking", steps: ["找 Sky 定到场日期"], stepIds: ["s1"] };
+  const corpus = ["[2026-10-01 09:00] Zech: 老消息：下周再说", "[2026-10-08 10:12] Zech: 就定13号到场", "[2026-10-08 10:20] me: 回来我把跑分报告发郭总"].join("\n");
+  const run = async (sinceMs?: number) => {
+    const seen: string[] = [];
+    const r = await updatePersonaCommitments(
+      [{ ...QUEUED, ...(sinceMs ? { sinceMs } : {}) }],
+      deps({
+        personaDir: personaDirWith([]),
+        fetchCorpus: async () => corpus,
+        ownerTickets: () => [PLAN],
+        json: async (req) => {
+          if (req.system.startsWith("You keep Leo's PLANS")) {
+            seen.push(req.userText);
+            return { done: [{ ticket: "T1", step: 1, evidence: "就定13号到场" }], news: [] };
+          }
+          return {
+            commitments: [{ who: "me", what: "把跑分报告发郭总", evidence: "回来我把跑分报告发郭总", covered_by_ticket: "T1" }],
+            updates: [],
+          };
+        },
+      }),
+    );
+    return { r, seen };
+  };
+  it("reads only the lines after his last assessment, and ticks the proven step", async () => {
+    const { r, seen } = await run(new Date(2026, 9, 5, 0, 0).getTime());
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toContain("就定13号到场");
+    expect(seen[0]).not.toContain("老消息");
+    expect(r.planUpdates).toContainEqual({ ticketId: "tk1", check: ["s1"], notes: [], addSteps: [] });
+  });
+  it("work of his placed in the plan but not listed there becomes a step", async () => {
+    const { r } = await run(new Date(2026, 9, 5, 0, 0).getTime());
+    expect(r.planUpdates).toContainEqual({ ticketId: "tk1", check: [], notes: [], addSteps: ["把跑分报告发郭总"] });
+  });
+  it("with no previous assessment it asks nothing about plans", async () => {
+    const { seen } = await run();
+    expect(seen).toEqual([]);
+  });
+});
+
 describe("a FAILED assessment is not an attempted one", () => {
   it("reports the failed call separately, so its cursor can hold", async () => {
     const dir = mkdtempSync(join(tmpdir(), "pu-fail-"));
