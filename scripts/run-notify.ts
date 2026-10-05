@@ -766,6 +766,8 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
       fetchCorpus: (persona) => fetchCorpusFor(persona, resolvePersona),
       personaDir,
       ownerTickets: () => loadOwnerTickets(statePath),
+      // Who does what, from his own profile — read per call, so an edit applies next tick.
+      leoProfile: () => loadLeoProfile(leoProfilePath),
       // His registry labels, read per call so an edit takes effect next tick.
       matterLabels: () => {
         try {
