@@ -749,7 +749,11 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
             // timed out where twelve finished. Both hypotheses were tested and
             // refuted. What the numbers show is a call that simply costs about
             // three minutes, against a ceiling set three minutes away.
-            createClaudeCliJsonCaller({ model: draftModel, timeoutMs: 420_000 });
+            //
+            // That three minutes was at the effort INHERITED from the owner's own
+            // Claude settings (xhigh): 2026-10-06 Leo.yang's call took 718s at
+            // xhigh, 524s at high and 217s at medium, with the same verdicts.
+            createClaudeCliJsonCaller({ model: draftModel, timeoutMs: 420_000, effort: "medium" });
     const personas = loadPersonas(personaDir);
     const { resolve: resolvePersona } = buildPersonaResolver(personas);
     const byKey = new Map(personas.map((p) => [p.key, p]));

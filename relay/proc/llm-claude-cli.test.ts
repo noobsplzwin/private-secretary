@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseDraftedActions, claudeExitReason } from "./llm-claude-cli.js";
+import { parseDraftedActions, claudeExitReason, claudeArgv } from "./llm-claude-cli.js";
 
 // Wrap a model-result string in the `claude -p --output-format json` envelope.
 function envelope(result: string, is_error = false): string {
@@ -135,5 +135,14 @@ describe("empty drafts leave evidence in the raw log", () => {
     );
     expect(actions).toHaveLength(1);
     expect(records).toEqual([]);
+  });
+});
+
+describe("claudeArgv", () => {
+  // Unset, `claude -p` inherits the owner's own effort setting (xhigh here),
+  // which timed the assess call out. The caller's choice must reach the CLI.
+  it("passes --effort only when one is given", () => {
+    expect(claudeArgv("m", [], "sys", "medium")).toEqual(["-p", "--output-format", "json", "--model", "m", "--effort", "medium", "--system-prompt", "sys"]);
+    expect(claudeArgv("m", ["--disallowedTools", "Bash"], "sys")).not.toContain("--effort");
   });
 });

@@ -45,6 +45,18 @@ export interface ClaudeCliOptions {
   // scan loop's own llm:draft-empty message pointed at a file that never
   // existed, and "why did Magi draft nothing" was unanswerable.
   rawLogPath?: string;
+  /**
+   * `claude --effort`. Unset, `claude -p` inherits the effort in the OWNER'S
+   * ~/.claude/settings.json — xhigh on this machine, which put the assess call
+   * at 718s against a 420s ceiling for Leo.yang (2026-10-06; high 524s,
+   * medium 217s on the same request, same verdicts).
+   */
+  effort?: "low" | "medium" | "high" | "xhigh" | "max";
+}
+
+/** The `claude -p` argv. Exported for the unit test. */
+export function claudeArgv(model: string, toolArgs: readonly string[], system: string, effort?: string): string[] {
+  return ["-p", "--output-format", "json", "--model", model, ...(effort ? ["--effort", effort] : []), ...toolArgs, "--system-prompt", system];
 }
 
 // Pull the {actions:[...]} payload out of a `claude -p --output-format json`
@@ -121,6 +133,7 @@ function runClaude(
   timeoutMs: number,
   imagePaths: string[] = [],
   allowedTools?: string[],
+  effort?: string,
 ): Promise<string> {
   // Vision mode: stage the decoded images into a private temp dir, run with
   // cwd THERE and ONLY the Read tool allowed, and tell the model the local
@@ -164,7 +177,7 @@ function runClaude(
   return new Promise((resolvePromise, reject) => {
     const child = spawn(
       CLAUDE_BIN,
-      ["-p", "--output-format", "json", "--model", model, ...toolArgs, "--system-prompt", system],
+      claudeArgv(model, toolArgs, system, effort),
       {
         cwd,
         // Blank ANTHROPIC_API_KEY → use the logged-in subscription, never
@@ -266,7 +279,7 @@ export function createClaudeCliJsonCaller(opts: ClaudeCliOptions = {}): JsonLlmC
       `\n\nOUTPUT MODE: Do NOT call any tool. Respond with ONLY a single JSON ` +
       `object conforming to this JSON schema:\n${JSON.stringify(req.toolInputSchema)}\n` +
       `No markdown fences, no prose before or after — output the JSON object and nothing else.`;
-    const stdout = await runClaude(system, req.userText, model, timeoutMs, []);
+    const stdout = await runClaude(system, req.userText, model, timeoutMs, [], undefined, opts.effort);
     return parseResultObject(stdout);
   };
 }
