@@ -331,11 +331,16 @@ export async function extractCommitmentsOnce(opts: {
   // Capped HERE rather than in the corpus builders because there are several of
   // them (the daemon's, the audit script's) and one timeout ceiling.
   const corpus = capCorpus(opts.corpus);
+  // Only OPEN work is put to the model, numbered 0..n-1; `shown[n]` is that
+  // commitment's place in the file. Leo.yang's ledger held 99, 68 of them
+  // closed, and listing all of them timed the call out three times running
+  // (2026-10-06). Closed rows stay on file for the wording dedup below.
+  const shown = existing.flatMap((c, i) => (c.status === "open" || c.status === "overdue" ? [i] : []));
   try {
     const raw = await opts.json(
       buildPersonaUpdateRequest({
         name: opts.displayName,
-        existing,
+        existing: shown.map((i) => existing[i]!),
         thread: corpus,
         ...(opts.matterLabels ? { matterLabels: opts.matterLabels } : {}),
         ...(opts.ownerTickets?.length ? { ownerTickets: ticketBlock(opts.ownerTickets) } : {}),
@@ -343,8 +348,8 @@ export async function extractCommitmentsOnce(opts: {
       }),
     );
     extracted = parseExtractedCommitments(raw);
-    transitions = parseExtractedUpdates(raw, existing.length);
-    assessments = parseExtractedAssessments(raw, existing.length);
+    transitions = parseExtractedUpdates(raw, shown.length).map((u) => ({ ...u, index: shown[u.index]! }));
+    assessments = parseExtractedAssessments(raw, shown.length).map((a) => ({ ...a, index: shown[a.index]! }));
     // A verdict the parser rejected (bad index, non-boolean needs_leo, missing
     // quote) must COUNT, or it vanishes without trace — the seed run reported
     // "assessed 0, discarded 0" for contacts whose reply carried verdicts, and
@@ -358,7 +363,7 @@ export async function extractCommitmentsOnce(opts: {
     // it — timeout? auth? an unparseable reply? — was thrown away right here.
     const msg = (e as Error)?.message ?? String(e);
     console.error(
-      `[persona] ${opts.displayName}: assessment call failed (corpus ${corpus.length} chars, ${existing.length} tracked) — ${msg.replace(/\s+/g, " ").slice(0, 240)}`,
+      `[persona] ${opts.displayName}: assessment call failed (corpus ${corpus.length} chars, ${shown.length} open of ${existing.length} tracked) — ${msg.replace(/\s+/g, " ").slice(0, 240)}`,
     );
     return null;
   }

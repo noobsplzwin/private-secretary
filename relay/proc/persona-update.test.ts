@@ -169,6 +169,53 @@ describe("updatePersonaCommitments — cross-source retrieval", () => {
 
 });
 
+// The prompt numbers OPEN work only. Leo.yang's ledger held 99 commitments, 68
+// of them done or dropped, and every call listed all 99 — it timed out at 420s
+// three times running (2026-10-06) and his traffic went unread. Closed rows
+// stay on file for the wording dedup; the model's numbers map back to them.
+describe("only open work is put to the model", () => {
+  const LEDGER = [
+    { who: "them", what: "Ship the old samples", status: "done" },
+    { who: "me", what: "Book the Shenzhen trip", status: "dropped" },
+    { who: "them", what: "Send the manufacturing agreement for signature", status: "open" },
+  ];
+
+  it("lists only open commitments, and a returned number lands on the right one", async () => {
+    const dir = personaDirWith(LEDGER);
+    let prompt = "";
+    await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: dir,
+        json: async (req) => {
+          prompt = req.userText;
+          return {
+            commitments: [],
+            updates: [{ index: 0, status: "done", evidence: "signed and returned" }],
+          };
+        },
+      }),
+    );
+    expect(prompt).not.toContain("Ship the old samples");
+    expect(prompt).not.toContain("Book the Shenzhen trip");
+    expect(prompt).toContain("0. [them] [open] Send the manufacturing agreement");
+    const after = (parse(readFileSync(join(dir, "zech-noiseux.yaml"), "utf8")) as { commitments: Commitment[] }).commitments;
+    expect(after.map((c) => c.status)).toEqual(["done", "dropped", "done"]);
+  });
+
+  it("does not re-mint a closed commitment the model can no longer see", async () => {
+    const dir = personaDirWith(LEDGER);
+    const r = await updatePersonaCommitments(
+      [QUEUED],
+      deps({
+        personaDir: dir,
+        reply: { commitments: [{ who: "them", what: "Ship the old samples", evidence: "signed and returned" }], updates: [] },
+      }),
+    );
+    expect(r.updated[0]?.added ?? 0).toBe(0);
+  });
+});
+
 // ASSESS (specs/person-first-consolidation.md §3.2). needs_leo is the one hard
 // judgment the derived list rests on, so every guard around it is enforced in
 // CODE — the prompt is asked, never trusted.
