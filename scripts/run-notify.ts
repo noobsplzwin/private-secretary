@@ -750,10 +750,13 @@ async function buildPersonaUpdate(): Promise<PersonaUpdateDeps | undefined> {
             // refuted. What the numbers show is a call that simply costs about
             // three minutes, against a ceiling set three minutes away.
             //
-            // That three minutes was at the effort INHERITED from the owner's own
-            // Claude settings (xhigh): 2026-10-06 Leo.yang's call took 718s at
-            // xhigh, 524s at high and 217s at medium, with the same verdicts.
-            createClaudeCliJsonCaller({ model: draftModel, timeoutMs: 420_000, effort: "medium" });
+            // That three minutes was at the effort inherited from the owner's own
+            // Claude settings (xhigh). Leo.yang's call took 718s at xhigh on
+            // 2026-10-06, so the ceiling is 15 minutes. Effort is pinned to
+            // xhigh, never lowered: two days at medium (10/6-10/8) judged other
+            // people's own moves — 「我寄Jetson底板给你」「Let me try」 — as his
+            // work and flooded the list (「多到我根本没法处理」).
+            createClaudeCliJsonCaller({ model: draftModel, timeoutMs: 900_000, effort: "xhigh" });
     const personas = loadPersonas(personaDir);
     const { resolve: resolvePersona } = buildPersonaResolver(personas);
     const byKey = new Map(personas.map((p) => [p.key, p]));
