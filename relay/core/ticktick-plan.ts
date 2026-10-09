@@ -88,6 +88,13 @@ export function shouldRenderCardUnit(
   // An EVENT that already happened is over. Only when every live member is such
   // an event — a unit that also carries a task or a reply still has work in it.
   if (live.every((m) => isPastEvent(m, nowMs))) return false;
+  // A MEETING IS NOT A TICKET (owner, 2026-10-09: 「日历直接创建」). A confirmed
+  // time goes straight onto his calendar (scan-loop's auto-create pass); one
+  // still being arranged lives in the chat. Neither is a row to tick, which is
+  // what 「创建日历：16号上午10点见温总」 was — for a meeting already on his osyx
+  // calendar. Only prep steps put a meeting on the list.
+  if (live.every((m) => m.action_type === "calendar") && !live.some((m) => isUpcomingMeetingWithPrep(m, nowMs)))
+    return false;
   return live.some(isExecutableAction) || live.some((m) => isUpcomingMeetingWithPrep(m, nowMs)) || isPersonaLess(unit);
 }
 

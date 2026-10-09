@@ -52,7 +52,14 @@ describe("shouldRenderCardUnit", () => {
     });
 
   it("renders an executable unit from a persona sender", () => {
-    expect(shouldRenderCardUnit(unit({ members: [invite()] }), hasPersona, NOW)).toBe(true);
+    expect(shouldRenderCardUnit(unit({ members: [member({ action_type: "tool" })] }), hasPersona, NOW)).toBe(true);
+  });
+
+  // 2026-10-09: 「赴约李冰Bezos」 and 「创建日历：16号上午10点见温总」 were rows for
+  // a meeting already on his calendar. 「日历直接创建」 — a meeting is an event.
+  it("never lists a bare meeting, invite or not, persona or not", () => {
+    expect(shouldRenderCardUnit(unit({ members: [invite()] }), hasPersona, NOW)).toBe(false);
+    expect(shouldRenderCardUnit(unit({ members: [invite()] }), noPersona, NOW)).toBe(false);
   });
 
   it("renders a persona-less task unit", () => {
@@ -73,11 +80,9 @@ describe("shouldRenderCardUnit", () => {
     expect(shouldRenderCardUnit(unit({ members: [at("2026-08-06T14:00:00-05:00")] }), noPersona, NOW)).toBe(false);
   });
 
-  it("keeps an event still to come, and one from earlier today", () => {
-    expect(shouldRenderCardUnit(unit({ members: [at("2026-08-20T14:00:00-05:00")] }), noPersona, NOW)).toBe(true);
-    // Within the day of grace: params.start is a wall clock whose zone lives in
-    // params.tz, so same-day parsing is only accurate to within a day.
-    expect(shouldRenderCardUnit(unit({ members: [at("2026-08-13T09:00:00-05:00")] }), noPersona, NOW)).toBe(true);
+  it("keeps a task that rides with an event still to come", () => {
+    const work = member({ id: "t1", action_type: "task" });
+    expect(shouldRenderCardUnit(unit({ members: [at("2026-08-20T14:00:00-05:00"), work] }), noPersona, NOW)).toBe(true);
   });
 
   it("drops a unit whose members are all finished", () => {

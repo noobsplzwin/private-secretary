@@ -39,7 +39,10 @@ export const AUTO_EXECUTE_CONFIDENCE = 0.9;
 export function canAutoExecute(a: ActionItem): boolean {
   if (a.status !== "suggested") return false;
   if (a.action_type !== "ignore" && a.action_type !== "calendar") return false;
-  if (a.confidence < AUTO_EXECUTE_CONFIDENCE) return false;
+  // The confidence bar is the IGNORE gate only. On a calendar it turned two
+  // meetings agreed in writing (0.85 and 0.82, 2026-10-09) into tickets that
+  // told the owner to 创建日历 — 「日历直接创建」. A confirmed time is the bar.
+  if (a.action_type === "ignore" && a.confidence < AUTO_EXECUTE_CONFIDENCE) return false;
   // For a calendar this is the whole safety story: title, start, end, and
   // time_confirmed. A guessed hour fails here and never reaches the API.
   return missingInfo(a).length === 0;

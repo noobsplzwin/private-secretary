@@ -267,3 +267,28 @@ export class CalendarClient {
     );
   }
 }
+
+// The calendar we BOOK on is one; the calendars a meeting may ALREADY be on
+// are all of his. 2026-10-09: Qualcomm's 「OSYX QCS6490 Dual OS Demo」 sat on
+// leo@osyx.tech while the check read only the booking calendar, so the two
+// cards for that very meeting saw a free slot. Reads span every calendar;
+// inserts go to the booking one. A calendar this token cannot see (403/404) is
+// skipped; any other failure throws, so the card waits for the next tick
+// rather than being booked against a half-read calendar.
+export function ownerCalendars(book: CalendarClient, alsoRead: readonly CalendarClient[]) {
+  return {
+    async listAllEvents(opts: { timeMin: string; timeMax: string }): Promise<CalendarEvent[]> {
+      const lists = await Promise.all([
+        book.listAllEvents(opts),
+        ...alsoRead.map((c) =>
+          c.listAllEvents(opts).catch((e: unknown) => {
+            if (e instanceof CalendarApiError && (e.httpStatus === 403 || e.httpStatus === 404)) return [];
+            throw e;
+          }),
+        ),
+      ]);
+      return lists.flat();
+    },
+    insertEvent: (opts: Parameters<CalendarClient["insertEvent"]>[0]) => book.insertEvent(opts),
+  };
+}

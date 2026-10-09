@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CalendarApiError, CalendarClient } from "./calendar-api.js";
+import { CalendarApiError, CalendarClient, ownerCalendars } from "./calendar-api.js";
 
 function fakeFetch(
   responder: (url: string, init: RequestInit) => {
@@ -176,5 +176,33 @@ describe("CalendarClient — wire layer", () => {
       maxRetries: 0,
     });
     await expect(c.getEvent("E1")).rejects.toBeInstanceOf(CalendarApiError);
+  });
+});
+
+// 2026-10-09: the meeting was already on leo@osyx.tech; the check read only the
+// booking calendar and two cards for it saw a free slot.
+describe("ownerCalendars", () => {
+  const client = (calendarId: string, responder: Parameters<typeof fakeFetch>[0]) => {
+    const f = fakeFetch(responder);
+    return { c: new CalendarClient({ email: "me@x.com", calendarId, fetchFn: f.fetchFn, tokenOverride: "t", maxRetries: 0 }), calls: f.calls };
+  };
+  const window = { timeMin: "2026-10-16T00:00:00+08:00", timeMax: "2026-10-17T00:00:00+08:00" };
+
+  it("reads every calendar and books on one", async () => {
+    const book = client("primary", (_u, init) => ({ ok: true, body: init.method === "POST" ? { id: "new" } : { items: [{ id: "p" }] } }));
+    const osyx = client("leo@osyx.tech", () => ({ ok: true, body: { items: [{ id: "qcs" }] } }));
+    const cal = ownerCalendars(book.c, [osyx.c]);
+    expect((await cal.listAllEvents(window)).map((e) => e.id)).toEqual(["p", "qcs"]);
+    await cal.insertEvent({ event: { summary: "x", start: {}, end: {} } });
+    expect(osyx.calls.every((c) => c.method === "GET")).toBe(true);
+    expect(book.calls.some((c) => c.method === "POST")).toBe(true);
+  });
+
+  it("skips a calendar it cannot see, but not one that failed", async () => {
+    const book = client("primary", () => ({ ok: true, body: { items: [] } }));
+    const gone = client("old@x.com", () => ({ ok: false, status: 404, body: {} }));
+    expect(await ownerCalendars(book.c, [gone.c]).listAllEvents(window)).toEqual([]);
+    const broken = client("leo@osyx.tech", () => ({ ok: false, status: 400, body: {} }));
+    await expect(ownerCalendars(book.c, [broken.c]).listAllEvents(window)).rejects.toThrow();
   });
 });

@@ -43,7 +43,7 @@ import {
 import { draftActions, type DraftDeps } from "./draft.js";
 import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
 import { executeAction, type ExecuteDeps } from "./execute.js";
-import { approveAction } from "../core/action-item.js";
+import { approveAction, markExecuted, withReceipt } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
 import { enqueue, isLlmUnavailable, settle, takeForDraft, type InboxEntry } from "../core/inbox.js";
@@ -1891,7 +1891,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // other people stays a human act.
   if (!opts.dryRun && opts.execute) {
     const snapshot = loadState(opts.statePath);
-    const auto = snapshot.actions.filter((a) => a.action_type === "calendar" && canAutoExecute(a));
+    // Only a meeting still ahead. Without the confidence bar, cards for August
+    // calls that never cleared it would otherwise be booked into the past.
+    const auto = snapshot.actions.filter(
+      (a) => a.action_type === "calendar" && canAutoExecute(a) && Date.parse(String(a.params.start)) > Date.now(),
+    );
     for (const action of auto) {
       try {
         const r = await executeAction(approveAction(action), {
@@ -1903,11 +1907,20 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
             });
           },
         });
+        // Something already holds that slot on one of his calendars: the
+        // meeting is THERE, so the card is settled, with no event and no row.
+        // Holding it used to leave an approved card that listed as a ticket —
+        // 2026-10-09, two cards for Qualcomm's 10:00, already on leo@osyx.tech.
+        // A different meeting in the same slot is his to see on his calendar.
+        const held = r.conflicts?.[0];
+        const settled = held
+          ? markExecuted(withReceipt(r.action, { kind: "local", ref: `already-on-calendar:${held.event.id ?? held.event.summary ?? "?"}`, at: new Date().toISOString() }))
+          : r.action;
         await commitUnderLock((fresh) => {
-          fresh.actions = fresh.actions.map((a) => (a.id === r.action.id ? r.action : a));
+          fresh.actions = fresh.actions.map((a) => (a.id === settled.id ? settled : a));
         });
-        if (r.conflicts?.length) {
-          console.log(`[calendar] auto-create held — conflicts: ${String(action.params.title ?? action.id)}`);
+        if (held) {
+          console.log(`[calendar] already on calendar ("${held.event.summary ?? "?"}"): ${String(action.params.title ?? action.id)}`);
         } else {
           autoCalendarCount++;
           console.log(`[calendar] auto-created: "${String(action.params.title ?? action.id)}" (${r.receipt?.ref ?? "no ref"})`);

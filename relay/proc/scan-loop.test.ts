@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CalendarEvent } from "../io/calendar-api.js";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -1429,6 +1430,72 @@ describe("tick-to-execute", () => {
     });
     const after = JSON.parse(readFileSync(statePath, "utf8"));
     expect(after.sourceErrors["llm:tick-execute"].message).toContain("jira down");
+  });
+});
+
+// 「日历直接创建」 (owner, 2026-10-09). A meeting agreed in the thread becomes an
+// event, and one already on his calendar settles the card — it never waits as
+// a ticket. That day two cards for Qualcomm's 10:00, already on leo@osyx.tech,
+// read 0.85 / 0.82 and listed as 「赴约李冰Bezos」「创建日历：…见温总」.
+describe("calendar auto-create", () => {
+  const seedMeeting = (confidence: number) =>
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 2,
+        marks: {},
+        actions: [
+          {
+            id: "cal1",
+            source_message_id: "wechat:李冰Bezos:1",
+            action_type: "calendar",
+            target: { platform: "wechat", attendees: [] },
+            reason: "r",
+            confidence,
+            params: { title: "与李冰Bezos见面", start: "2030-10-16T02:00:00.000Z", end: "2030-10-16T03:00:00.000Z", tz: "Asia/Shanghai", attendees: [], time_confirmed: true, mailbox: "me@x.com" },
+            status: "suggested",
+            created_at: "2026-10-09T02:45:00Z",
+            context: { sender_handle: "李冰Bezos" },
+          },
+        ],
+        outcomes: [],
+        sourceErrors: {},
+        tasks: {},
+      }),
+    );
+  const calendar = (existing: CalendarEvent[]) => {
+    const insertEvent = vi.fn(async (): Promise<CalendarEvent> => ({ id: "ev-new", start: {}, end: {} }));
+    return { insertEvent, deps: { now: () => "2026-10-09T03:00:00Z", calendar: { "me@x.com": { listAllEvents: async () => existing, insertEvent } } } };
+  };
+
+  it("creates the event below the old 0.9 bar", async () => {
+    seedMeeting(0.82);
+    const { insertEvent, deps } = calendar([]);
+    await runScanTick({ statePath, sources: [], execute: deps });
+    expect(insertEvent).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(readFileSync(statePath, "utf8")).actions[0].status).toBe("executed");
+  });
+
+  it("never books a meeting that has already happened", async () => {
+    seedMeeting(0.82);
+    const st = JSON.parse(readFileSync(statePath, "utf8"));
+    st.actions[0].params.start = "2026-08-31T01:50:00.000Z";
+    st.actions[0].params.end = "2026-08-31T02:50:00.000Z";
+    writeFileSync(statePath, JSON.stringify(st));
+    const { insertEvent, deps } = calendar([]);
+    await runScanTick({ statePath, sources: [], execute: deps });
+    expect(insertEvent).not.toHaveBeenCalled();
+  });
+
+  it("settles the card, creating nothing, when the slot is already on his calendar", async () => {
+    seedMeeting(0.85);
+    const qcs = { id: "qcs", summary: "OSYX QCS6490 Dual OS Demo", start: { dateTime: "2030-10-16T10:00:00+08:00" }, end: { dateTime: "2030-10-16T11:00:00+08:00" } };
+    const { insertEvent, deps } = calendar([qcs]);
+    await runScanTick({ statePath, sources: [], execute: deps });
+    expect(insertEvent).not.toHaveBeenCalled();
+    const a = JSON.parse(readFileSync(statePath, "utf8")).actions[0];
+    expect(a.status).toBe("executed");
+    expect(a.params.execution_receipt).toMatchObject({ kind: "local", ref: "already-on-calendar:qcs" });
   });
 });
 

@@ -25,7 +25,7 @@ import { loadSettings } from "../relay/io/settings.js";
 import { effectiveToolSpecs } from "../relay/io/tools.js";
 import { createTickTickWriter, createTickTickReader } from "../relay/io/ticktick-mcp.js";
 import { createJiraToolRunner } from "../relay/io/jira-mcp.js";
-import { CalendarClient } from "../relay/io/calendar-api.js";
+import { CalendarClient, ownerCalendars } from "../relay/io/calendar-api.js";
 import type { ExecuteDeps } from "../relay/proc/execute.js";
 import { mcpAuthServiceFor } from "../relay/io/mcp-tool.js";
 import type { TickTickWriter, TickTickReader } from "../relay/proc/ticktick-sync.js";
@@ -676,9 +676,15 @@ async function fetchRelatedThread(p: Persona): Promise<string | null> {
 function buildExecuteDeps(): Omit<ExecuteDeps, "persistClaim"> | undefined {
   const deps: Omit<ExecuteDeps, "persistClaim"> = { now: () => new Date().toISOString() };
   let any = false;
-  const calMailbox = loadIdentity().calendarMailbox;
+  const { calendarMailbox: calMailbox, mailboxes } = loadIdentity();
   if (calMailbox) {
-    deps.calendar = { [calMailbox]: new CalendarClient({ email: calMailbox }) };
+    // The conflict check reads every mailbox's calendar through the booking
+    // account's token: a meeting already on leo@osyx.tech must not be booked
+    // again (relay/io/calendar-api.ts ownerCalendars).
+    const others = mailboxes
+      .filter((m) => m !== calMailbox)
+      .map((m) => new CalendarClient({ email: calMailbox, calendarId: m }));
+    deps.calendar = { [calMailbox]: ownerCalendars(new CalendarClient({ email: calMailbox }), others) };
     any = true;
   }
   const jira = effectiveToolSpecs(statePath).jira?.config;

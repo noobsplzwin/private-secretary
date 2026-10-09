@@ -88,8 +88,10 @@ describe("calendar auto-creation (owner removed the approval gate 2026-09-14)", 
     expect(canAutoExecute(cal({ end: "" }))).toBe(false);
   });
 
-  it("refuses a low-confidence read", () => {
-    expect(canAutoExecute(cal({}, 0.5))).toBe(false);
+  // 2026-10-09: two agreed meetings read at 0.85 / 0.82 became 「创建日历」
+  // tickets instead of events. The confirmed time is the gate, not confidence.
+  it("creates a confirmed-time event whatever the confidence", () => {
+    expect(canAutoExecute(cal({}, 0.82))).toBe(true);
   });
 
   it("never re-executes one already handled", () => {
