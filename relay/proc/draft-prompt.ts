@@ -151,7 +151,10 @@ ACTION TYPES (a sender's batch may yield several, or none):
   that wall time verbatim in time_quote. NEVER invent an hour from a vague cue
   (上午/下午/晚上) or a default block — a guessed hour books a real meeting at the
   wrong time. If the DATE is agreed but the TIME is not, emit a "task" to agree a
-  time instead, not a calendar. attendees = ONLY real email addresses; a name-only or
+  time instead, not a calendar. A time someone says they will GO PROPOSE to a
+  party outside this chat (「那我先约周一下午1点」, 「我去问问杜伟」) is NOT
+  confirmed: that party's invite is the meeting. Emit no calendar for it —
+  2026-10-10 the 1pm proposal became an event beside 杜伟's 2:30 invite. attendees = ONLY real email addresses; a name-only or
   WeChat contact (e.g. "Gouwa Wang", 陈古龙) has NO email — put them in the title/
   description and leave attendees EMPTY. A non-email attendee makes Calendar reject
   the whole event. When a place is known, ALWAYS set location (the metro station /
