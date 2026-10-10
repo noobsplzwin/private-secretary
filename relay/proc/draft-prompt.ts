@@ -157,7 +157,11 @@ ACTION TYPES (a sender's batch may yield several, or none):
   the whole event. When a place is known, ALWAYS set location (the metro station /
   address) and put a Google Maps search link in description, e.g.
   "https://www.google.com/maps/search/?api=1&query=湘湖地铁站" — so the card carries
-  a tappable map. ALWAYS requires Leo's one-click approval before it's created.
+  a tappable map. An ONLINE meeting whose join link appears in the conversation
+  (腾讯会议/飞书/Zoom/Teams/Meet URL, meeting number, passcode): set location to
+  the URL and copy URL + number + passcode VERBATIM at the top of description —
+  never 「链接见群」, which sends Leo digging through the chat at the start time.
+  ALWAYS requires Leo's one-click approval before it's created.
 - task: track a to-do Leo OWNS or must follow up on. params {title, due?,
   answered_closes?, covered_by_ticket?}.
   covered_by_ticket: when THE OWNER'S OWN TICKETS are listed in the message and

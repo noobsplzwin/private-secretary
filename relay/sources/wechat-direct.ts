@@ -97,12 +97,24 @@ export interface HistoryMsg {
 
 const HIST_RE = /^\[(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\]\s+(.*)$/;
 
+// A multi-line message prints its first line after the timestamp and the rest
+// bare. Dropping those lines lost 徐志成's Tencent Meeting invite (2026-10-09):
+// the drafter saw 「北京市君合律师事务所」 and never the URL, so the event said
+// 「会议链接见微信群」. Lines before the first message are the header.
+function appendContinuation(msg: { text: string } | undefined, raw: string): void {
+  const line = raw.trim();
+  if (msg && line) msg.text = `${msg.text}\n${line}`;
+}
+
 export function parseChatHistory(text: string, contactName: string): HistoryMsg[] {
   if (!text) return [];
   const out: HistoryMsg[] = [];
   for (const raw of text.split("\n")) {
     const m = HIST_RE.exec(raw.trim());
-    if (!m) continue;
+    if (!m) {
+      appendContinuation(out[out.length - 1], raw);
+      continue;
+    }
     const [, y, mo, dd, hh, mm, rest] = m;
     let isIncoming = false;
     let body = rest!;
@@ -294,23 +306,29 @@ const OWN_LABEL = "me";
 export function parseGroupHistory(text: string): GroupMsg[] {
   if (!text) return [];
   const out: GroupMsg[] = [];
+  let last: GroupMsg | undefined;
   for (const raw of text.split("\n")) {
     const m = HIST_RE.exec(raw.trim());
-    if (!m) continue;
+    if (!m) {
+      appendContinuation(last, raw);
+      continue;
+    }
     const [, y, mo, dd, hh, mm, rest] = m;
     const sep = rest!.indexOf(": ");
-    if (sep <= 0) continue; // no speaker label — a continuation line, not a message
+    last = undefined; // a skipped line's continuation must not land on the message before it
+    if (sep <= 0) continue; // no speaker label — a system line, not a message
     const speaker = rest!.slice(0, sep).trim();
     const body = rest!.slice(sep + 2).trim();
     const imageLocalIds: number[] = [];
     const img = /\[图片\].*?local_id=(\d+)/.exec(body);
     if (img) imageLocalIds.push(Number(img[1]));
-    out.push({
+    last = {
       tsMs: new Date(Number(y), Number(mo) - 1, Number(dd), Number(hh), Number(mm), 0, 0).getTime(),
       speaker,
       text: body,
       imageLocalIds,
-    });
+    };
+    out.push(last);
   }
   return out;
 }

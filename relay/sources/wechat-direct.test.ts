@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   parseRecentSessions,
   parseChatHistory,
+  parseGroupHistory,
   parseOfficialAccountNames,
   scanWechatInbox,
   scanWechatGroups,
@@ -73,6 +74,41 @@ describe("parseChatHistory", () => {
     );
     expect(msgs[0]!.isIncoming).toBe(true);
     expect(msgs[0]!.imageLocalIds).toEqual([4567]);
+  });
+});
+
+describe("multi-line messages", () => {
+  // 2026-10-09: 徐志成's Tencent Meeting invite reached the drafter as its first
+  // line only, so the event it booked said 「会议链接见微信群」 instead of the URL.
+  const GROUP = `F26 奇绩-欧思克斯法律工作群 的消息记录（返回 4 条） [群聊]
+
+[2026-10-09 15:51] me: 好
+[2026-10-09 15:53] 徐志成: 北京市君合律师事务所
+徐志成 邀请您参加腾讯会议
+https://meeting.tencent.com/dm/n5GwDugMTwDU
+[2026-10-09 15:53] [系统] recalled a message
+  ↳ stray
+[2026-10-09 15:54] 徐志成: 明天咱们可以用这个会议链接~`;
+
+  it("keeps a group message's later lines, URL included", () => {
+    const msgs = parseGroupHistory(GROUP);
+    expect(msgs.map((m) => m.text)).toEqual([
+      "好",
+      "北京市君合律师事务所\n徐志成 邀请您参加腾讯会议\nhttps://meeting.tencent.com/dm/n5GwDugMTwDU",
+      "明天咱们可以用这个会议链接~",
+    ]);
+  });
+
+  it("keeps a 1:1 message's later lines and ignores the header", () => {
+    const msgs = parseChatHistory(
+      `徐志成 的消息记录（返回 1 条）
+
+[2026-10-09 15:53] 徐志成: 会议主题：交易文件沟通
+https://meeting.tencent.com/dm/n5GwDugMTwDU`,
+      "徐志成",
+    );
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]!.text).toBe("会议主题：交易文件沟通\nhttps://meeting.tencent.com/dm/n5GwDugMTwDU");
   });
 });
 
