@@ -1497,6 +1497,34 @@ describe("calendar auto-create", () => {
     expect(a.status).toBe("executed");
     expect(a.params.execution_receipt).toMatchObject({ kind: "local", ref: "already-on-calendar:qcs" });
   });
+
+  // 2026-10-10: a 13:00 card beside 杜伟's 14:30 invite for the same call.
+  const later = { id: "weidu", summary: "OSYX SoW and Contact review", start: { dateTime: "2030-10-16T14:30:00+08:00" }, end: { dateTime: "2030-10-16T15:00:00+08:00" }, organizer: { email: "wei.du.ks@renesas.com", displayName: "Wei Du" } };
+  const judge = (answer: string, asked: string[] = []) => ({
+    json: async (req: { userText: string }) => (asked.push(req.userText), { event: answer }),
+    personaFor: () => null as never,
+    fetchCorpus: async () => "",
+    personaDir: dir,
+  });
+
+  it("settles the card when the same meeting is on his calendar at another time", async () => {
+    seedMeeting(0.82);
+    const { insertEvent, deps } = calendar([later]);
+    const asked: string[] = [];
+    await runScanTick({ statePath, sources: [], execute: deps, personaUpdate: judge("E1", asked) });
+    expect(asked.join()).toContain("OSYX SoW and Contact review");
+    expect(insertEvent).not.toHaveBeenCalled();
+    const a = JSON.parse(readFileSync(statePath, "utf8")).actions[0];
+    expect(a.status).toBe("executed");
+    expect(a.params.execution_receipt).toMatchObject({ kind: "local", ref: "already-on-calendar:weidu" });
+  });
+
+  it("books it when the model sees a different meeting", async () => {
+    seedMeeting(0.82);
+    const { insertEvent, deps } = calendar([later]);
+    await runScanTick({ statePath, sources: [], execute: deps, personaUpdate: judge("none") });
+    expect(insertEvent).toHaveBeenCalledTimes(1);
+  });
 });
 
 // The readback reads exactly the lists tracked tasks LIVE in — derived from the

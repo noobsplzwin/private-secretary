@@ -59,6 +59,7 @@ import { saveOwnerTickets } from "../io/owner-tickets-store.js";
 import { recordOwnerNotes } from "../io/owner-notes-store.js";
 import { localDate } from "../core/ticktick-plan.js";
 import { closeDoneCards } from "./card-closure.js";
+import { sameMeetingOnCalendar } from "./same-meeting.js";
 import { loadOwnerTickets } from "../io/owner-tickets-store.js";
 import { findPlanProgress, mergePlanUpdates, type PlanUpdate } from "../core/plan-progress.js";
 import { ownerTicketsFrom } from "../core/owner-tickets.js";
@@ -1972,6 +1973,17 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
     );
     for (const action of auto) {
       try {
+        // The same meeting at another time — a proposal in chat vs. the invite
+        // that followed it (2026-10-10, 杜伟's 14:30 beside a 13:00 card).
+        const same = await sameMeetingOnCalendar(action, opts.execute, opts.personaUpdate?.json, opts.draft?.resolvePersona);
+        if (same) {
+          const settled = markExecuted(withReceipt(approveAction(action), { kind: "local", ref: `already-on-calendar:${same.id ?? same.summary ?? "?"}`, at: new Date().toISOString() }));
+          await commitUnderLock((fresh) => {
+            fresh.actions = fresh.actions.map((a) => (a.id === settled.id ? settled : a));
+          });
+          console.log(`[calendar] same meeting already on calendar ("${same.summary ?? "?"}" ${same.start.dateTime ?? ""}): ${String(action.params.title ?? action.id)}`);
+          continue;
+        }
         const r = await executeAction(approveAction(action), {
           ...opts.execute,
           notifyAttendees: false,
