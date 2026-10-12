@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { pollChannel, pollResultToInbound, scanSlackDirect, ownerLastSpokeInChannels,
+import { pollChannel, pollResultToInbound, scanSlackDirect, ownerLastSpokeInChannels, ownerLinesFromPoll,
   selectChannelsToPoll,
 } from "./slack-direct.js";
 import type {
@@ -379,6 +379,44 @@ describe("ownerLastSpokeInChannels (answered-closes on Slack)", () => {
     const m = await ownerLastSpokeInChannels(fake({ D2: [{ user: "UME", ts: "1789300000.000000" }] }), "UME", ["D1", "D2"], 0);
     expect(m.has("D1")).toBe(false);
     expect(m.get("D2")).toBe(1789300000000);
+  });
+});
+
+// 2026-10-12: a card closed only when the other side spoke again. His own
+// lines in a channel with an open card now reach the closure check.
+describe("ownerLinesFromPoll", () => {
+  const poll = {
+    selfId: "UME",
+    channels: [
+      {
+        channel: { id: "D1", is_im: true },
+        raw: { channel_id: "D1", messages: [{ ts: "1789300000.000100", user: "UMICHAEL", text: "SR&ED report ready" }, { ts: "1789300200.000000", user: "UME", text: "Approved, ship it" }] },
+        newLastTs: "1789300200.000000",
+      },
+      {
+        channel: { id: "D2", is_im: true },
+        raw: { channel_id: "D2", messages: [{ ts: "1789300300.000000", user: "UME", text: "hi" }] },
+        newLastTs: "1789300300.000000",
+      },
+    ],
+  } as never;
+
+  it("carries his lines, under the card's own handle, only where a card is open", () => {
+    const out = ownerLinesFromPoll(poll, new Map([["D1", ["UMICHAEL"]]]));
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      ownerOnly: true,
+      senderHandle: "UMICHAEL",
+      text: "Approved, ship it",
+      id: "slack:D1:me:1789300200.000000",
+      timestampMs: 1789300200000,
+    });
+    expect(out[0]!.threadContext).toContain("我: Approved, ship it");
+  });
+
+  it("nothing when only the other side spoke", () => {
+    const quiet = { selfId: "UME", channels: [{ channel: { id: "D1" }, raw: { channel_id: "D1", messages: [{ ts: "1", user: "UJ", text: "x" }] }, newLastTs: "1" }] } as never;
+    expect(ownerLinesFromPoll(quiet, new Map([["D1", ["UJ"]]]))).toEqual([]);
   });
 });
 

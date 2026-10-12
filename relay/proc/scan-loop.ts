@@ -64,11 +64,11 @@ import { findPlanProgress, mergePlanUpdates, type PlanUpdate } from "../core/pla
 import { ownerTicketsFrom } from "../core/owner-tickets.js";
 import { machineTimeZone } from "../io/settings.js";
 import { updatePersonaCommitments, type PersonaUpdateDeps } from "./persona-update.js";
-import { ownerLastSpokeInChannels, scanSlackDirect } from "../sources/slack-direct.js";
+import { ownerLastSpokeInChannels, ownerLinesFromPoll, scanSlackDirect } from "../sources/slack-direct.js";
 import { resolveSlackUserNames } from "../io/slack-users.js";
 import type { SlackClient } from "../io/slack-api.js";
 import { GmailClient } from "../io/gmail-api.js";
-import { ownerLastSpokeInThreads, scanGmailDirect } from "../sources/gmail-direct.js";
+import { ownerLastSpokeInThreads, ownerRepliesInThreads, scanGmailDirect } from "../sources/gmail-direct.js";
 import {
   createSlackClientFromKeychain,
   SLACK_ACCOUNTS,
@@ -302,6 +302,29 @@ async function acquireLockWithRetry(stateDir: string, tries = 10, delayMs = 200)
 }
 
 /**
+ * Open task cards of one platform, grouped by a conversation key → their exact
+ * sender handles. Only there are Leo's own lines carried (InboundMessage.ownerOnly).
+ */
+function openCardHandles(
+  actions: readonly ActionItem[],
+  platform: string,
+  keyOf: (a: ActionItem) => string | undefined,
+): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const a of actions) {
+    if ((a.status !== "suggested" && a.status !== "approved") || a.action_type !== "task") continue;
+    if (a.source_message_id.split(":")[0] !== platform) continue;
+    const key = keyOf(a);
+    const handle = a.context?.sender_handle;
+    if (!key || !handle) continue;
+    const hs = out.get(key) ?? [];
+    if (!hs.includes(handle)) hs.push(handle);
+    out.set(key, hs);
+  }
+  return out;
+}
+
+/**
  * Drop cards as SUPERSEDED: the label first, then the cards. If the label
  * cannot be written the cards stay (the next tick retries) — the labels.jsonl
  * contract is that no card leaves without its label. Returns how many left.
@@ -501,6 +524,8 @@ async function pollSlack(ctx: PollContext): Promise<void> {
       } catch (e) {
         console.log(`[slack] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
       }
+      // His own new lines where a card is still open → the closure check only.
+      sourceMessages.push(...ownerLinesFromPoll(r.raw, openCardHandles(state.actions, "slack", (a) => a.source_message_id.split(":")[1])));
       let triggered = 0;
       let filtered = 0;
       for (const m of r.inbound) {
@@ -621,6 +646,27 @@ async function pollGmail(ctx: PollContext): Promise<number> {
         }
       } catch (e) {
         console.log(`[gmail] answered-check failed — ${(e as Error).message.split("\n")[0]}`);
+      }
+      // His own replies in threads with an open card → the closure check only.
+      // A per-thread mark (fetch-owned, like every mark) keeps a reply from
+      // being checked twice; the first look starts where the card was born.
+      try {
+        const byThread = openCardHandles(state.actions, "gmail", (a) => a.context?.thread_ref);
+        const threads = [...byThread].flatMap(([threadId, handles]) => {
+          const born = Math.min(
+            ...state.actions.filter((a) => a.context?.thread_ref === threadId).map((a) => Date.parse(a.created_at)).filter(Number.isFinite),
+          );
+          const sinceMs = Math.max(Number.isFinite(born) ? born : Date.now(), state.marks[`gmail-own:${threadId}`]?.lastTimestampMs ?? 0);
+          return handles.map((handle) => ({ threadId, handle, sinceMs }));
+        });
+        if (threads.length > 0) {
+          for (const m of await ownerRepliesInThreads(clients, threads)) {
+            sourceMessages.push(m);
+            Object.assign(state.marks, advance(m.source, m.id, m.timestampMs, state.marks));
+          }
+        }
+      } catch (e) {
+        console.log(`[gmail] own-reply check failed — ${(e as Error).message.split("\n")[0]}`);
       }
       let triggered = 0;
       let filtered = 0;

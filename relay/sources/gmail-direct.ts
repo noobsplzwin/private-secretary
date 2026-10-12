@@ -491,3 +491,66 @@ export async function ownerLastSpokeInThreads(
   }
   return out;
 }
+
+// The quoted history under a reply — 「On … wrote:」, 「在 … 写道：」, an Outlook
+// header block, or `>` lines. It is the OTHER side's words; left in, a closure
+// quote could land on what they said and count as his.
+const QUOTE_START = [/^On .+wrote:\s*$/, /^在.+写道[:：]?\s*$/, /^-{2,}\s*(Original Message|原始邮件)\s*-{2,}/i, /^From:\s/, /^发件人[:：]/, /^>/];
+
+/** A reply's own words, without the history it quotes. */
+export function ownWords(text: string): string {
+  const lines = text.split(/\r?\n/);
+  const cut = lines.findIndex((l) => QUOTE_START.some((re) => re.test(l.trim())));
+  return (cut < 0 ? lines : lines.slice(0, cut)).join("\n").trim();
+}
+
+/**
+ * Leo's OWN replies in threads with an open card, newer than `sinceMs` per
+ * thread, as closure-only messages (InboundMessage.ownerOnly). The inbox poll
+ * never sees his sent mail, so the thread is read directly — only for threads
+ * a card is waiting on. The caller keeps the per-thread high-water mark.
+ */
+export async function ownerRepliesInThreads(
+  clients: Readonly<Record<string, GmailClient>>,
+  threads: ReadonlyArray<{ threadId: string; handle: string; sinceMs: number }>,
+): Promise<InboundMessage[]> {
+  const out: InboundMessage[] = [];
+  for (const t of threads) {
+    for (const [email, client] of Object.entries(clients)) {
+      let thread;
+      try {
+        thread = await client.getThread({ id: t.threadId, format: "full" });
+      } catch {
+        continue; // not this mailbox's thread
+      }
+      const self = email.toLowerCase();
+      const sorted = [...(thread.messages ?? [])].sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0));
+      const mine = sorted.filter((m) => senderEmail(m).toLowerCase() === self && Number(m.internalDate ?? 0) > t.sinceMs);
+      const texts = mine.map((m) => ownWords(extractText(m))).filter(Boolean);
+      if (texts.length > 0) {
+        const latest = Math.max(...mine.map((m) => Number(m.internalDate ?? 0)));
+        out.push({
+          id: `gmail:${t.threadId}:me:${latest}`,
+          platform: "gmail",
+          senderHandle: t.handle,
+          timestampMs: latest,
+          text: texts.join("\n"),
+          source: `gmail-own:${t.threadId}`,
+          isDirectMessage: false,
+          mentionsUser: false,
+          isReplyInUserThread: true,
+          recipientsIncludeUser: true,
+          threadAnsweredByUserAfter: true,
+          userIsLastSenderInChannel: true,
+          threadContext: sorted
+            .filter((m) => Number(m.internalDate ?? 0) <= t.sinceMs)
+            .map((m) => `${senderEmail(m).toLowerCase() === self ? "我" : senderEmail(m)}: ${ownWords(extractText(m)).slice(0, 1500)}`)
+            .join("\n"),
+          ownerOnly: true,
+        });
+      }
+      break; // the thread was readable here; no other mailbox owns it
+    }
+  }
+  return out;
+}

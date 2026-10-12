@@ -5,6 +5,8 @@ import {
   pollMailbox,
   scanGmailDirect,
   ownerLastSpokeInThreads,
+  ownerRepliesInThreads,
+  ownWords,
 } from "./gmail-direct.js";
 import { encodeBase64Url, type GmailClient, type GmailMessage } from "../io/gmail-api.js";
 
@@ -500,6 +502,38 @@ describe("ownerLastSpokeInThreads (answered-closes on Gmail)", () => {
   it("omits a thread no mailbox can read", async () => {
     const m = await ownerLastSpokeInThreads({ "leo@taiv.tv": client({}) }, ["t1"]);
     expect(m.size).toBe(0);
+  });
+});
+
+// 2026-10-12: his reply in a thread with an open card reaches the closure
+// check — his words only, never the history his mail client quoted under it.
+describe("ownerRepliesInThreads", () => {
+  const body = (t: string) => ({ mimeType: "text/plain", body: { data: encodeBase64Url(t) } });
+  const msg = (from: string, ms: number, text: string) => ({
+    id: String(ms), threadId: "t1", internalDate: String(ms),
+    payload: { headers: [{ name: "From", value: from }], ...body(text) },
+  });
+  const client = (owned: Record<string, any[]>) =>
+    ({ getThread: async ({ id }: { id: string }) => { if (!(id in owned)) throw new Error("404"); return { id, messages: owned[id] }; } }) as any;
+  const thread = [
+    msg("David <david@osyx.tech>", 100, "Can you route the Renesas legal review?"),
+    msg("Leo <leo@osyx.tech>", 200, "Done, forwarded to Sandro.\n\nOn Mon, David wrote:\n> Can you route the Renesas legal review?"),
+  ];
+
+  it("carries his new reply under the card's handle, quoted history cut", async () => {
+    const out = await ownerRepliesInThreads({ "leo@osyx.tech": client({ t1: thread }) }, [{ threadId: "t1", handle: "david@osyx.tech", sinceMs: 150 }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ ownerOnly: true, senderHandle: "david@osyx.tech", text: "Done, forwarded to Sandro.", source: "gmail-own:t1", id: "gmail:t1:me:200" });
+    expect(out[0]!.threadContext).toContain("Can you route the Renesas legal review?");
+  });
+
+  it("nothing at or before the mark", async () => {
+    expect(await ownerRepliesInThreads({ "leo@osyx.tech": client({ t1: thread }) }, [{ threadId: "t1", handle: "x", sinceMs: 200 }])).toEqual([]);
+  });
+
+  it("ownWords cuts Chinese and Outlook quote headers too", () => {
+    expect(ownWords("好的，已寄出\n在 2026年10月10日，金小奇 写道：\n> 寄了吗")).toBe("好的，已寄出");
+    expect(ownWords("Signed.\n-----Original Message-----\nFrom: x")).toBe("Signed.");
   });
 });
 

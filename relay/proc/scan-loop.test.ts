@@ -1798,4 +1798,32 @@ describe("his own line closes the card it finishes", () => {
     expect(card.status).toBe("executed");
     expect(card.params).toMatchObject({ closed_by: "conversation", closed_evidence: "脱敏材料.pdf" });
   });
+  it("Slack too: his reply in the DM closes the card it finishes", async () => {
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
+        actions: [{
+          id: "s1", source_message_id: "slack:D1:1.0", action_type: "task", target: { platform: "slack" },
+          reason: "r", confidence: 0.9, headline: "Approve SR&ED report", params: { title: "Approve SR&ED report", kind: "decide" },
+          status: "suggested", created_at: "2026-06-14T12:00:00Z", context: { sender_handle: "U2", original_message: "please approve" },
+        }],
+      }),
+    );
+    let drafted = false;
+    await runScanTick({
+      statePath,
+      sources: ["slack"],
+      slackClient: slackStub([{ id: "D1", is_im: true }], { D1: [{ ts: "1781500000.000100", user: SELF_SLACK, text: "Approved the SR&ED report" }] }),
+      draft: { llm: async () => ((drafted = true), []), resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-15T00:00:00Z" },
+      personaUpdate: {
+        json: async () => ({ closed: [{ item: "R1", evidence: "Approved the SR&ED report" }] }),
+        personaFor: () => null as never,
+        fetchCorpus: async () => "",
+        personaDir: dir,
+      },
+    });
+    expect(drafted).toBe(false);
+    expect(loadState(statePath).actions[0]!.status).toBe("executed");
+  });
 });

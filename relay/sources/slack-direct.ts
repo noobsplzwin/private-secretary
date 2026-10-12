@@ -475,3 +475,50 @@ export async function ownerLastSpokeInChannels(
   }
   return out;
 }
+
+/**
+ * Leo's OWN new messages, in channels with an open card, as closure-only
+ * messages (InboundMessage.ownerOnly). pollResultToInbound drops them — they
+ * are never an ask — but they are where he finishes the card: 「Approved」, the
+ * file he attached. Read from this poll, so the channel cursor that already
+ * keeps a message from being drafted twice keeps it from being checked twice.
+ * One message per card handle, because the closure check matches a card by
+ * its exact sender handle.
+ */
+export function ownerLinesFromPoll(
+  result: SlackPollResult,
+  handlesByChannel: ReadonlyMap<string, readonly string[]>,
+): InboundMessage[] {
+  const out: InboundMessage[] = [];
+  for (const polled of result.channels) {
+    const handles = handlesByChannel.get(polled.channel.id);
+    if (!handles || handles.length === 0) continue;
+    const msgs = polled.raw.messages;
+    const mine = msgs.filter((m) => m.user === result.selfId && m.text.trim());
+    if (mine.length === 0) continue;
+    const last = mine[mine.length - 1]!;
+    const threadContext = msgs
+      .filter((m) => m.text.trim())
+      .map((m) => `${m.user === result.selfId ? "我" : m.user}: ${m.text}`)
+      .join("\n");
+    for (const handle of handles) {
+      out.push({
+        id: `slack:${polled.channel.id}:me:${last.ts}${handles.length > 1 ? `:${handle}` : ""}`,
+        platform: "slack",
+        senderHandle: handle,
+        timestampMs: Math.round(Number(last.ts) * 1000),
+        text: mine.map((m) => m.text).join("\n"),
+        source: `slack:${polled.channel.id}`,
+        isDirectMessage: polled.channel.is_im === true || polled.channel.is_mpim === true,
+        mentionsUser: false,
+        isReplyInUserThread: false,
+        recipientsIncludeUser: true,
+        threadAnsweredByUserAfter: true,
+        userIsLastSenderInChannel: true,
+        threadContext,
+        ownerOnly: true,
+      });
+    }
+  }
+  return out;
+}
