@@ -713,6 +713,15 @@ async function pollWechat(ctx: PollContext): Promise<WechatPoll> {
       }
       const fetchHistory =
         opts.wechatFetchHistory ?? ((name: string, limit: number) => wechatHistory(name, { limit }));
+      // Chats with a card still open: only there are Leo's own lines worth
+      // carrying (InboundMessage.ownerOnly). Read-only — the fetch lane owns no actions.
+      const openCardChats = new Set(
+        state.actions
+          .filter((a) => (a.status === "suggested" || a.status === "approved") && a.action_type === "task")
+          .map((a) => a.context?.sender_handle)
+          .filter((h): h is string => !!h),
+      );
+      const hasOpenCard = (name: string): boolean => openCardChats.has(name);
       const directBefore = opts.wechatDirect?.load() ?? {};
       const r = await scanWechatInbox({
         fetchSessions: opts.wechatFetchSessions ?? (() => wechatSessions({ limit: 30 })),
@@ -720,6 +729,7 @@ async function pollWechat(ctx: PollContext): Promise<WechatPoll> {
         officialNames,
         nowMs: startedAtMs,
         book: directBefore,
+        hasOpenCard,
       });
       // NOT saved yet. The cursor is held until the drafter has had its turn:
       // a chat whose draft FAILS must be re-read next tick, or its messages are
@@ -741,6 +751,7 @@ async function pollWechat(ctx: PollContext): Promise<WechatPoll> {
             book: groupsBefore,
             fetchHistory,
             now: () => new Date(startedAtMs).toISOString(),
+            hasOpenCard,
           });
           // Held for the same reason as the 1:1 book above.
           pendingWechatGroups = { prev: groupsBefore, next: g.book };
@@ -781,6 +792,12 @@ async function pollWechat(ctx: PollContext): Promise<WechatPoll> {
       let triggered = 0;
       let filtered = 0;
       for (const m of fresh) {
+        // His own lines are not an ask, so the trigger filter has nothing to
+        // say about them; they go to the closure check only.
+        if (m.ownerOnly) {
+          sourceMessages.push(m);
+          continue;
+        }
         const decision = evaluateTrigger(m);
         if (decision.relay) {
           triggered++;
@@ -1525,7 +1542,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // had already read — is never drafted. The card itself is updated in the
   // same locked commit that settles the inbox, re-matched against disk.
   const inviteMsgs = draftInput.filter((m) => m.invite);
-  const toDraft = draftInput.filter((m) => !m.invite || (!m.inviteOnly && !cardForInvite(state.actions, m.invite)));
+  const toDraft = draftInput.filter(
+    (m) => !m.ownerOnly && (!m.invite || (!m.inviteOnly && !cardForInvite(state.actions, m.invite))),
+  );
+  // His own lines (ownerOnly) are never drafted — they only close cards.
+  const ownerMsgs = draftInput.filter((m) => m.ownerOnly);
   if (opts.draft && toDraft.length > 0) {
     try {
       console.log(`[progress] drafting ${toDraft.length} candidate(s)…`);
@@ -1590,6 +1611,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       }
     } catch (e) {
       llmDraftError = errString(e);
+    }
+  }
+  if (opts.personaUpdate && ownerMsgs.length > 0) {
+    try {
+      doneCards.push(...(await closeDoneCards(state.actions, ownerMsgs, new Set(), opts.personaUpdate.json)));
+    } catch (e) {
+      console.error(`[closure] own-line check failed: ${errString(e)}`);
     }
   }
 

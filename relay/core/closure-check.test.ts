@@ -44,6 +44,17 @@ describe("spokenFromBatch", () => {
       { speaker: "them", text: "这个黑色logo是android的吗" },
     ]);
   });
+
+  it("an ownerOnly message's own text is Leo's, so his line can close his card", () => {
+    const s = spokenFromBatch([
+      { id: "m", platform: "wechat", senderHandle: "程敏", timestampMs: 1, text: "[文件] 脱敏材料.pdf", ownerOnly: true, threadContext: "程敏: 材料发我一下" } as never,
+    ]);
+    expect(s).toEqual([
+      { speaker: "them", text: "程敏: 材料发我一下" },
+      { speaker: "me", text: "[文件] 脱敏材料.pdf" },
+    ]);
+    expect(closureProven(s, { handle: "R1", what: "发脱敏材料给程敏", side: "me" }, "脱敏材料.pdf")).toBe(true);
+  });
 });
 
 describe("findClosures", () => {

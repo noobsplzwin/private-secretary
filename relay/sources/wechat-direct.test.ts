@@ -451,6 +451,45 @@ describe("first contact with a group drops history, not the messages that woke i
   });
 });
 
+// 2026-10-12 — a card closed only when the OTHER side spoke again. He sent
+// the file, they went quiet, the row stayed. His own lines now travel to the
+// closure check (ownerOnly) — and only from a chat with a card still open.
+describe("ownerOnly: Leo's own lines reach the closure check", () => {
+  const direct = (hasOpenCard?: (n: string) => boolean) =>
+    scanWechatInbox({
+      fetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] 程敏 (0条未读)\n  文本: [文件] 脱敏材料.pdf",
+      fetchHistory: async () => "[2026-06-14 20:00] 程敏: 材料发我一下\n[2026-06-14 21:00] me: [文件] 脱敏材料.pdf",
+      nowMs: new Date("2026-06-14T22:00:00").getTime(),
+      book: { 程敏: { lastSeenMs: new Date("2026-06-14T20:30:00").getTime() } },
+      ...(hasOpenCard ? { hasOpenCard } : {}),
+    });
+
+  it("1:1 — carries his line, never as something to draft", async () => {
+    const { inbound } = await direct((n) => n === "程敏");
+    expect(inbound).toHaveLength(1);
+    expect(inbound[0]).toMatchObject({ ownerOnly: true, senderHandle: "程敏", text: "[文件] 脱敏材料.pdf" });
+    expect(inbound[0]!.id).toBe(`wechat:程敏:me:${new Date("2026-06-14T21:00:00").getTime()}`);
+  });
+
+  it("1:1 — nothing when no card from that chat is open", async () => {
+    expect((await direct(() => false)).inbound).toEqual([]);
+    expect((await direct()).inbound).toEqual([]);
+  });
+
+  it("group — carries his line when the group has an open card", async () => {
+    const r = await scanWechatGroups({
+      sessions: [{ name: "亿方-Taiv沟通群", isGroup: true, unread: 0, tsMs: Date.parse("2026-09-12T17:40:00") }],
+      book: { "亿方-Taiv沟通群": { decision: "allow", by: "owner", at: "x", lastSeenMs: Date.parse("2026-09-12T17:00:00") } },
+      fetchHistory: async () =>
+        "群 的消息记录: [群聊]\n\n[2026-09-12 16:50] Jet: 纸箱是给4.3的吗\n[2026-09-12 17:39] me: 是4.3的",
+      now: () => "x",
+      hasOpenCard: () => true,
+    });
+    expect(r.inbound).toHaveLength(1);
+    expect(r.inbound[0]).toMatchObject({ ownerOnly: true, text: "是4.3的", isDirectMessage: false });
+  });
+});
+
 // 2026-10-01 — the person pass only woke when the OTHER side wrote, and never
 // for a group. Participation is what the scanners now report to it.
 describe("participation: who took part in what was read", () => {

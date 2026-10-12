@@ -80,6 +80,13 @@ export interface InboundMessage {
   invite?: import("./calendar-invite.js").ParsedInvite;
   /** True for an invite in mail already READ: it travels only to be reconciled, never drafted. */
   inviteOnly?: boolean;
+  /**
+   * Leo's OWN new lines in a conversation with an open card. Carried only so
+   * the closure check can see him finish the card (core/closure-check.ts);
+   * never drafted. Without it a card closed only when the OTHER side spoke
+   * again — he answered, they went quiet, and the row sat there.
+   */
+  ownerOnly?: boolean;
   // Recent conversation around this message (both sides, oldest→newest, sender-
   // labelled), for the analyzer to understand context. This is BACKGROUND — the
   // thing to respond to is `text`; threadContext must NOT be re-answered. Set by

@@ -32,6 +32,7 @@ import { buildDraftRequest, type DraftedAction } from "./draft-prompt.js";
 import { selectProjects, renderProjectContext, renderProjectCatalog, type Project } from "../core/project.js";
 import { detectMentions } from "../core/mentions.js";
 import { isConsumeUnreadableCard } from "../core/unreadable-gate.js";
+import { isChatOnlyTask } from "../core/task-kind.js";
 import type { FileText } from "../core/file-text.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
@@ -352,6 +353,12 @@ export async function draftActions(
       const claimed: string = s.action_type;
       if (claimed === "reply" || claimed === "relay" || claimed === "forward") {
         senderErrors.push(`dropped ${claimed}: message drafting is retired — emit a task instead`);
+        continue;
+      }
+      // A SENTENCE IS NOT A TICKET (core/task-kind.ts): a task the drafter
+      // itself labels reply/schedule is done in the chat, never on his list.
+      if (claimed === "task" && isChatOnlyTask(s.params as Record<string, unknown> | undefined)) {
+        senderErrors.push(`dropped "${s.headline}": kind ${String((s.params as Record<string, unknown>).kind)} — he answers in the chat`);
         continue;
       }
       // DECODE FAILED → NO CARD (owner, 2026-09-20). When this batch carried

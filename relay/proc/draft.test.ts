@@ -383,6 +383,18 @@ describe("draftActions orchestrator", () => {
     expect(r.actions).toHaveLength(1);
     expect(r.actions[0]!.action_type).toBe("task");
   });
+
+  // 「你还是会因为我随便收到一条信息，就创建一个"确认xxx"，"回复xxx" Ticket」
+  it("drops a task the drafter labels reply or schedule, keeps real work", async () => {
+    const llm: LlmCaller = async () => [
+      { action_type: "task", reason: "r", confidence: 0.9, headline: "确认周一会议是否逐条讲SoW", params: { title: "确认周一会议是否逐条讲SoW", kind: "reply" } } as DraftedAction,
+      { action_type: "task", reason: "r", confidence: 0.9, headline: "问马总下周是否有空", params: { title: "问马总下周是否有空", kind: "schedule" } } as DraftedAction,
+      { action_type: "task", reason: "r", confidence: 0.9, headline: "发WiFi模组原理图给Amy", params: { title: "发WiFi模组原理图给Amy", kind: "deliver" } } as DraftedAction,
+    ];
+    const r = await draftActions([msg()], deps(llm));
+    expect(r.actions.map((a) => a.params.title)).toEqual(["发WiFi模组原理图给Amy"]);
+    expect(r.dropped.flatMap((d) => d.errors).join()).toContain("he answers in the chat");
+  });
 });
 
 describe("buildPersonaResolver", () => {

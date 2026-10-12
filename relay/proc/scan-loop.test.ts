@@ -1733,3 +1733,69 @@ describe("a calendar invite settles its meeting card across the lanes", () => {
     expect(after.inbox).toEqual([]);
   });
 });
+
+// 2026-10-12 「Ticket自动结束的feature」: he sent the file in the chat the card
+// came from, the other side went quiet, and the card stayed — the closure check
+// only ever ran on a batch the OTHER side had just sent.
+describe("his own line closes the card it finishes", () => {
+  const seedCard = () =>
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 2,
+        marks: {},
+        actions: [
+          {
+            id: "c1",
+            source_message_id: "wechat:程敏:1",
+            action_type: "task",
+            target: { platform: "wechat" },
+            reason: "r",
+            confidence: 0.9,
+            headline: "发脱敏材料给程敏",
+            params: { title: "发脱敏材料给程敏", kind: "deliver" },
+            status: "suggested",
+            created_at: "2026-06-14T12:00:00Z",
+            context: { sender_handle: "程敏", original_message: "材料发我一下" },
+          },
+        ],
+        outcomes: [],
+        sourceErrors: {},
+        tasks: {},
+      }),
+    );
+
+  it("closes on his verbatim line, and drafts nothing from it", async () => {
+    seedCard();
+    let drafted = false;
+    const asked: string[] = [];
+    await runScanTick({
+      statePath,
+      sources: ["wechat"],
+      wechatFetchContacts: async () => "",
+      wechatDirect: { load: () => ({ 程敏: { lastSeenMs: new Date("2026-06-14T20:30:00").getTime() } }), save: () => {} },
+      wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] 程敏\n  文本: [文件] 脱敏材料.pdf",
+      wechatFetchHistory: async () => "[2026-06-14 20:00] 程敏: 材料发我一下\n[2026-06-14 21:00] me: [文件] 脱敏材料.pdf",
+      draft: {
+        llm: async () => ((drafted = true), []),
+        resolvePersona: () => null,
+        knownPersonaKeys: [],
+        now: () => "2026-06-14T22:00:00Z",
+      },
+      personaUpdate: {
+        json: async (req) => {
+          asked.push(req.userText);
+          return { closed: [{ item: "R1", evidence: "脱敏材料.pdf" }] };
+        },
+        personaFor: () => null as never,
+        fetchCorpus: async () => "",
+        personaDir: dir,
+      },
+    });
+    expect(drafted).toBe(false);
+    expect(asked.join()).toContain("我: [文件] 脱敏材料.pdf");
+    const card = loadState(statePath).actions[0]!;
+    expect(card.status).toBe("executed");
+    expect(card.params).toMatchObject({ closed_by: "conversation", closed_evidence: "脱敏材料.pdf" });
+  });
+});

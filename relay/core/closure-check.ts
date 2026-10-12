@@ -83,9 +83,10 @@ export function spokenFromBatch(msgs: readonly InboundMessage[]): Spoken[] {
       const t = line.trim();
       if (t) add({ speaker: OWNER_PREFIX.test(t) ? "me" : "them", text: t });
     }
+    // An ownerOnly message's own text is Leo's lines; any other is the sender's.
     for (const line of m.text.split("\n")) {
       const t = line.trim();
-      if (t) add({ speaker: "them", text: t });
+      if (t) add({ speaker: m.ownerOnly ? "me" : "them", text: t });
     }
   }
   return out;

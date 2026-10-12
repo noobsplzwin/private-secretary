@@ -19,9 +19,9 @@ which he struck 7 of 19 tasks as already finished or never his):
    named person and nothing being produced, is not an action — it is a feeling
    that something is unfinished. Name WHO he asks and WHAT he asks for, or drop
    the line. "Ask the supplier to re-check their bank" is not his work.
-3. A MEETING IS "约 X 做 Y", NOT "确认时间". If the point is time with someone,
-   the line is 约 <person> <purpose> — one line, not a chain of confirm-the-time
-   / send-the-invite / sync-afterwards.
+3. A MEETING IS NOT A LINE. Agreeing a time happens in the chat; once a time is
+   said it goes straight onto the calendar (「日历直接创建」). No 约X定时间, no
+   confirm-the-time / send-the-invite / attend-the-call rows.
 4. PINGING NEEDS A REASON. No "ping/催/follow up with X" unless EITHER 7+
    business days have passed with no reply from X, OR his own deadline is close.
    Otherwise the thread is simply in flight and needs nothing from him.
@@ -93,6 +93,14 @@ which he struck 7 of 19 tasks as already finished or never his):
    one of its steps names four documents to send. A card that can name a
    deliverable or a decision is work; a card whose every step is "go find out"
    is the engine stalling.
+
+11. A SENTENCE HE OWES IS NOT A LINE. 回复 / 确认 / 问 / 告知 / 提醒 / 回电 /
+   转达 — when saying something to someone is the whole job, he does it in the
+   chat it came from. 「你不能每收到一句话，就让我回复建立一个Ticket」. Of 21 card
+   rows he closed by hand 2026-10-06…12, 13 were this: 「回复古龙确认10.12是否
+   已约」, 「转达丽艳姓名生日给敏工」, 「问 Sandro 是否愿意参加澳门论坛」. A line
+   needs something that outlives the conversation: a file sent, money moved, a
+   decision taken, work done.
 
 LANGUAGE FOLLOWS THE SOURCE. A WeChat thread produces Chinese headline / summary
 / next_actions; a Slack or Gmail thread produces English. Do not translate the

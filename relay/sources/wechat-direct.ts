@@ -176,6 +176,8 @@ export interface WechatInboxOptions {
   historyCap?: number; // max messages to pull per session (default 20)
   /** Cursor book: how far each chat has been scanned. */
   book: DirectBook;
+  /** Is a card from this chat still open? Only then do Leo's own lines travel (ownerOnly). */
+  hasOpenCard?: (name: string) => boolean;
 }
 
 // One InboundMessage per unread 1:1 session, carrying the combined incoming
@@ -247,7 +249,15 @@ export async function scanWechatInbox(
     const moved = history.filter((m) => m.tsMs > since);
     if (moved.length > 0) spoke.push({ handle: s.name, tsMs: Math.max(...moved.map((m) => m.tsMs)) });
     const fresh = history.filter((m) => m.isIncoming && m.tsMs > since);
-    if (fresh.length === 0) continue; // only Leo spoke → context, not an ask
+    if (fresh.length === 0) {
+      // Only Leo spoke → context, not an ask — but it may be him FINISHING a
+      // card from this chat, so it travels to the closure check (ownerOnly).
+      const mine = moved.filter((m) => !m.isIncoming && m.text);
+      if (mine.length > 0 && opts.hasOpenCard?.(s.name)) {
+        inbound.push(ownerLines(s.name, mine, history.map((m) => `${m.isIncoming ? s.name : "我"}: ${m.text}`).join("\n"), true));
+      }
+      continue;
+    }
     const combined = fresh.map((m) => m.text).filter(Boolean).join("\n");
     if (!combined) continue; // image/voice-only with no text → nothing to draft from yet
     const unread = fresh;
@@ -333,7 +343,35 @@ export function parseGroupHistory(text: string): GroupMsg[] {
   return out;
 }
 
+/** Leo's own new lines in one chat, as a closure-only message (InboundMessage.ownerOnly). */
+function ownerLines(
+  name: string,
+  mine: ReadonlyArray<{ tsMs: number; text: string }>,
+  threadContext: string,
+  direct: boolean,
+): InboundMessage {
+  const latest = mine[mine.length - 1]!.tsMs;
+  return {
+    id: `wechat:${name}:me:${latest}`,
+    platform: "wechat",
+    senderHandle: name,
+    timestampMs: latest,
+    text: mine.map((m) => m.text).join("\n"),
+    source: `wechat:${name}`,
+    isDirectMessage: direct,
+    mentionsUser: false,
+    isReplyInUserThread: false,
+    recipientsIncludeUser: true,
+    threadAnsweredByUserAfter: true,
+    userIsLastSenderInChannel: true,
+    threadContext,
+    ownerOnly: true,
+  };
+}
+
 export interface WechatGroupScanOptions {
+  /** Is a card from this chat still open? Only then do Leo's own lines travel (ownerOnly). */
+  hasOpenCard?: (name: string) => boolean;
   sessions: readonly RecentSession[];
   book: GroupBook;
   fetchHistory: (name: string, limit: number) => Promise<string>;
@@ -436,7 +474,13 @@ export async function scanWechatGroups(
       if (m.speaker !== OWN_LABEL) spoke.push({ handle: m.speaker, tsMs: m.tsMs, group: name });
       else for (const o of others) spoke.push({ handle: o, tsMs: m.tsMs, group: name });
     }
-    if (unseen.length === 0) continue;
+    if (unseen.length === 0) {
+      const mine = msgs.filter((m) => m.tsMs > cursor && m.speaker === OWN_LABEL && m.text);
+      if (mine.length > 0 && opts.hasOpenCard?.(name)) {
+        inbound.push(ownerLines(name, mine, msgs.map((m) => `${m.speaker === OWN_LABEL ? "我" : m.speaker}: ${m.text}`).join("\n"), false));
+      }
+      continue;
+    }
     const combined = unseen.map((m) => `${m.speaker}: ${m.text}`).filter((l) => l.trim() !== "").join("\n");
     if (!combined) continue;
     const latest = unseen[unseen.length - 1]!;

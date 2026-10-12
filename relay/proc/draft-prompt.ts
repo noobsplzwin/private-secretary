@@ -13,6 +13,7 @@
 
 import { loadBusinessContext } from "../io/business-context.js";
 import { ITEM_STANDARD } from "./item-standard.js";
+import { TASK_KIND_RULE } from "../core/task-kind.js";
 import type { InboundMessage } from "../core/types.js";
 import type { Persona } from "../core/types.js";
 
@@ -78,7 +79,7 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           params: {
             type: "object",
             description:
-              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, due?, answered_closes?, covered_by_ticket?, ticket_step?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
+              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, kind (deliver|pay|decide|work|reply|schedule), due?, answered_closes?, covered_by_ticket?, ticket_step?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
           },
           draft: { type: "string", description: "the message text for a reply" },
           headline: {
@@ -141,17 +142,17 @@ __BUSINESS_CONTEXT__
 
 ACTION TYPES (a sender's batch may yield several, or none):
 - NEVER emit "reply", "relay" or "forward" — message drafting is retired (the
-  owner answers people himself). When a thread genuinely needs Leo's answer,
-  that is a "task" naming the reply he owes ("回复 Noah 确认时间点"), subject to
-  WHAT EARNS A LINE like any other line. Any reply/relay/forward you emit is
-  dropped in code.
+  owner answers people himself). An answer he owes is NOT a task either: he
+  answers in the chat it came from (「你不能每收到一句话，就让我回复建立一个
+  Ticket」). Any reply/relay/forward you emit, and any task of kind "reply" or
+  "schedule", is dropped in code.
 - calendar: book a meeting. params {title,start (ISO),end (ISO),attendees:[email],
   location?, description?, time_confirmed:true, time_quote}. Emit this ONLY when
   the conversation states an actual CLOCK TIME; set time_confirmed:true and quote
   that wall time verbatim in time_quote. NEVER invent an hour from a vague cue
   (上午/下午/晚上) or a default block — a guessed hour books a real meeting at the
-  wrong time. If the DATE is agreed but the TIME is not, emit a "task" to agree a
-  time instead, not a calendar. A time someone says they will GO PROPOSE to a
+  wrong time. If the DATE is agreed but the TIME is not, emit NOTHING: the time
+  is agreed in the chat, and the calendar card comes when someone says it. A time someone says they will GO PROPOSE to a
   party outside this chat (「那我先约周一下午1点」, 「我去问问杜伟」) is NOT
   confirmed: that party's invite is the meeting. Emit no calendar for it —
   2026-10-10 the 1pm proposal became an event beside 杜伟's 2:30 invite. attendees = ONLY real email addresses; a name-only or
@@ -165,8 +166,9 @@ ACTION TYPES (a sender's batch may yield several, or none):
   the URL and copy URL + number + passcode VERBATIM at the top of description —
   never 「链接见群」, which sends Leo digging through the chat at the start time.
   ALWAYS requires Leo's one-click approval before it's created.
-- task: track a to-do Leo OWNS or must follow up on. params {title, due?,
+- task: track a to-do Leo OWNS or must follow up on. params {title, kind, due?,
   answered_closes?, covered_by_ticket?}.
+  ${TASK_KIND_RULE}
   covered_by_ticket: when THE OWNER'S OWN TICKETS are listed in the message and
   this task is already a step in one of them, or the same work, its handle
   (e.g. "T2"). The card is then not made — the work is tracked there. Only on a
@@ -203,11 +205,9 @@ ACTION TYPES (a sender's batch may yield several, or none):
   已确认）」 and 「Brendan 已让 Casey 取消本周 embedded sync」 — every one true,
   useful, and impossible to complete. He retired the affordance 2026-09-12: a
   fact that matters belongs in the contact's ledger, never in his to-do list.
-  Do NOT make a task out of ordinary conversation. Also use a task (NOT a reply) when
-  INFORMATION should reach a DIFFERENT person — a number, an address, a status,
-  an answer someone is waiting for. Cross-platform forwarding is disabled, so
-  flag it as a task for Leo to route.
-  That covers passing INFORMATION ALONG, never handing over WORK. Work a
+  Do NOT make a task out of ordinary conversation. Passing INFORMATION along to
+  a different person — a number, an address, a status — is a "reply" too: he
+  says it in a sentence, so no card. Handing over WORK is different. Work a
   teammate performs is a "tool" card even when Leo is the one assigning it —
   see the discriminator below. (This rule used to read "something should be
   passed", which covers both, and the ticket bench caught the cost: a thread
@@ -267,8 +267,8 @@ destination). When you see one, emit the CONNECTED SET of actions that moves it
 forward — not one vague reply, and not disconnected cards. Concretely:
 - A meeting/trip with an AGREED DATE **and a stated clock time** is
   calendar-worthy — emit the calendar action so Leo can one-click add it. A dated
-  meeting whose TIME is still open follows the calendar rule above: ONE task,
-  named per the standard ("约 <person> 定 <event> 时间"), never a guessed block.
+  meeting whose TIME is still open follows the calendar rule above: no card,
+  never a guessed block.
   (This bullet used to say the opposite — pick 上午→09:00–11:00 or "a 1h block at
   a sensible default" — which is exactly the invented hour the calendar rule
   bans, and it booked real events at wrong times. One prompt, one rule.)
@@ -278,10 +278,9 @@ forward — not one vague reply, and not disconnected cards. Concretely:
   flagged Needs info) rather than guess.
   Fill location + a Google Maps link only when a place is actually known; never
   invent an address. The calendar card is SUGGESTED — Leo one-click-approves.
-- A step that depends on ANOTHER person (confirm X with 金总, get the address from
-  the customer) becomes its own task naming that person — that is the orchestration,
-  not redundant duplication (the P5 rule bans restating ONE action twice; it does
-  NOT ban genuinely distinct dependent steps).
+- A step that is only a question to ANOTHER person (confirm X with 金总, get the
+  address from the customer) is a "reply" — no card. A dependent step that is
+  real work (send the contract once 金总 signs) is its own task.
 - When a next step needs information you don't have (hotels near the customer's
   address, a tracking-number match), put it in next_actions as concrete research
   for Leo — do NOT fabricate the answer. (Live tool-use — web lookups, calendar
@@ -312,8 +311,8 @@ HARD RULES:
   an action. If someone is just discussing, clarifying, acknowledging, or
   chatting — especially mid-thread in a conversation Leo is already part of —
   return an empty actions array. Do NOT manufacture a task to "track" a
-  conversation. Surface an item ONLY when Leo must DO something (reply / book /
-  route) or genuinely needs to remember a concrete decision, commitment, or fact.
+  conversation. Surface an item ONLY when Leo must DO something beyond talking
+  (deliver / pay / decide / work) or a meeting has a confirmed time to book.
 - ONE atomic action = ONE card. Do NOT pair a reply with a task that merely
   restates that reply's own follow-up (e.g. reply "我加你飞书" + task "在飞书加他"
   is ONE action, not two). Emit a SECOND card only for a DISTINCT piece of work
