@@ -127,6 +127,15 @@ describe("CalendarClient — wire layer", () => {
     expect(body.summary).toBe("test");
   });
 
+  it("patchEvent PATCHes only the given fields and emails nobody by default", async () => {
+    const { fetchFn, calls } = fakeFetch(() => ({ ok: true, body: { id: "E1", start: {}, end: {} } }));
+    const c = new CalendarClient({ email: "leo@taiv.tv", fetchFn, tokenOverride: "t" });
+    await c.patchEvent({ eventId: "E1", patch: { location: "https://meeting.tencent.com/dm/x" } });
+    expect(calls[0]?.method).toBe("PATCH");
+    expect(calls[0]?.url).toContain("/events/E1?sendUpdates=none");
+    expect(JSON.parse(calls[0]?.body ?? "{}")).toEqual({ location: "https://meeting.tencent.com/dm/x" });
+  });
+
   it("deleteEvent issues DELETE and tolerates 204 No Content", async () => {
     const { fetchFn, calls } = fakeFetch(() => ({
       ok: true,

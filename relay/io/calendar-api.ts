@@ -126,7 +126,7 @@ export class CalendarClient {
   }
 
   private async call<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
   ): Promise<T> {
@@ -136,7 +136,7 @@ export class CalendarClient {
   }
 
   private async callRaw<T>(
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
   ): Promise<T> {
@@ -254,6 +254,20 @@ export class CalendarClient {
     );
   }
 
+  // Change some fields of an event (events.patch). No email to anyone unless asked.
+  async patchEvent(opts: {
+    eventId: string;
+    patch: Partial<CalendarEvent>;
+    sendUpdates?: "all" | "externalOnly" | "none";
+  }): Promise<CalendarEvent> {
+    const qs = new URLSearchParams({ sendUpdates: opts.sendUpdates ?? "none" });
+    return this.call(
+      "PATCH",
+      `/calendars/${encodeURIComponent(this.calendarId)}/events/${encodeURIComponent(opts.eventId)}?${qs.toString()}`,
+      opts.patch,
+    );
+  }
+
   async deleteEvent(opts: {
     eventId: string;
     sendUpdates?: "all" | "externalOnly" | "none";
@@ -290,5 +304,7 @@ export function ownerCalendars(book: CalendarClient, alsoRead: readonly Calendar
       return lists.flat();
     },
     insertEvent: (opts: Parameters<CalendarClient["insertEvent"]>[0]) => book.insertEvent(opts),
+    // What we booked lives on the booking calendar.
+    patchEvent: (opts: Parameters<CalendarClient["patchEvent"]>[0]) => book.patchEvent(opts),
   };
 }

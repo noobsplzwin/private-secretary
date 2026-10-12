@@ -1519,6 +1519,44 @@ describe("calendar auto-create", () => {
     expect(a.params.execution_receipt).toMatchObject({ kind: "local", ref: "already-on-calendar:weidu" });
   });
 
+  // 2026-10-10 「为什么没有把链接放到Description里面」: the link came after the event.
+  it("adds a join link posted later in the same chat to the event it booked", async () => {
+    const group = "F26 奇绩-欧思克斯法律工作群";
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
+        actions: [{
+          id: "b1", source_message_id: `wechat:${group}:1`, action_type: "calendar", target: { platform: "wechat", attendees: [] },
+          reason: "r", confidence: 0.9, status: "executed", created_at: "2026-10-09T08:17:00Z", context: { sender_handle: group },
+          params: { title: "过投资协议", start: new Date(Date.now() + 3 * 86_400_000).toISOString(), end: new Date(Date.now() + 3 * 86_400_000 + 3_600_000).toISOString(), description: "过投资协议内容", mailbox: "me@x.com",
+            execution_receipt: { kind: "calendar_event", ref: "ev1", at: "2026-10-09T08:27:00Z" } },
+        }],
+        inbox: [{ at: "2026-10-09T08:00:00Z", attempts: 0, msg: {
+          id: `wechat:${group}:2`, platform: "wechat", senderHandle: group, timestampMs: 2, source: `wechat:${group}`,
+          text: "徐志成: 北京市君合律师事务所\n点击链接入会：\nhttps://meeting.tencent.com/dm/n5GwDugMTwDU\n#腾讯会议：451-561-296",
+          isDirectMessage: false, mentionsUser: false, isReplyInUserThread: false, recipientsIncludeUser: true, threadAnsweredByUserAfter: false,
+        } }],
+      }),
+    );
+    const patchEvent = vi.fn(async () => ({ id: "ev1", start: {}, end: {} }));
+    await runScanTick({
+      statePath,
+      sources: [],
+      mode: "analyze",
+      draft: { llm: async () => [], resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-10-09T08:30:00Z" },
+      execute: { now: () => "2026-10-09T08:30:00Z", calendar: { "me@x.com": { listAllEvents: async () => [], insertEvent: vi.fn(), patchEvent } } },
+    });
+    expect(patchEvent).toHaveBeenCalledWith({
+      eventId: "ev1",
+      patch: {
+        location: "https://meeting.tencent.com/dm/n5GwDugMTwDU",
+        description: "https://meeting.tencent.com/dm/n5GwDugMTwDU\n#腾讯会议：451-561-296\n\n过投资协议内容",
+      },
+    });
+    expect(loadState(statePath).actions[0]!.params.location).toBe("https://meeting.tencent.com/dm/n5GwDugMTwDU");
+  });
+
   it("books it when the model sees a different meeting", async () => {
     seedMeeting(0.82);
     const { insertEvent, deps } = calendar([later]);

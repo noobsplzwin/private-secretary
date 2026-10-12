@@ -42,7 +42,7 @@ import {
 } from "../core/action-item.js";
 import { draftActions, type DraftDeps } from "./draft.js";
 import { clusterKey, inheritSupersededTaskIds } from "../core/unit-key.js";
-import { executeAction, type ExecuteDeps } from "./execute.js";
+import { executeAction, resolveCalendarMailbox, type ExecuteDeps } from "./execute.js";
 import { approveAction, markExecuted, withReceipt } from "../core/action-item.js";
 import { syncToTickTick, cardRows, readbackFromTickTick, type TickTickWriter, type TickTickReader } from "./ticktick-sync.js";
 import { markLedgerCommitmentsDone, markLedgerCommitmentsDropped } from "./ledger-close.js";
@@ -60,6 +60,7 @@ import { recordOwnerNotes } from "../io/owner-notes-store.js";
 import { localDate } from "../core/ticktick-plan.js";
 import { closeDoneCards } from "./card-closure.js";
 import { sameMeetingOnCalendar } from "./same-meeting.js";
+import { bookedMeetingFor, descriptionWithLink, joinLinkBlock } from "../core/meeting-link.js";
 import { loadOwnerTickets } from "../io/owner-tickets-store.js";
 import { findPlanProgress, mergePlanUpdates, type PlanUpdate } from "../core/plan-progress.js";
 import { ownerTicketsFrom } from "../core/owner-tickets.js";
@@ -1966,6 +1967,28 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // other people stays a human act.
   if (!opts.dryRun && opts.execute) {
     const snapshot = loadState(opts.statePath);
+    // A join link posted AFTER its meeting was booked goes into that event
+    // (core/meeting-link.ts) — only when exactly one upcoming event came from
+    // the same conversation. Nobody is emailed about it.
+    for (const m of draftInput) {
+      const link = joinLinkBlock(m.text);
+      const card = link ? bookedMeetingFor(snapshot.actions, m.senderHandle, Date.now()) : null;
+      if (!link || !card) continue;
+      const description = descriptionWithLink(typeof card.params.description === "string" ? card.params.description : undefined, link);
+      const mailbox = resolveCalendarMailbox(card, Object.keys(opts.execute.calendar ?? {}));
+      const cal = mailbox ? opts.execute.calendar?.[mailbox] : undefined;
+      if (description === null || !cal?.patchEvent) continue;
+      try {
+        const eventId = String((card.params.execution_receipt as { ref: string }).ref);
+        await cal.patchEvent({ eventId, patch: { location: link.url, description } });
+        await commitUnderLock((fresh) => {
+          fresh.actions = fresh.actions.map((a) => (a.id === card.id ? { ...a, params: { ...a.params, location: link.url, description } } : a));
+        });
+        console.log(`[calendar] join link added to "${String(card.params.title ?? card.id)}": ${link.url}`);
+      } catch (e) {
+        console.log(`[calendar] join link not added — ${(e as Error).message.split("\n")[0]}`);
+      }
+    }
     // Only a meeting still ahead. Without the confidence bar, cards for August
     // calls that never cleared it would otherwise be booked into the past.
     const auto = snapshot.actions.filter(

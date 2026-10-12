@@ -75,6 +75,8 @@ export interface CalendarInserter {
     sendUpdates?: "all" | "externalOnly" | "none";
     conferenceDataVersion?: number;
   }): Promise<CalendarEvent>;
+  /** Change an event this engine booked (meeting-link.ts). Optional: older wiring lacks it. */
+  patchEvent?(opts: { eventId: string; patch: Partial<CalendarEvent> }): Promise<CalendarEvent>;
 }
 
 // A connected task-processing MCP tool. Jira is one example; the registry is
