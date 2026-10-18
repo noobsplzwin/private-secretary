@@ -15,9 +15,20 @@ describe("closureProven — the gate", () => {
   it("accepts his own later line", () => {
     expect(closureProven(spoken, MINE, "one more eng between Zack and Ihor would be super valuable")).toBe(true);
   });
-  it("refuses the other side's line for work he owes, and the reverse", () => {
+  it("refuses the other side's line from where the row began — their ask is not its answer", () => {
     expect(closureProven(spoken, MINE, "should we hire ohm")).toBe(false);
-    expect(closureProven(spoken, { ...MINE, side: "them" }, "I'd love to talk with him")).toBe(false);
+  });
+  // 2026-10-18 「结合我们之后的聊天记录，自动判断完成」: 「收到了」 from the other
+  // side finishes a delivery as surely as his own 「发你了」.
+  it("accepts the other side's LATER line, and a fresh one with no stamp", () => {
+    expect(closureProven(spoken, { ...MINE, side: "them" }, "I'd love to talk with him")).toBe(true);
+    const batch = spokenFromBatch([
+      { id: "m", platform: "wechat", senderHandle: "Dawn", timestampMs: 1, text: "收到电池图片了，谢谢", threadContext: "Dawn: 发我电池图片\n我: 好的" } as never,
+    ]);
+    const item: OpenItem = { handle: "R1", what: "发电池产品图片给Dawn", side: "me" };
+    expect(closureProven(batch, item, "收到电池图片了")).toBe(true);
+    // Their older context line never closes it.
+    expect(closureProven(batch, item, "发我电池图片")).toBe(false);
   });
   it("refuses a line that is not later than where the row began", () => {
     expect(closureProven(spoken, { ...MINE, after: "2026-10-02 12:00" }, "I'd love to talk with him")).toBe(false);
@@ -41,7 +52,7 @@ describe("spokenFromBatch", () => {
     expect(s).toEqual([
       { speaker: "me", text: "我: 录了个视频" },
       { speaker: "them", text: "李冰Bezos: [表情]" },
-      { speaker: "them", text: "这个黑色logo是android的吗" },
+      { speaker: "them", text: "这个黑色logo是android的吗", fresh: true },
     ]);
   });
 
@@ -51,7 +62,7 @@ describe("spokenFromBatch", () => {
     ]);
     expect(s).toEqual([
       { speaker: "them", text: "程敏: 材料发我一下" },
-      { speaker: "me", text: "[文件] 脱敏材料.pdf" },
+      { speaker: "me", text: "[文件] 脱敏材料.pdf", fresh: true },
     ]);
     expect(closureProven(s, { handle: "R1", what: "发脱敏材料给程敏", side: "me" }, "脱敏材料.pdf")).toBe(true);
   });

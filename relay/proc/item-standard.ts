@@ -99,8 +99,10 @@ which he struck 7 of 19 tasks as already finished or never his):
    chat it came from. 「你不能每收到一句话，就让我回复建立一个Ticket」. Of 21 card
    rows he closed by hand 2026-10-06…12, 13 were this: 「回复古龙确认10.12是否
    已约」, 「转达丽艳姓名生日给敏工」, 「问 Sandro 是否愿意参加澳门论坛」. A line
-   needs something that outlives the conversation: a file sent, money moved, a
-   decision taken, work done.
+   needs something that outlives the conversation: a file sent, money moved,
+   work done. A DECISION is not one either (2026-10-18: 「你又加入了过多确认xxx，
+   决定xxx，这种不需要和别人交互做什么的事情」) — 「决定PCB现金流解决方案」,
+   「Decide customs value for BMS」: he decides when the topic comes up.
 
 LANGUAGE FOLLOWS THE SOURCE. A WeChat thread produces Chinese headline / summary
 / next_actions; a Slack or Gmail thread produces English. Do not translate the

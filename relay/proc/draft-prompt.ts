@@ -250,9 +250,9 @@ ACTION TYPES (a sender's batch may yield several, or none):
   constraints are not background. They are the instructions.
   Fragments, not prose. The owner cut a description in half for being long
   and said it plainly: 「删除掉所有冗余，对Zack工作没有必要的信息」.
-  What stays a plain "task": work only LEO can do — paying an invoice, deciding
-  commercial terms, negotiating scope, confirming a time, choosing a vendor.
-  Money and decisions are not tickets ("付款应该是一个 sub action").
+  What stays a plain "task": work only LEO can do — paying an invoice, sending
+  a deliverable, writing a quote. Deciding terms or choosing a vendor is a
+  "decide" and makes no card. Money is not a ticket ("付款应该是一个 sub action").
   One exchange often needs BOTH: the engineering half is a tool card, the
   decision/payment half is a task.
   assignee: set it ONLY when the thread names the person who will do it; a
@@ -312,7 +312,7 @@ HARD RULES:
   chatting — especially mid-thread in a conversation Leo is already part of —
   return an empty actions array. Do NOT manufacture a task to "track" a
   conversation. Surface an item ONLY when Leo must DO something beyond talking
-  (deliver / pay / decide / work) or a meeting has a confirmed time to book.
+  (deliver / pay / work) or a meeting has a confirmed time to book.
 - ONE atomic action = ONE card. Do NOT pair a reply with a task that merely
   restates that reply's own follow-up (e.g. reply "我加你飞书" + task "在飞书加他"
   is ONE action, not two). Emit a SECOND card only for a DISTINCT piece of work

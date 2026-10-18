@@ -393,7 +393,7 @@ describe("draftActions orchestrator", () => {
     ];
     const r = await draftActions([msg()], deps(llm));
     expect(r.actions.map((a) => a.params.title)).toEqual(["发WiFi模组原理图给Amy"]);
-    expect(r.dropped.flatMap((d) => d.errors).join()).toContain("he answers in the chat");
+    expect(r.dropped.flatMap((d) => d.errors).join()).toContain("he answers in the chat or decides");
   });
 });
 

@@ -11,15 +11,21 @@
 export const TASK_KINDS = ["deliver", "pay", "decide", "work", "reply", "schedule"] as const;
 export type TaskKind = (typeof TASK_KINDS)[number];
 
-/** Kinds that are finished by talking. Never a row. */
-const CHAT_ONLY: ReadonlySet<string> = new Set<TaskKind>(["reply", "schedule"]);
+/**
+ * Kinds that never make a row: finished by talking, or by making up his mind.
+ * "decide" joined 2026-10-18 — 「你又加入了过多确认xxx，决定xxx，这种不需要和别人
+ * 交互做什么的事情」: seven 决定/Decide rows were on his list that day.
+ */
+const CHAT_ONLY: ReadonlySet<string> = new Set<TaskKind>(["reply", "schedule", "decide"]);
 
 export const TASK_KIND_RULE = `kind — what FINISHING it takes. Required on every task:
   "deliver"  a THING changes hands: a file, schematic, document, sample, signed
              contract, shipment. 「发WiFi模组原理图给CTL Amy」, 「签字盖章新合同寄回」.
   "pay"      money moves: pay, refund, issue an invoice. 「确认芯片PI金额并安排付款」.
-  "decide"   a choice only Leo can make, with stakes: vendor, terms, which template,
-             approve a report. 「回复金小奇：拨改投转股模板选哪个」 is a decision.
+  "decide"   a choice he makes in his head: which vendor, which template, whether
+             to order, approve a report, 确认/决定/Decide anything. 「决定PCB现金流解决
+             方案」, 「Decide: team places 300-unit board order?」. He decides when
+             the topic comes up; a row for it is noise.
   "work"     hands-on work by Leo: review a document, test, write, prepare a deck.
   "reply"    the whole job is WORDS to someone: answer, confirm, ask, tell, remind,
              pass information along, call back. 「确认周一会议是否逐条讲SoW」,
@@ -27,8 +33,10 @@ export const TASK_KIND_RULE = `kind — what FINISHING it takes. Required on eve
              to Sandro」.
   "schedule" agreeing a time or place. 「问马总下周是否有空，回杜维定时间」.
   A reply that WRAPS real work takes the work's kind: 「审核付款方案并回复金小奇」
-  is work. "reply" and "schedule" are NOT rows — he does them in the chat, and
-  code drops the card. Do not dress a reply up as another kind to keep it.`;
+  is work, 「确认PI金额并付款」 is pay. "reply", "schedule" and "decide" are NOT
+  rows — he does them in the chat or in his head, and code drops the card. Do not
+  dress one up as another kind to keep it: reviewing a draft to decide on it is
+  still "decide".`;
 
 /** True when the drafter says this task is finished by a message or a time agreed. */
 export function isChatOnlyTask(params: Record<string, unknown> | undefined): boolean {

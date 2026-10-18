@@ -358,7 +358,7 @@ export async function draftActions(
       // A SENTENCE IS NOT A TICKET (core/task-kind.ts): a task the drafter
       // itself labels reply/schedule is done in the chat, never on his list.
       if (claimed === "task" && isChatOnlyTask(s.params as Record<string, unknown> | undefined)) {
-        senderErrors.push(`dropped "${s.headline}": kind ${String((s.params as Record<string, unknown>).kind)} — he answers in the chat`);
+        senderErrors.push(`dropped "${s.headline}": kind ${String((s.params as Record<string, unknown>).kind)} — he answers in the chat or decides in his head`);
         continue;
       }
       // DECODE FAILED → NO CARD (owner, 2026-09-20). When this batch carried
