@@ -29,6 +29,8 @@ export interface FrozenPerson {
     status: string;
     due?: string;
     matter_id?: string;
+    /** The dated line it came from — only one he spoke lists it (ledger-list inHisOwnWords). */
+    source_line?: string;
     assessment?: {
       needs_leo: boolean;
       blocked_on?: "leo" | "them" | "third-party";

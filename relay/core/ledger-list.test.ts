@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { deriveLedgerTasks, heldClosedByOwner, ownLinesShown } from "./ledger-list.js";
+import { deriveLedgerTasks, heldClosedByOwner, inHisOwnWords, ownLinesShown } from "./ledger-list.js";
 import { applySyncOps, diffTickTickSync, summarize } from "./ticktick-sync.js";
 import type { Commitment } from "./persona-v3.js";
 
@@ -10,10 +10,13 @@ const assessed = (needs_leo: boolean, over: Partial<NonNullable<Commitment["asse
   assessment: { needs_leo, evidence: "please handle this", at: "2026-08-22T00:00:00Z", ...over },
 });
 
+// Every fixture commitment is one he took on in his own words unless a test says
+// otherwise — only those reach the list (inHisOwnWords).
 const c = (over: Partial<Commitment>): Commitment => ({
   who: "me",
   what: "签署高通 NDA 并回传给李冰",
   status: "open",
+  source_line: "[2026-08-21 10:00] me: 我来签",
   ...over,
 });
 
@@ -807,5 +810,21 @@ describe("ownLinesShown", () => {
     const desc = "回看日 10/4,不是截止。\n进度: 共 5 项,已了结 1 项。\n我这边还有:\n  · A\n  · B\n等 朱桦:\n  · C\n依据: \"x\"";
     expect(ownLinesShown(desc)).toEqual(["A", "B"]);
     expect(ownLinesShown(undefined)).toEqual([]);
+  });
+});
+
+// 2026-10-27 「只生成我有Committment的task」: a row needs his own words.
+describe("only what he took on in his own words", () => {
+  const judged = { assessment: { needs_leo: true, evidence: "q", at: "2026-08-22T00:00:00Z" } };
+  it("lists a commitment whose source line is his", () => {
+    expect(derive([persona([c({ ...judged })])])).toHaveLength(1);
+  });
+  it("never lists one with no source line, or one someone else said", () => {
+    expect(derive([persona([c({ ...judged, source_line: undefined })])])).toEqual([]);
+    expect(derive([persona([c({ ...judged, source_line: "[2026-10-24] Jordan: rent a car and visit the restaurants" })])])).toEqual([]);
+  });
+  it("reads 我 and a full-width colon as his too", () => {
+    expect(inHisOwnWords({ who: "me", source_line: "[2026-10-27 03:30] 我：这个我找时间寄一个" })).toBe(true);
+    expect(inHisOwnWords({ who: "them", source_line: "[2026-10-27 03:30] me: x" })).toBe(false);
   });
 });

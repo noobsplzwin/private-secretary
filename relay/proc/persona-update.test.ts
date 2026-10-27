@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -702,6 +702,10 @@ describe("the assess pass reads who does what", () => {
 
 // His plans update themselves from what is NEW (core/plan-progress.ts).
 describe("the person pass keeps his plans current", () => {
+  // The corpus is dated 2026-10-08; read on a later clock the extracted step
+  // stopped appearing (passed when committed 10-18, failed 10-27). Pin the clock.
+  beforeAll(() => { vi.useFakeTimers({ now: new Date(2026, 9, 18), toFake: ["Date"] }); });
+  afterAll(() => { vi.useRealTimers(); });
   const PLAN = { id: "tk1", title: "零跑 Benchmarking", steps: ["找 Sky 定到场日期"], stepIds: ["s1"] };
   const corpus = ["[2026-10-01 09:00] Zech: 老消息：下周再说", "[2026-10-08 10:12] Zech: 就定13号到场", "[2026-10-08 10:20] me: 回来我把跑分报告发郭总"].join("\n");
   const run = async (sinceMs?: number) => {

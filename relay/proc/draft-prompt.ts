@@ -13,7 +13,7 @@
 
 import { loadBusinessContext } from "../io/business-context.js";
 import { ITEM_STANDARD } from "./item-standard.js";
-import { TASK_KIND_RULE } from "../core/task-kind.js";
+import { COMMITMENT_RULE, TASK_KIND_RULE } from "../core/task-kind.js";
 import type { InboundMessage } from "../core/types.js";
 import type { Persona } from "../core/types.js";
 
@@ -79,7 +79,7 @@ export const ACTION_ITEM_TOOL_SCHEMA: Record<string, unknown> = {
           params: {
             type: "object",
             description:
-              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, kind (deliver|pay|decide|work|reply|schedule), due?, answered_closes?, covered_by_ticket?, ticket_step?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
+              "per-type: calendar needs {title,start,end,attendees,location?,description?} (location = the place name/address; put a Google Maps search link in description); task needs {title, kind (deliver|pay|decide|work|reply|schedule), commitment (verbatim words from Leo's own 我/me line taking it on), due?, answered_closes?, covered_by_ticket?, ticket_step?}; ignore needs {category}; tool needs {tool,mcp_tool?,project,summary,description,assignee?} (tool = the MCP key, e.g. \"jira\"; mcp_tool = the specific MCP server tool to call, e.g. \"create_page\" for a URL-based MCP)",
           },
           draft: { type: "string", description: "the message text for a reply" },
           headline: {
@@ -166,9 +166,10 @@ ACTION TYPES (a sender's batch may yield several, or none):
   the URL and copy URL + number + passcode VERBATIM at the top of description —
   never 「链接见群」, which sends Leo digging through the chat at the start time.
   ALWAYS requires Leo's one-click approval before it's created.
-- task: track a to-do Leo OWNS or must follow up on. params {title, kind, due?,
+- task: a to-do Leo COMMITTED to. params {title, kind, commitment, due?,
   answered_closes?, covered_by_ticket?}.
   ${TASK_KIND_RULE}
+  ${COMMITMENT_RULE}
   covered_by_ticket: when THE OWNER'S OWN TICKETS are listed in the message and
   this task is already a step in one of them, or the same work, its handle
   (e.g. "T2"). The card is then not made — the work is tracked there. Only on a

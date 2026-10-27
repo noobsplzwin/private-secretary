@@ -17,9 +17,21 @@ function msg(over: Partial<InboundMessage> = {}): InboundMessage {
     isReplyInUserThread: false,
     recipientsIncludeUser: false,
     threadAnsweredByUserAfter: false,
+    // His own line taking the work on — every fixture task cites it (COMMITTED).
+    threadContext: "我: 我来处理这件事情",
     ...over,
   };
 }
+
+// Fixture tasks are ones he took on, unless a test says otherwise: the gate in
+// core/task-kind.ts drops a task whose words are not in his own line.
+const COMMITTED = "我来处理这件事情";
+const committed = (llm: LlmCaller): LlmCaller => async (req) =>
+  (await llm(req)).map((a) =>
+    a.action_type === "task" && (a.params as Record<string, unknown> | undefined)?.commitment === undefined
+      ? ({ ...a, params: { ...(a.params ?? {}), commitment: COMMITTED } } as DraftedAction)
+      : a,
+  );
 
 const michael: Persona = {
   key: "michael-dobosz",
@@ -105,7 +117,7 @@ describe("buildDraftRequest (pure prompt)", () => {
 describe("draftActions orchestrator", () => {
   const resolver = buildPersonaResolver([michael]);
   const deps = (llm: LlmCaller) => ({
-    llm,
+    llm: committed(llm),
     resolvePersona: resolver.resolve,
     knownPersonaKeys: resolver.keys,
     now: () => "2026-06-14T12:00:00Z",
@@ -457,7 +469,7 @@ describe("draftActions empty-retry (flaky LLM)", () => {
       return [{ action_type: "task", reason: "track", confidence: 0.8, params: { title: "t" }, headline: "x" } as DraftedAction];
     };
     const r = await draftActions([msg()], {
-      llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
+      llm: committed(llm), resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
     });
     expect(calls).toBe(2);
     expect(r.actions).toHaveLength(1);
@@ -468,7 +480,7 @@ describe("draftActions empty-retry (flaky LLM)", () => {
     let calls = 0;
     const llm: LlmCaller = async () => { calls++; return []; };
     const r = await draftActions([msg()], {
-      llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
+      llm: committed(llm), resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
     });
     expect(calls).toBe(2);
     expect(r.actions).toEqual([]);
@@ -479,10 +491,32 @@ describe("draftActions empty-retry (flaky LLM)", () => {
     let calls = 0;
     const llm: LlmCaller = async () => { calls++; return [{ action_type: "task", reason: "t", confidence: 0.8, params: { title: "t" }, headline: "x" } as DraftedAction]; };
     const r = await draftActions([msg()], {
-      llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
+      llm: committed(llm), resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
     });
     expect(calls).toBe(1);
     expect(r.actions).toHaveLength(1);
+  });
+});
+
+// 2026-10-27 「只生成我有Committment的task」.
+describe("only a task he took on", () => {
+  const ask = (params: Record<string, unknown>, threadContext = "我: 这个我找时间寄一个") =>
+    draftActions([msg({ threadContext, text: "能不能给我们寄一个FCG控制器板子？" })], {
+      llm: async () => [{ action_type: "task", reason: "r", confidence: 0.9, headline: "寄FCG板子给秦博", params: { title: "寄FCG板子给秦博", kind: "deliver", ...params } } as DraftedAction],
+      resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z",
+    });
+
+  it("keeps it when his own line holds the words", async () => {
+    expect((await ask({ commitment: "这个我找时间寄一个" })).actions).toHaveLength(1);
+  });
+
+  it("drops it with no commitment, with the asker's words, or with a bare 好", async () => {
+    for (const params of [{}, { commitment: "能不能给我们寄一个FCG控制器板子" }]) {
+      const r = await ask(params);
+      expect(r.actions).toEqual([]);
+      expect(r.dropped.flatMap((d) => d.errors).join()).toContain("no line where he took it on");
+    }
+    expect((await ask({ commitment: "好" }, "我: 好")).actions).toEqual([]);
   });
 });
 
@@ -512,7 +546,7 @@ describe("owner timezone anchors the clock", () => {
 describe("answered threads: mined for commitments, never re-replied", () => {
   const resolver = buildPersonaResolver([michael]);
   const deps = (llm: LlmCaller) => ({
-    llm,
+    llm: committed(llm),
     resolvePersona: resolver.resolve,
     knownPersonaKeys: resolver.keys,
     now: () => "2026-06-14T12:00:00Z",
@@ -607,7 +641,7 @@ describe("calendar attendees: names become addresses at creation", () => {
   const resolver = buildPersonaResolver([michael]);
   const roster = [michael];
   const deps = (llm: LlmCaller) => ({
-    llm,
+    llm: committed(llm),
     resolvePersona: resolver.resolve,
     knownPersonaKeys: resolver.keys,
     personas: roster,
@@ -656,7 +690,7 @@ describe("calendar attendees: names become addresses at creation", () => {
 describe("an invented name in next_actions is reported", () => {
   const resolver = buildPersonaResolver([michael]);
   const deps = (llm: LlmCaller) => ({
-    llm,
+    llm: committed(llm),
     resolvePersona: resolver.resolve,
     knownPersonaKeys: resolver.keys,
     personas: [michael],

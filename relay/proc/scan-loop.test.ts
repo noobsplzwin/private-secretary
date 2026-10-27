@@ -18,6 +18,10 @@ import { encodeBase64Url } from "../io/gmail-api.js";
 
 const SELF_SLACK = "UPHG4T8R1";
 
+// Pipeline tests draft ordinary tasks; each is one he took on (core/task-kind.ts
+// commitment gate), found in the line ownerLines hands the drafter.
+const COMMITTED = "我来处理这件事情";
+
 function slackStub(channels: SlackConversation[], messages: Record<string, SlackMessage[]>): SlackClient {
   return {
     authTest: vi.fn(async () => ({
@@ -313,6 +317,7 @@ describe("runScanTick", () => {
     );
     const gmail = gmailStub({ historyId: "1" }, [], {});
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [],
       resolvePersona: () => null,
       knownPersonaKeys: [],
@@ -380,6 +385,7 @@ describe("runScanTick", () => {
     const gmail = gmailStub({ historyId: "1" }, [], {});
     let lockWasFreeDuringDraft = false;
     const draft = {
+      ownerLines: () => [COMMITTED],
       // The LLM call stands in for the slow draft. While it runs, the lock
       // MUST be free — i.e. acquirable by a concurrent writer (the cockpit).
       llm: async () => {
@@ -388,7 +394,7 @@ describe("runScanTick", () => {
           releaseLock(dir);
         }
         return [
-          { action_type: "task" as const, target: {}, reason: "r", confidence: 0.9, params: { title: "回复 hey" } },
+          { action_type: "task" as const, target: {}, reason: "r", confidence: 0.9, params: { commitment: COMMITTED, title: "回复 hey" } },
         ];
       },
       resolvePersona: () => null,
@@ -425,6 +431,7 @@ describe("runScanTick", () => {
     const gmail = gmailStub({ historyId: "1" }, [], {});
     let cursorOnDiskDuringDraft: unknown;
     const draft = {
+      ownerLines: () => [COMMITTED],
       // By the time the (slow) draft runs, the cursor must ALREADY be persisted
       // — phase 1.5 commits cursors before phase 2. So if phase 3 later can't
       // re-acquire the lock, the cursor advance is safe (only drafts re-run).
@@ -434,7 +441,7 @@ describe("runScanTick", () => {
         };
         cursorOnDiskDuringDraft = onDisk.marks._slackDirect?.channels?.C1?.lastTs;
         return [
-          { action_type: "task" as const, target: {}, reason: "r", confidence: 0.9, params: { title: "回复 hey" } },
+          { action_type: "task" as const, target: {}, reason: "r", confidence: 0.9, params: { commitment: COMMITTED, title: "回复 hey" } },
         ];
       },
       resolvePersona: () => null,
@@ -452,9 +459,10 @@ describe("runScanTick", () => {
     const gmail = gmailStub({ historyId: "1" }, [], {});
     // stub LLM: produce one reply for whatever it's given
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [
         {
-          action_type: "task" as const,
+          action_type: "task" as const, params: { commitment: COMMITTED },
           target: {},
           reason: "answer",
           confidence: 0.9,
@@ -489,9 +497,10 @@ describe("runScanTick", () => {
     }));
     const gmail = gmailStub({ historyId: "1" }, [], {});
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [
         {
-          action_type: "task" as const,
+          action_type: "task" as const, params: { commitment: COMMITTED },
           target: {},
           reason: "answer",
           confidence: 0.9,
@@ -518,9 +527,10 @@ describe("runScanTick", () => {
     });
     const gmail = gmailStub({ historyId: "1" }, [], {});
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [
         {
-          action_type: "task" as const,
+          action_type: "task" as const, params: { commitment: COMMITTED },
           target: {},
           reason: "answer",
           confidence: 0.9,
@@ -585,7 +595,8 @@ describe("runScanTick", () => {
       statePath,
       slackClient: slack,
       gmailClients: { "leo@taiv.tv": gmail },
-      draft: { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
+      draft: {
+        ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
     });
     expect(r.promoFiltered).toBe(1);
     expect(r.totalTriggered).toBe(0); // promo never became a candidate
@@ -616,6 +627,7 @@ describe("runScanTick", () => {
       wechatFetchHistory: async (name: string) =>
         name === "金小奇" ? "[2026-06-14 21:39] 金小奇: a" : "[2026-06-14 21:40] 陈古龙: b",
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async (req) => {
           if (req.userText.includes("陈古龙")) throw new Error("claude -p timed out after 420000ms");
           return [];
@@ -645,6 +657,7 @@ describe("runScanTick", () => {
       wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:39] 金小奇 (1条未读)\n  文本: a",
       wechatFetchHistory: async () => "[2026-06-14 21:39] 金小奇: a",
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async () => {
           throw new Error("boom");
         },
@@ -663,7 +676,7 @@ describe("runScanTick", () => {
         target: {},
         reason: "answer",
         confidence: 0.5,
-        params: { title: "回复金小奇" },
+        params: { commitment: COMMITTED, title: "回复金小奇" },
       },
     ]);
     const r = await runScanTick({
@@ -674,7 +687,8 @@ describe("runScanTick", () => {
       wechatFetchSessions: async () =>
         "最近 1 个会话:\n\n[06-14 21:39] 金小奇 芯联集成 (1条未读)\n  文本: 那很好啊",
       wechatFetchHistory: async () => "[2026-06-14 21:39] 金小奇 芯联集成: 那很好啊",
-      draft: { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
+      draft: {
+        ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
     });
     expect(r.perSource.find((s) => s.source === "wechat:direct")?.inboundCount).toBe(1);
     expect(r.drafted).toBe(1);
@@ -692,10 +706,10 @@ describe("runScanTick", () => {
         target: {},
         reason: "answer",
         confidence: 0.5,
-        params: { title: "回复金小奇" },
+        params: { commitment: COMMITTED, title: "回复金小奇" },
       },
     ]);
-    const draft = { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
+    const draft = { ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
     // Tick 1: 金小奇 unread=1 surfaces; 坦丁 has unread 0 (Leo's own send) → never carded.
     const r1 = await runScanTick({
       statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
@@ -749,10 +763,10 @@ describe("runScanTick", () => {
         target: {},
         reason: "answer",
         confidence: 0.5,
-        params: { title: "回复金小奇" },
+        params: { commitment: COMMITTED, title: "回复金小奇" },
       },
     ]);
-    const draft = { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
+    const draft = { ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
     const tick = (ts: string, unread: number, text: string, hist: string) =>
       runScanTick({
         statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
@@ -792,10 +806,10 @@ describe("runScanTick", () => {
         target: {},
         reason: "answer",
         confidence: 0.5,
-        params: { title: "回复金小奇" },
+        params: { commitment: COMMITTED, title: "回复金小奇" },
       },
     ]);
-    const draft = { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
+    const draft = { ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" };
     const tick = (ts: string, unread: number, text: string, hist: string) =>
       runScanTick({
         statePath, sources: ["wechat"], wechatFetchContacts: async () => "",
@@ -835,14 +849,14 @@ describe("runScanTick", () => {
         {
           id: "cal1", source_message_id: "wechat:cal1", action_type: "calendar",
           target: {}, reason: "明天10点见客户", confidence: 0.8,
-          params: { title: "见客户", start: "2026-06-15T10:00:00+08:00", end: "2026-06-15T11:00:00+08:00" },
+          params: { commitment: COMMITTED, title: "见客户", start: "2026-06-15T10:00:00+08:00", end: "2026-06-15T11:00:00+08:00" },
           status: "suggested", created_at: "2026-06-14T12:00:00Z",
           context: { sender_handle: "金小奇 芯联集成" },
         },
         {
           id: "task1", source_message_id: "wechat:task1", action_type: "task",
           target: {}, reason: "follow up", confidence: 0.6,
-          params: { title: "回传资料" },
+          params: { commitment: COMMITTED, title: "回传资料" },
           status: "suggested", created_at: "2026-06-14T12:00:00Z",
           context: { sender_handle: "金小奇 芯联集成" },
         },
@@ -854,7 +868,7 @@ describe("runScanTick", () => {
         target: {},
         reason: "answer",
         confidence: 0.5,
-        params: { title: "回复金小奇" },
+        params: { commitment: COMMITTED, title: "回复金小奇" },
       },
     ]);
     const r = await runScanTick({
@@ -862,7 +876,8 @@ describe("runScanTick", () => {
       wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:45] 金小奇 芯联集成 (1条未读)\n  文本: 还有个问题",
       wechatFetchHistory: async () => "[2026-06-14 21:45] 金小奇 芯联集成: 还有个问题",
-      draft: { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
+      draft: {
+        ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
     });
     expect(r.drafted).toBe(1);
 
@@ -887,7 +902,7 @@ describe("runScanTick", () => {
       actions: [{
         id: "cal1", source_message_id: "wechat:cal1", action_type: "calendar",
         target: {}, reason: "maybe meet next week", confidence: 0.5,
-        params: { title: "见客户" }, // no start — half-baked, missing-info anyway
+        params: { commitment: COMMITTED, title: "见客户" }, // no start — half-baked, missing-info anyway
         status: "suggested", created_at: "2026-06-14T12:00:00Z",
         context: { sender_handle: "金小奇 芯联集成" },
       }],
@@ -898,7 +913,7 @@ describe("runScanTick", () => {
         target: {},
         reason: "answer",
         confidence: 0.5,
-        params: { title: "回复金小奇" },
+        params: { commitment: COMMITTED, title: "回复金小奇" },
       },
     ]);
     await runScanTick({
@@ -906,7 +921,8 @@ describe("runScanTick", () => {
       wechatDirect: ALL_KNOWN,
       wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:45] 金小奇 芯联集成 (1条未读)\n  文本: 还有个问题",
       wechatFetchHistory: async () => "[2026-06-14 21:45] 金小奇 芯联集成: 还有个问题",
-      draft: { llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
+      draft: {
+        ownerLines: () => [COMMITTED], llm, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-14T12:00:00Z" },
     });
 
     const after = loadState(statePath).actions;
@@ -948,9 +964,10 @@ describe("runScanTick", () => {
     );
     const gmail = gmailStub({ historyId: "1" }, [], {});
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [
         {
-          action_type: "task" as const,
+          action_type: "task" as const, params: { commitment: COMMITTED },
           target: {},
           reason: "answer",
           confidence: 0.9,
@@ -983,9 +1000,10 @@ describe("runScanTick", () => {
     });
     const gmail = gmailStub({ historyId: "1" }, [], {});
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [
         {
-          action_type: "task" as const,
+          action_type: "task" as const, params: { commitment: COMMITTED },
           target: {},
           reason: "answer",
           confidence: 0.9,
@@ -1013,6 +1031,7 @@ describe("runScanTick", () => {
     });
     const gmail = gmailStub({ historyId: "1" }, [], {});
     const draft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => {
         throw new Error("anthropic 500");
       },
@@ -1063,9 +1082,10 @@ describe("runScanTick", () => {
       ],
     });
     const goodDraft = {
+      ownerLines: () => [COMMITTED],
       llm: async () => [
         {
-          action_type: "task" as const,
+          action_type: "task" as const, params: { commitment: COMMITTED },
           target: {},
           reason: "answer",
           confidence: 0.9,
@@ -1193,8 +1213,9 @@ describe("the list is the ledger", () => {
       // The drafted card comes from U2, who resolves to a persona — so the
       // card must NOT render; the ledger row must.
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async () => [
-          { action_type: "task", reason: "r", confidence: 0.9, params: { title: "card row" }, headline: "card row" },
+          { action_type: "task", reason: "r", confidence: 0.9, params: { commitment: COMMITTED, title: "card row" }, headline: "card row" },
         ],
         resolvePersona: () => null,
         knownPersonaKeys: [],
@@ -1209,6 +1230,7 @@ describe("the list is the ledger", () => {
               who: "me" as const,
               what: "签署高通 NDA 并回传给李冰",
               status: "open" as const,
+              source_line: "[2026-08-21 10:00] me: 我来签",
               assessment: { needs_leo: true, evidence: "q", at: "2026-08-22T00:00:00Z" },
             },
           ],
@@ -1249,6 +1271,7 @@ describe("a brain that cannot think at all says so", () => {
       sources: ["slack"],
       slackClient: slackStub([{ id: "C1", is_im: true }], twoSenders),
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async () => {
           throw new Error("Failed to authenticate: OAuth session expired and could not be refreshed");
         },
@@ -1272,6 +1295,7 @@ describe("a brain that cannot think at all says so", () => {
         C1: [{ ts: "100.0", user: "U2", text: `hi <@${SELF_SLACK}> can you send the BOM` }],
       }),
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async () => {
           throw new Error("claude -p timed out after 180000ms");
         },
@@ -1291,9 +1315,10 @@ describe("a brain that cannot think at all says so", () => {
       sources: ["slack"],
       slackClient: slackStub([{ id: "C1", is_im: true }], twoSenders),
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async () => {
           if (n++ === 0) throw new Error("one flake");
-          return [{ action_type: "task", reason: "r", confidence: 0.9, params: { title: "real work" }, headline: "real work" }];
+          return [{ action_type: "task", reason: "r", confidence: 0.9, params: { commitment: COMMITTED, title: "real work" }, headline: "real work" }];
         },
         resolvePersona: () => null,
         knownPersonaKeys: [],
@@ -1452,7 +1477,7 @@ describe("calendar auto-create", () => {
             target: { platform: "wechat", attendees: [] },
             reason: "r",
             confidence,
-            params: { title: "与李冰Bezos见面", start: "2030-10-16T02:00:00.000Z", end: "2030-10-16T03:00:00.000Z", tz: "Asia/Shanghai", attendees: [], time_confirmed: true, mailbox: "me@x.com" },
+            params: { commitment: COMMITTED, title: "与李冰Bezos见面", start: "2030-10-16T02:00:00.000Z", end: "2030-10-16T03:00:00.000Z", tz: "Asia/Shanghai", attendees: [], time_confirmed: true, mailbox: "me@x.com" },
             status: "suggested",
             created_at: "2026-10-09T02:45:00Z",
             context: { sender_handle: "李冰Bezos" },
@@ -1529,7 +1554,7 @@ describe("calendar auto-create", () => {
         actions: [{
           id: "b1", source_message_id: `wechat:${group}:1`, action_type: "calendar", target: { platform: "wechat", attendees: [] },
           reason: "r", confidence: 0.9, status: "executed", created_at: "2026-10-09T08:17:00Z", context: { sender_handle: group },
-          params: { title: "过投资协议", start: new Date(Date.now() + 3 * 86_400_000).toISOString(), end: new Date(Date.now() + 3 * 86_400_000 + 3_600_000).toISOString(), description: "过投资协议内容", mailbox: "me@x.com",
+          params: { commitment: COMMITTED, title: "过投资协议", start: new Date(Date.now() + 3 * 86_400_000).toISOString(), end: new Date(Date.now() + 3 * 86_400_000 + 3_600_000).toISOString(), description: "过投资协议内容", mailbox: "me@x.com",
             execution_receipt: { kind: "calendar_event", ref: "ev1", at: "2026-10-09T08:27:00Z" } },
         }],
         inbox: [{ at: "2026-10-09T08:00:00Z", attempts: 0, msg: {
@@ -1544,7 +1569,8 @@ describe("calendar auto-create", () => {
       statePath,
       sources: [],
       mode: "analyze",
-      draft: { llm: async () => [], resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-10-09T08:30:00Z" },
+      draft: {
+        ownerLines: () => [COMMITTED], llm: async () => [], resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-10-09T08:30:00Z" },
       execute: { now: () => "2026-10-09T08:30:00Z", calendar: { "me@x.com": { listAllEvents: async () => [], insertEvent: vi.fn(), patchEvent } } },
     });
     expect(patchEvent).toHaveBeenCalledWith({
@@ -1661,9 +1687,10 @@ describe("split lanes: fetch queues, analyze drafts", () => {
     wechatFetchHistory: async () => `[2026-06-14 ${hhmm}] ${name}: ${text}`,
   });
   const card = (title: string) => [
-    { action_type: "task" as const, target: {}, reason: "r", confidence: 0.5, params: { title } },
+    { action_type: "task" as const, target: {}, reason: "r", confidence: 0.5, params: { commitment: COMMITTED, title } },
   ];
   const draftWith = (llm: (req: { userText: string }) => Promise<unknown>) => ({
+    ownerLines: () => [COMMITTED],
     llm: llm as never,
     resolvePersona: () => null,
     knownPersonaKeys: [],
@@ -1767,7 +1794,7 @@ describe("a calendar invite settles its meeting card across the lanes", () => {
         id: "c1", source_message_id: "slack:D1:1000.0", action_type: "calendar", status: "suggested",
         target: {}, reason: "r", confidence: 1, created_at: "2026-10-01T06:26:00Z",
         headline: "Call with João on RTOS motion-loop scope",
-        params: { title: "Call with João", start: "2026-10-01T08:00:00.000Z", end: "2026-10-01T08:30:00.000Z", attendees: ["jpeixoto@osyx.tech"] },
+        params: { commitment: COMMITTED, title: "Call with João", start: "2026-10-01T08:00:00.000Z", end: "2026-10-01T08:30:00.000Z", attendees: ["jpeixoto@osyx.tech"] },
       } as never,
     ];
     saveState(statePath, s0);
@@ -1786,7 +1813,8 @@ describe("a calendar invite settles its meeting card across the lanes", () => {
     await runScanTick({
       mode: "analyze",
       statePath,
-      draft: { llm: llm as never, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-10-01T10:00:00Z" } as never,
+      draft: {
+        ownerLines: () => [COMMITTED], llm: llm as never, resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-10-01T10:00:00Z" } as never,
     });
     expect(llm).not.toHaveBeenCalled();
     const after = loadState(statePath);
@@ -1819,7 +1847,7 @@ describe("his own line closes the card it finishes", () => {
             reason: "r",
             confidence: 0.9,
             headline: "发脱敏材料给程敏",
-            params: { title: "发脱敏材料给程敏", kind: "deliver" },
+            params: { commitment: COMMITTED, title: "发脱敏材料给程敏", kind: "deliver" },
             status: "suggested",
             created_at: "2026-06-14T12:00:00Z",
             context: { sender_handle: "程敏", original_message: "材料发我一下" },
@@ -1843,6 +1871,7 @@ describe("his own line closes the card it finishes", () => {
       wechatFetchSessions: async () => "最近 1 个会话:\n\n[06-14 21:00] 程敏\n  文本: [文件] 脱敏材料.pdf",
       wechatFetchHistory: async () => "[2026-06-14 20:00] 程敏: 材料发我一下\n[2026-06-14 21:00] me: [文件] 脱敏材料.pdf",
       draft: {
+        ownerLines: () => [COMMITTED],
         llm: async () => ((drafted = true), []),
         resolvePersona: () => null,
         knownPersonaKeys: [],
@@ -1871,7 +1900,7 @@ describe("his own line closes the card it finishes", () => {
         version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
         actions: [{
           id: "s1", source_message_id: "slack:D1:1.0", action_type: "task", target: { platform: "slack" },
-          reason: "r", confidence: 0.9, headline: "Approve SR&ED report", params: { title: "Approve SR&ED report", kind: "decide" },
+          reason: "r", confidence: 0.9, headline: "Approve SR&ED report", params: { commitment: COMMITTED, title: "Approve SR&ED report", kind: "decide" },
           status: "suggested", created_at: "2026-06-14T12:00:00Z", context: { sender_handle: "U2", original_message: "please approve" },
         }],
       }),
@@ -1881,7 +1910,8 @@ describe("his own line closes the card it finishes", () => {
       statePath,
       sources: ["slack"],
       slackClient: slackStub([{ id: "D1", is_im: true }], { D1: [{ ts: "1781500000.000100", user: SELF_SLACK, text: "Approved the SR&ED report" }] }),
-      draft: { llm: async () => ((drafted = true), []), resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-15T00:00:00Z" },
+      draft: {
+        ownerLines: () => [COMMITTED], llm: async () => ((drafted = true), []), resolvePersona: () => null, knownPersonaKeys: [], now: () => "2026-06-15T00:00:00Z" },
       personaUpdate: {
         json: async () => ({ closed: [{ item: "R1", evidence: "Approved the SR&ED report" }] }),
         personaFor: () => null as never,

@@ -44,7 +44,7 @@ describe("S0 renders the list production would render", () => {
         closedMatters: closed,
         persons: [
           person({
-            ledger: [{ who: "me", what: "Send Cody the Rev5 docs", status: "open", matter_id: matterId }],
+            ledger: [{ who: "me", what: "Send Cody the Rev5 docs", source_line: "[2026-09-07 10:00] me: I'll send Cody the Rev5 docs today", status: "open", matter_id: matterId }],
           }),
         ],
       }),
@@ -72,7 +72,7 @@ describe("S0 renders the list production would render", () => {
       commitments: [
         {
           who: "me",
-          what: "Send Cody the Rev5 docs",
+          what: "Send Cody the Rev5 docs", source_line: "[2026-09-07 10:00] me: I'll send Cody the Rev5 docs today",
           status: "open",
           matter_id: "fcc",
           evidence: "I'll send Cody the Rev5 docs today",
@@ -103,7 +103,7 @@ describe("S0 renders the list production would render", () => {
         persons: [
           person({
             ledger: [
-              { who: "me", what: "Send Cody the Rev5 docs", status: "open", matter_id: "fcc" },
+              { who: "me", what: "Send Cody the Rev5 docs", source_line: "[2026-09-07 10:00] me: I'll send Cody the Rev5 docs today", status: "open", matter_id: "fcc" },
             ],
           }),
         ],
@@ -127,7 +127,7 @@ describe("S0 renders the list production would render", () => {
             commitments: [
               {
                 who: "me",
-                what: "Send Cody the Rev5 docs",
+                what: "Send Cody the Rev5 docs", source_line: "[2026-09-07 10:00] me: I'll send Cody the Rev5 docs today",
                 status: "open",
                 matter_id: "fcc",
                 evidence: "I'll send Cody the Rev5 docs today",

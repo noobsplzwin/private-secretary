@@ -32,7 +32,7 @@ import { buildDraftRequest, type DraftedAction } from "./draft-prompt.js";
 import { selectProjects, renderProjectContext, renderProjectCatalog, type Project } from "../core/project.js";
 import { detectMentions } from "../core/mentions.js";
 import { isConsumeUnreadableCard } from "../core/unreadable-gate.js";
-import { isChatOnlyTask } from "../core/task-kind.js";
+import { committedInHisWords, hisLines, isChatOnlyTask } from "../core/task-kind.js";
 import type { FileText } from "../core/file-text.js";
 import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
@@ -54,6 +54,11 @@ export type LlmCaller = (req: {
 }) => Promise<DraftedAction[]>;
 
 export interface DraftDeps {
+  /**
+   * His own lines in a sender's batch — where a task's commitment must be found.
+   * Defaults to core/task-kind.hisLines (the 我/me lines of the thread context).
+   */
+  ownerLines?: (batch: readonly InboundMessage[]) => string[];
   /** The OWNER's IANA zone — anchors every relative date. Defaults to the machine. */
   ownerTimeZone?: string;
   llm: LlmCaller;
@@ -336,6 +341,7 @@ export async function draftActions(
     }
     const ctx = contextFor(batch);
     const latest = batch[batch.length - 1]!;
+    const his = (deps.ownerLines ?? hisLines)(batch);
     const senderErrors: string[] = [];
     const senderActions: ActionItem[] = [];
     for (const s of suggested) {
@@ -359,6 +365,12 @@ export async function draftActions(
       // itself labels reply/schedule is done in the chat, never on his list.
       if (claimed === "task" && isChatOnlyTask(s.params as Record<string, unknown> | undefined)) {
         senderErrors.push(`dropped "${s.headline}": kind ${String((s.params as Record<string, unknown>).kind)} — he answers in the chat or decides in his head`);
+        continue;
+      }
+      // ONLY WHAT HE TOOK ON (core/task-kind.ts COMMITMENT): the words must be
+      // in one of his own lines, or there is no task.
+      if (claimed === "task" && !committedInHisWords(s.params as Record<string, unknown> | undefined, his)) {
+        senderErrors.push(`dropped "${s.headline}": no line where he took it on`);
         continue;
       }
       // DECODE FAILED → NO CARD (owner, 2026-09-20). When this batch carried

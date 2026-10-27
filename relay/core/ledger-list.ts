@@ -399,6 +399,20 @@ function matterProgress(all: readonly Commitment[], lead: Commitment, them: stri
  * not optional: a caller that forgets it would silently reopen the leak this
  * gate exists to close.
  */
+/**
+ * Did HE take this on, in his own words? Only then is it his to list (owner,
+ * 2026-10-27: 「只生成我有Committment的task」). The source line must be one he
+ * spoke — 「[2026-10-27 03:30] me: 这个我找时间寄一个」. That day he struck 14
+ * rows; 20 of the ledger rows he had cleared by hand carried no source line at
+ * all, inferred from what someone else suggested (「Rent a car and personally
+ * visit affected Houston-area restaurants」).
+ */
+export function inHisOwnWords(c: Pick<Commitment, "who" | "source_line">): boolean {
+  if (c.who !== "me" || !c.source_line) return false;
+  const speaker = /^\[[^\]]*\]\s*([^:：]{1,40})[:：]/.exec(c.source_line.trim())?.[1]?.trim();
+  return speaker === "me" || speaker === "我";
+}
+
 export function deriveLedgerTasks(
   personas: ReadonlyArray<LedgerPersona>,
   zone: string,
@@ -447,7 +461,7 @@ export function deriveLedgerTasks(
       // Its links stay open in the ledger; none of them is listed.
       if (closedMatters.has(matterId)) continue;
       const matterActive = activeMatters.has(matterId);
-      const lead = chain.find((c) => c.who === "me" && c.assessment?.needs_leo);
+      const lead = chain.find((c) => inHisOwnWords(c) && c.assessment?.needs_leo);
       if (lead) {
         const sunkLead = longOverdue(lead.due, nowMs);
         if (!sunkLead || matterActive) out.push(itemFor(owner, lead, chain, zone, nowMs, sunkLead, "own", as));
@@ -475,7 +489,7 @@ export function deriveLedgerTasks(
       // a sync-side complete never touches the commitments (only the readback's
       // closes do), so the chain stays open and the row returns the moment one
       // of its links becomes his move.
-      const dormant = chain.find((c) => c.who === "me");
+      const dormant = chain.find((c) => inHisOwnWords(c));
       if (dormant && matterActive)
         out.push(itemFor(owner, dormant, chain, zone, nowMs, true, "own", as));
     }
@@ -488,7 +502,7 @@ export function deriveLedgerTasks(
         out.push(itemFor(owner, c, [c], zone, nowMs, true, "chase"));
         continue;
       }
-      if (c.who !== "me") continue;
+      if (!inHisOwnWords(c)) continue;
       // No matter_id at all — unfiled, not closed. The verdict decides, and a
       // date that went by a fortnight ago overrides a stale yes: see longOverdue.
       // Unfiled and no live verdict → not listed (see the admission note above).
