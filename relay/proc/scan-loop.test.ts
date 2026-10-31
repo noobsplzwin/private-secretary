@@ -1777,6 +1777,24 @@ describe("split lanes: fetch queues, analyze drafts", () => {
     expect(loadState(statePath).actions).toEqual([]);
   });
 
+  // 2026-10-28..31: every sender timed out, tick after tick, and each round
+  // counted — 54 messages were given up, 冉朱旭's interview invite among them.
+  it("an outage — every sender failing — holds the queue without counting", async () => {
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("陈古龙", "冉同学周三上午9点面试", "21:40"), wechatDirect: { load: () => ({ 陈古龙: { lastSeenMs: 1 } }), save: () => {} } });
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("金小奇", "A", "21:41"), wechatDirect: { load: () => ({ 金小奇: { lastSeenMs: 1 } }), save: () => {} } });
+    for (let i = 0; i < 4; i++) {
+      await runScanTick({
+        mode: "analyze",
+        statePath,
+        draft: draftWith(async () => {
+          throw new Error("claude -p timed out after 420000ms");
+        }),
+      });
+    }
+    const inbox = loadState(statePath).inbox!;
+    expect(inbox.map((e) => [e.msg.text, e.attempts]).sort()).toEqual([["A", 0], ["冉同学周三上午9点面试", 0]]);
+  });
+
   // The lanes run at the same time. The analyser must neither drop a message
   // the fetch lane queued mid-draft, nor roll back the cursor it advanced.
   it("never loses or rewinds what the fetch lane did while a draft was running", async () => {

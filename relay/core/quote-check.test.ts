@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evidenceGrounded, hasVerbatim } from "./quote-check.js";
+import { evidenceGrounded, hasVerbatim, timeQuoteGrounded } from "./quote-check.js";
 
 const CORPUS = `[2026-07-30] From Yang:
 Please find attached the production and processing agreement — signed and
@@ -60,5 +60,19 @@ describe("evidenceGrounded", () => {
 
   it("still accepts a plain single quote", () => {
     expect(evidenceGrounded(C, "So please don't share it with Chu")).toBe(true);
+  });
+});
+
+// 2026-10-31: the OTA call's quote was three lines from three people.
+describe("timeQuoteGrounded", () => {
+  const thread = "静Jasmine🕶: Teams会议？8点？\nYQY: 可以\nme: 可行\nYQY: 飞书有吗？";
+  it("accepts verbatim lines spliced with /, one of them carrying the clock time", () => {
+    expect(timeQuoteGrounded(thread, "Teams会议？8点？ / 可以 / 可行")).toBe(true);
+    expect(timeQuoteGrounded(thread, "Teams会议？8点？")).toBe(true);
+  });
+  it("refuses an invented fragment, however short, and a splice with no time in it", () => {
+    expect(timeQuoteGrounded(thread, "Teams会议？8点？ / 好的")).toBe(false);
+    expect(timeQuoteGrounded(thread, "可以 / 可行")).toBe(false);
+    expect(timeQuoteGrounded(thread, "9点")).toBe(false);
   });
 });

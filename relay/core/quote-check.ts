@@ -62,3 +62,21 @@ export function evidenceGrounded(corpus: string, evidence: string): boolean {
   if (fragments.length === 0) return false;
   return fragments.every((f) => hasVerbatim(corpus, f));
 }
+
+/**
+ * A meeting's time quote: verbatim as one line, or several verbatim lines
+ * spliced (「Teams会议？8点？ / 可以 / 可行」 — Jasmine asks, YQY and Leo agree)
+ * where EVERY fragment, short ones included, is in the thread and one of them
+ * carries the clock time. 2026-10-31: that exact quote failed the single-
+ * substring check, the card lost time_confirmed, and — meetings no longer
+ * listing as rows — it sat unbooked where nobody could see it.
+ */
+export function timeQuoteGrounded(corpus: string, quote: string): boolean {
+  if (hasVerbatim(corpus, quote)) return true;
+  const fragments = quote
+    .split(SPLICE)
+    .map((f) => f.replace(/^["'«»„"「」]+|["'«»„"「」]+$/g, "").trim())
+    .filter((f) => f !== "");
+  if (fragments.length < 2) return false;
+  return fragments.every((f) => hasVerbatim(corpus, f)) && fragments.some((f) => /\d|[一二三四五六七八九十两][点時时]/.test(f));
+}

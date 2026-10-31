@@ -1764,7 +1764,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
         const unavailable = new Set(draftUnavailableSenders);
         const tried = unavailable.size > 0 ? draftInput.filter((m) => !unavailable.has(m.senderHandle)) : draftInput;
         const wholeFailed = llmDraftError !== undefined && failed.size === 0;
-        const r = wholeFailed && isLlmUnavailable(llmDraftError)
+        // An OUTAGE — every sender of a multi-sender batch failed — says nothing
+        // about any one message either, timeouts included. 2026-10-28..31:
+        // `claude -p` timed out for every sender, tick after tick; each round
+        // counted, and 54 messages were given up — among them 陈古龙's 冉朱旭
+        // interview invite with its Feishu link. Held, uncounted, like an
+        // unavailable LLM.
+        const r = (wholeFailed && isLlmUnavailable(llmDraftError)) || llmDraftOutage
           ? { inbox: fresh.inbox ?? [], gaveUp: [] }
           : settle(fresh.inbox ?? [], tried, failed, wholeFailed);
         fresh.inbox = r.inbox;

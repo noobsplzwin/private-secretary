@@ -38,7 +38,7 @@ import { mayProduceActionType } from "../core/trigger-filter.js";
 import { resolveAttendees } from "../core/attendee-resolver.js";
 import { findUnverifiedNames, rosterAliases } from "../core/name-check.js";
 import { displayNameForKey } from "../core/jira-assignee.js";
-import { hasVerbatim } from "../core/quote-check.js";
+import { hasVerbatim, timeQuoteGrounded } from "../core/quote-check.js";
 
 // The injected LLM call: takes the assembled request, returns the parsed
 // suggested actions (the adapter extracts them from the tool call).
@@ -465,7 +465,7 @@ export async function draftActions(
       if (s.action_type === "calendar" && baseParams.time_confirmed === true) {
         const quote = typeof baseParams.time_quote === "string" ? baseParams.time_quote : "";
         const corpus = `${ctx.original_message ?? ""} ${latest.threadContext ?? ""}`;
-        if (!hasVerbatim(corpus, quote)) {
+        if (!timeQuoteGrounded(corpus, quote)) {
           delete baseParams.time_confirmed;
           baseParams.time_quote_unverified = quote || "(missing)";
         }
