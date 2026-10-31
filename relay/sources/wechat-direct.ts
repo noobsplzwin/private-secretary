@@ -29,6 +29,7 @@
 // vision support in anthropic-api.ts (not wired for ANY source yet) — separate
 // follow-up; decoding without a vision path would be wasted work.
 
+import { joinLinkBlock } from "../core/meeting-link.js";
 import type { Attachment, InboundMessage } from "../core/types.js";
 import { advanceCursor, planDirectScan, type DirectBook } from "../core/wechat-direct-cursor.js";
 import {
@@ -103,7 +104,17 @@ const HIST_RE = /^\[(\d{4})-(\d{2})-(\d{2})\s+(\d{1,2}):(\d{2})\]\s+(.*)$/;
 // 「会议链接见微信群」. Lines before the first message are the header.
 function appendContinuation(msg: { text: string } | undefined, raw: string): void {
   const line = raw.trim();
-  if (msg && line) msg.text = `${msg.text}\n${line}`;
+  if (msg && line && !PAGING_FOOTER.test(line)) msg.text = `${msg.text}\n${line}`;
+}
+
+// The history tool's own paging note after the last message — not anyone's
+// words. Appended as a continuation it reached the drafter as the tail of a
+// group line (2026-10-31, 「周四9点吧…（可能还有更多结果，可设 offset=40 继续查询）」).
+const PAGING_FOOTER = /^（可能还有更多结果.*offset=\d+/;
+
+/** His own lines travel to the analyser when a card there is open, or when one carries a join link. */
+function hisLinesTravel(name: string, mine: ReadonlyArray<{ text: string }>, hasOpenCard?: (name: string) => boolean): boolean {
+  return mine.length > 0 && (hasOpenCard?.(name) === true || mine.some((m) => joinLinkBlock(m.text) !== null));
 }
 
 export function parseChatHistory(text: string, contactName: string): HistoryMsg[] {
@@ -253,7 +264,7 @@ export async function scanWechatInbox(
       // Only Leo spoke → context, not an ask — but it may be him FINISHING a
       // card from this chat, so it travels to the closure check (ownerOnly).
       const mine = moved.filter((m) => !m.isIncoming && m.text);
-      if (mine.length > 0 && opts.hasOpenCard?.(s.name)) {
+      if (hisLinesTravel(s.name, mine, opts.hasOpenCard)) {
         inbound.push(ownerLines(s.name, mine, history.map((m) => `${m.isIncoming ? s.name : "我"}: ${m.text}`).join("\n"), true));
       }
       continue;
@@ -476,7 +487,7 @@ export async function scanWechatGroups(
     }
     if (unseen.length === 0) {
       const mine = msgs.filter((m) => m.tsMs > cursor && m.speaker === OWN_LABEL && m.text);
-      if (mine.length > 0 && opts.hasOpenCard?.(name)) {
+      if (hisLinesTravel(name, mine, opts.hasOpenCard)) {
         inbound.push(ownerLines(name, mine, msgs.map((m) => `${m.speaker === OWN_LABEL ? "我" : m.speaker}: ${m.text}`).join("\n"), false));
       }
       continue;

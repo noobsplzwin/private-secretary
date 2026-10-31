@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bookedMeetingFor, descriptionWithLink, joinLinkBlock } from "./meeting-link.js";
+import { bookedMeetingFor, descriptionWithLink, joinLinkBlock, pendingMeetingFor } from "./meeting-link.js";
 import type { ActionItem } from "./action-item.js";
 
 // 徐志成's invite, 2026-10-09, as it reached the group.
@@ -17,6 +17,11 @@ describe("joinLinkBlock", () => {
       url: "https://meeting.tencent.com/dm/n5GwDugMTwDU",
       block: "https://meeting.tencent.com/dm/n5GwDugMTwDU\n#腾讯会议：451-561-296",
     });
+  });
+
+  it("reads the English Tencent invite's meeting number too (2026-10-31, PQC)", () => {
+    const en = "https://meeting.tencent.com/dm/1ud6Aa9AqNeu\n\n#TencentMeeting：944-572-985\n\nCopy this invitation and open in Tencent Meeting app";
+    expect(joinLinkBlock(en)?.block).toBe("https://meeting.tencent.com/dm/1ud6Aa9AqNeu\n#TencentMeeting：944-572-985");
   });
 
   it("knows Teams, Zoom, Feishu and Meet; ignores other links", () => {
@@ -49,6 +54,17 @@ describe("bookedMeetingFor", () => {
     expect(bookedMeetingFor([booked("a", "2026-10-10T08:00:00Z"), booked("b", "2026-10-11T08:00:00Z")], "F26 奇绩-欧思克斯法律工作群", NOW)).toBeNull();
     expect(bookedMeetingFor([booked("a", "2026-10-08T08:00:00Z")], "F26 奇绩-欧思克斯法律工作群", NOW)).toBeNull();
     expect(bookedMeetingFor([booked("a", "2026-10-10T08:00:00Z", "金小奇")], "F26 奇绩-欧思克斯法律工作群", NOW)).toBeNull();
+  });
+});
+
+describe("pendingMeetingFor", () => {
+  const NOW = Date.parse("2026-10-31T11:00:00Z");
+  const card = (id: string, status: string): ActionItem =>
+    ({ id, action_type: "calendar", status, params: { start: "2026-11-05T01:00:00.000Z" }, context: { sender_handle: "26056426628@chatroom" } }) as unknown as ActionItem;
+  it("finds the one card from this chat still waiting to be booked", () => {
+    expect(pendingMeetingFor([card("p", "suggested")], "26056426628@chatroom", NOW)?.id).toBe("p");
+    expect(pendingMeetingFor([card("p", "executed")], "26056426628@chatroom", NOW)).toBeNull();
+    expect(pendingMeetingFor([card("p", "suggested"), card("q", "suggested")], "26056426628@chatroom", NOW)).toBeNull();
   });
 });
 

@@ -99,6 +99,11 @@ https://meeting.tencent.com/dm/n5GwDugMTwDU
     ]);
   });
 
+  it("drops the history tool's paging note after the last message", () => {
+    const msgs = parseGroupHistory("[2026-10-31 05:58] 范添彬 Neil: 腾讯会议\n（可能还有更多结果，可设 offset=40 继续查询）");
+    expect(msgs.map((m) => m.text)).toEqual(["腾讯会议"]);
+  });
+
   it("keeps a 1:1 message's later lines and ignores the header", () => {
     const msgs = parseChatHistory(
       `徐志成 的消息记录（返回 1 条）
@@ -469,6 +474,19 @@ describe("ownerOnly: Leo's own lines reach the closure check", () => {
     expect(inbound).toHaveLength(1);
     expect(inbound[0]).toMatchObject({ ownerOnly: true, senderHandle: "程敏", text: "[文件] 脱敏材料.pdf" });
     expect(inbound[0]!.id).toBe(`wechat:程敏:me:${new Date("2026-06-14T21:00:00").getTime()}`);
+  });
+
+  it("group — his join link travels even with no card open (2026-10-31, PQC)", async () => {
+    const r = await scanWechatGroups({
+      sessions: [{ name: "PQC", isGroup: true, unread: 0, tsMs: Date.parse("2026-10-31T06:00:00") }],
+      book: { PQC: { decision: "allow", by: "owner", at: "x", lastSeenMs: Date.parse("2026-10-31T05:59:00") } },
+      fetchHistory: async () => "群 的消息记录: [群聊]\n\n[2026-10-31 05:58] 范添彬 Neil: 腾讯会议\n[2026-10-31 06:00] me: https://meeting.tencent.com/dm/1ud6Aa9AqNeu\n#TencentMeeting：944-572-985",
+      now: () => "x",
+      hasOpenCard: () => false,
+    });
+    expect(r.inbound).toHaveLength(1);
+    expect(r.inbound[0]).toMatchObject({ ownerOnly: true });
+    expect(r.inbound[0]!.text).toContain("https://meeting.tencent.com/dm/1ud6Aa9AqNeu");
   });
 
   it("1:1 — nothing when no card from that chat is open", async () => {

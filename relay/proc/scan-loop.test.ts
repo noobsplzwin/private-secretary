@@ -1583,6 +1583,34 @@ describe("calendar auto-create", () => {
     expect(loadState(statePath).actions[0]!.params.location).toBe("https://meeting.tencent.com/dm/n5GwDugMTwDU");
   });
 
+  // 2026-10-31: the PQC Tencent link (his own line) came 54s before the booking.
+  it("a join link that beats the booking rides into the event it creates", async () => {
+    const group = "26056426628@chatroom";
+    const start = new Date(Date.now() + 5 * 86_400_000).toISOString();
+    writeFileSync(
+      statePath,
+      JSON.stringify({
+        version: 2, marks: {}, outcomes: [], sourceErrors: {}, tasks: {},
+        actions: [{
+          id: "pqc", source_message_id: `wechat:${group}:1`, action_type: "calendar", target: { platform: "wechat", attendees: [] },
+          reason: "r", confidence: 0.9, status: "suggested", created_at: new Date().toISOString(), context: { sender_handle: group },
+          params: { title: "PQC项目申请线上会议", start, end: new Date(Date.parse(start) + 3_600_000).toISOString(), attendees: [], time_confirmed: true, mailbox: "me@x.com", description: "继续讨论PQC项目申请" },
+        }],
+        inbox: [{ at: new Date().toISOString(), attempts: 0, msg: {
+          id: `wechat:${group}:me:2`, platform: "wechat", senderHandle: group, timestampMs: 2, source: `wechat:${group}`, ownerOnly: true,
+          text: "https://meeting.tencent.com/dm/1ud6Aa9AqNeu\n#TencentMeeting：944-572-985",
+          isDirectMessage: false, mentionsUser: false, isReplyInUserThread: false, recipientsIncludeUser: true, threadAnsweredByUserAfter: true,
+        } }],
+      }),
+    );
+    const { insertEvent, deps } = calendar([]);
+    await runScanTick({ statePath, sources: [], mode: "analyze", draft: { llm: async () => [], resolvePersona: () => null, knownPersonaKeys: [], now: () => new Date().toISOString() }, execute: deps });
+    expect(insertEvent).toHaveBeenCalledTimes(1);
+    const ev = (insertEvent.mock.calls[0] as unknown as [{ event: CalendarEvent }])[0].event;
+    expect(ev.location).toBe("https://meeting.tencent.com/dm/1ud6Aa9AqNeu");
+    expect(ev.description).toContain("#TencentMeeting：944-572-985");
+  });
+
   it("books it when the model sees a different meeting", async () => {
     seedMeeting(0.82);
     const { insertEvent, deps } = calendar([later]);

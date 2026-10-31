@@ -60,7 +60,7 @@ import { recordOwnerNotes } from "../io/owner-notes-store.js";
 import { localDate } from "../core/ticktick-plan.js";
 import { closeDoneCards } from "./card-closure.js";
 import { sameMeetingOnCalendar } from "./same-meeting.js";
-import { bookedMeetingFor, descriptionWithLink, joinLinkBlock } from "../core/meeting-link.js";
+import { bookedMeetingFor, descriptionWithLink, joinLinkBlock, pendingMeetingFor } from "../core/meeting-link.js";
 import { loadOwnerTickets } from "../io/owner-tickets-store.js";
 import { findPlanProgress, mergePlanUpdates, type PlanUpdate } from "../core/plan-progress.js";
 import { ownerTicketsFrom } from "../core/owner-tickets.js";
@@ -1966,6 +1966,25 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
   // notifyAttendees:false — this fills in HIS calendar. Mailing an invite to
   // other people stays a human act.
   if (!opts.dryRun && opts.execute) {
+    // A join link that beats the booking rides into the card, so the event the
+    // booking below creates carries it (core/meeting-link.ts pendingMeetingFor).
+    {
+      const before = loadState(opts.statePath);
+      const pending: Array<{ id: string; url: string; description: string }> = [];
+      for (const m of draftInput) {
+        const link = joinLinkBlock(m.text);
+        const card = link ? pendingMeetingFor(before.actions, m.senderHandle, Date.now()) : null;
+        const description = link && card ? descriptionWithLink(typeof card.params.description === "string" ? card.params.description : undefined, link) : null;
+        if (link && card && description !== null) pending.push({ id: card.id, url: link.url, description });
+      }
+      if (pending.length > 0) {
+        await commitUnderLock((fresh) => {
+          for (const p of pending)
+            fresh.actions = fresh.actions.map((a) => (a.id === p.id ? { ...a, params: { ...a.params, location: p.url, description: p.description } } : a));
+        });
+        for (const p of pending) console.log(`[calendar] join link added before booking: ${p.url}`);
+      }
+    }
     const snapshot = loadState(opts.statePath);
     // A join link posted AFTER its meeting was booked goes into that event
     // (core/meeting-link.ts) — only when exactly one upcoming event came from

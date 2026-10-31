@@ -12,7 +12,7 @@ import type { ActionItem } from "./action-item.js";
 
 const JOIN_URL =
   /https?:\/\/(?:meeting\.tencent\.com|(?:[\w-]+\.)?vc\.feishu\.cn|(?:[\w-]+\.)?zoom\.(?:us|com\.cn)\/j|teams\.microsoft\.com\/(?:l\/meetup-join|meet)|meet\.google\.com)\/[^\s<>"'）)]+/i;
-const DETAIL = /(会议号|腾讯会议[:：]|会议\s*ID|Meeting ID|密码|Passcode)/i;
+const DETAIL = /(会议号|腾讯会议[:：]|TencentMeeting[:：]|会议\s*ID|Meeting ID|密码|Passcode)/i;
 
 /** The join link in a message, with the lines that carry its number and passcode. Null when none. */
 export function joinLinkBlock(text: string): { url: string; block: string } | null {
@@ -35,6 +35,21 @@ export function bookedMeetingFor(actions: readonly ActionItem[], senderHandle: s
     if (a.context?.sender_handle !== senderHandle) return false;
     const receipt = a.params.execution_receipt as { kind?: string; ref?: string } | undefined;
     if (receipt?.kind !== "calendar_event" || !receipt.ref) return false;
+    const start = Date.parse(String(a.params.start));
+    return Number.isFinite(start) && start > nowMs && start - nowMs <= HORIZON_MS;
+  });
+  return hits.length === 1 ? hits[0]! : null;
+}
+
+/**
+ * The ONE meeting card from this conversation still waiting to be booked — or
+ * null. 2026-10-31: he posted the PQC Tencent link 54s before the card was
+ * booked; the link must ride into the event the booking creates.
+ */
+export function pendingMeetingFor(actions: readonly ActionItem[], senderHandle: string, nowMs: number): ActionItem | null {
+  const hits = actions.filter((a) => {
+    if (a.action_type !== "calendar" || (a.status !== "suggested" && a.status !== "approved")) return false;
+    if (a.context?.sender_handle !== senderHandle) return false;
     const start = Date.parse(String(a.params.start));
     return Number.isFinite(start) && start > nowMs && start - nowMs <= HORIZON_MS;
   });
