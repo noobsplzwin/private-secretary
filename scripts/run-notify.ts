@@ -26,6 +26,8 @@ import { effectiveToolSpecs } from "../relay/io/tools.js";
 import { createTickTickWriter, createTickTickReader } from "../relay/io/ticktick-mcp.js";
 import { createJiraToolRunner } from "../relay/io/jira-mcp.js";
 import { CalendarClient, ownerCalendars } from "../relay/io/calendar-api.js";
+import { fetchFeishuAgenda } from "../relay/io/feishu-calendar.js";
+import { runFeishuMirror } from "../relay/proc/feishu-mirror.js";
 import type { ExecuteDeps } from "../relay/proc/execute.js";
 import { mcpAuthServiceFor } from "../relay/io/mcp-tool.js";
 import type { TickTickWriter, TickTickReader } from "../relay/proc/ticktick-sync.js";
@@ -673,6 +675,38 @@ async function fetchRelatedThread(p: Persona): Promise<string | null> {
 // needs when the owner ticks an invite/tool line. Absent pieces degrade to
 // "tick records done" for that action type — never a crash, never a silent
 // half-send.
+// FEISHU → GOOGLE (relay/proc/feishu-mirror.ts). Its own lane and its own
+// file (state/feishu-mirror.json): it touches neither loop-state nor the lock,
+// so a slow lark-cli or a Feishu outage can hold nothing else up. Off with
+// --no-feishu; needs a booking calendar.
+function buildFeishuMirror(): (() => Promise<void>) | undefined {
+  if (process.argv.includes("--no-feishu")) return undefined;
+  const { calendarMailbox: calMailbox, mailboxes } = loadIdentity();
+  if (!calMailbox) return undefined;
+  const calendar = ownerCalendars(
+    new CalendarClient({ email: calMailbox }),
+    mailboxes.filter((m) => m !== calMailbox).map((m) => new CalendarClient({ email: calMailbox, calendarId: m })),
+  );
+  const mapPath = resolve(dirname(statePath), "feishu-mirror.json");
+  let running = false;
+  return async () => {
+    if (running) return;
+    running = true;
+    try {
+      const r = await runFeishuMirror({ fetchAgenda: fetchFeishuAgenda, calendar, mapPath });
+      for (const t of r.created) console.log(`[feishu] booked "${t}"`);
+      for (const t of r.adopted) console.log(`[feishu] already on calendar: "${t}"`);
+      for (const t of r.updated) console.log(`[feishu] updated "${t}"`);
+      for (const id of r.removed) console.log(`[feishu] removed cancelled event ${id}`);
+      for (const e of r.errors) console.error(`[feishu] ${e}`);
+    } catch (e) {
+      console.error(`[feishu] mirror pass failed — ${(e as Error).message.split("\n")[0]}`);
+    } finally {
+      running = false;
+    }
+  };
+}
+
 function buildExecuteDeps(): Omit<ExecuteDeps, "persistClaim"> | undefined {
   const deps: Omit<ExecuteDeps, "persistClaim"> = { now: () => new Date().toISOString() };
   let any = false;
@@ -1002,6 +1036,12 @@ console.log(
   });
   setTimeout(() => void analyze(), 10_000);
   setInterval(() => void analyze(), num("--analyze-ms", 60_000));
+  const feishuMirror = buildFeishuMirror();
+  if (feishuMirror) {
+    setTimeout(() => void feishuMirror(), 20_000);
+    setInterval(() => void feishuMirror(), num("--feishu-ms", 300_000));
+    console.log(`[notify] feishu calendar mirror ON (every ${num("--feishu-ms", 300_000) / 1000}s)`);
+  }
 
   const shutdown = (sig: string): void => {
     console.log(`[notify] ${sig} — shutting down`);

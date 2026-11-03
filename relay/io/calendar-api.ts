@@ -306,5 +306,6 @@ export function ownerCalendars(book: CalendarClient, alsoRead: readonly Calendar
     insertEvent: (opts: Parameters<CalendarClient["insertEvent"]>[0]) => book.insertEvent(opts),
     // What we booked lives on the booking calendar.
     patchEvent: (opts: Parameters<CalendarClient["patchEvent"]>[0]) => book.patchEvent(opts),
+    deleteEvent: (opts: Parameters<CalendarClient["deleteEvent"]>[0]) => book.deleteEvent(opts),
   };
 }
