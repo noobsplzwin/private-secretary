@@ -25,7 +25,7 @@ import { appendRawLlmRecord } from "../io/llm-raw-log.js";
 // next Sonnet release, and this engine has been bitten enough by silent
 // changes. Owner's call, 2026-08-22 — Sonnet 5 is ~0.6x Opus 5 on every token
 // class (0.4x while the intro price runs to 2026-08-31).
-const DEFAULT_MODEL = "claude-sonnet-5";
+const DEFAULT_MODEL = "claude-sonnet-5-5";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const CLAUDE_BIN = process.env.CLAUDE_BIN ?? "claude";
 
