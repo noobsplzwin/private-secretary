@@ -142,6 +142,38 @@ describe("getAccessToken", () => {
     expect(bundle.refresh_token).toBe("rt-new");
   });
 
+  it("a stale in-memory bundle never overwrites a newer consent in Keychain", async () => {
+    const { store } = fakeKeychainStore();
+    const base = { email: "leo@taiv.tv", oauth_client_service: "taiv-secretary-gcp-A", oauth_client_account: "leo@taiv.tv" };
+    seedBundle(store, { ...base, refresh_token: "rt-old", access_token: "at-old", expires_at: Date.now() + 3_600_000, scope: "gmail", granted_at: 1 });
+    const cached = await getAccessToken("leo@taiv.tv"); // this process now caches the old bundle
+    // Another process re-consents with a wider scope; our cached copy then expires.
+    seedBundle(store, { ...base, refresh_token: "rt-consent", access_token: "at-consent", expires_at: 0, scope: "gmail drive", granted_at: 2 });
+    cached.expires_at = 0;
+    const fetchSpy = vi.fn(async (_url: string, init: { body: string }) => ({
+      ok: true,
+      json: async () => ({ access_token: "at-new", expires_in: 3600, token_type: "Bearer", refresh: new URLSearchParams(init.body).get("refresh_token") }),
+    }));
+    __setOAuthFetch(fetchSpy as unknown as typeof fetch);
+    const bundle = await getAccessToken("leo@taiv.tv");
+    expect(new URLSearchParams(fetchSpy.mock.calls[0]![1].body).get("refresh_token")).toBe("rt-consent");
+    expect(bundle.scope).toBe("gmail drive");
+    expect(JSON.parse(store.get(`${TOKEN_KEYCHAIN_SERVICE}|leo@taiv.tv`)!).scope).toBe("gmail drive");
+  });
+
+  it("uses a sibling's fresher token from Keychain instead of refreshing again", async () => {
+    const { store } = fakeKeychainStore();
+    const base = { email: "leo@taiv.tv", oauth_client_service: "taiv-secretary-gcp-A", oauth_client_account: "leo@taiv.tv", refresh_token: "rt", scope: "s", granted_at: 1 };
+    seedBundle(store, { ...base, access_token: "at-old", expires_at: Date.now() + 3_600_000 });
+    const cached = await getAccessToken("leo@taiv.tv");
+    seedBundle(store, { ...base, access_token: "at-sibling", expires_at: Date.now() + 3_600_000 });
+    cached.expires_at = 0;
+    const fetchSpy = vi.fn();
+    __setOAuthFetch(fetchSpy as unknown as typeof fetch);
+    expect((await getAccessToken("leo@taiv.tv")).access_token).toBe("at-sibling");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("propagates upstream HTTP errors during refresh", async () => {
     const { store } = fakeKeychainStore();
     seedBundle(store, {

@@ -37,11 +37,14 @@ import {
 } from "../../relay/io/keychain.js";
 
 // Scopes are FIXED — gmail.modify is a superset of read + compose + label,
-// calendar.events covers list + create. Adding more here forces Google's
+// calendar.events covers list + create, drive serves the messages MCP's Drive
+// tools (relay/io/drive-api.ts: read, plus upload/new folder behind an
+// approval rule; never edits or deletes). Adding more here forces Google's
 // scope-justification flow and clutters the consent screen for no win.
 const SCOPES = [
   "https://www.googleapis.com/auth/gmail.modify",
   "https://www.googleapis.com/auth/calendar.events",
+  "https://www.googleapis.com/auth/drive",
 ];
 
 const TOKEN_KEYCHAIN_SERVICE = "taiv-secretary-token-google";

@@ -121,7 +121,18 @@ async function exchangeRefreshToken(opts: {
 // about to expire. Returns the live bundle so callers can also see scope
 // + expiry.
 export async function getAccessToken(email: string): Promise<StoredTokenBundle> {
-  const bundle = await loadBundle(email);
+  let bundle = await loadBundle(email);
+  if (bundle.expires_at - nowMs() > REFRESH_BUFFER_MS) {
+    return bundle;
+  }
+  // Re-read Keychain before refreshing: a re-consent (new scopes, new
+  // refresh_token) or a sibling process's refresh may have written a newer
+  // bundle since this process cached its own. Refreshing from the stale copy
+  // and persisting it would overwrite that consent — on 2026-11-10 the daemon
+  // and the messages MCP servers silently stripped a freshly granted Drive
+  // scope this way, within minutes of each re-consent.
+  tokenCache.delete(email);
+  bundle = await loadBundle(email);
   if (bundle.expires_at - nowMs() > REFRESH_BUFFER_MS) {
     return bundle;
   }
