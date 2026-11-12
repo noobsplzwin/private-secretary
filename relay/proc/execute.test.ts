@@ -200,30 +200,22 @@ describe("executeAction — calendar with conflict check", () => {
     expect(ev.attendees).toEqual([{ email: "real@x.com" }]); // "Gouwa Wang" dropped
   });
 
-  it("online meeting (no location) → attaches a Meet createRequest + inserts with conferenceDataVersion 1", async () => {
-    let passed: { event: CalendarEvent; conferenceDataVersion?: number } | undefined;
+  it("never mints a Google Meet link — online or in person (owner, 2026-11-11)", async () => {
+    const seen: Array<{ event: CalendarEvent; conferenceDataVersion?: number }> = [];
     const inserter: CalendarInserter = {
       listAllEvents: vi.fn(async () => []),
       insertEvent: vi.fn(async (o: { event: CalendarEvent; conferenceDataVersion?: number }) => {
-        passed = o;
-        return { id: "EVT-M", start: {}, end: {} } as CalendarEvent;
+        seen.push(o);
+        return { id: `EVT-${seen.length}`, start: {}, end: {} } as CalendarEvent;
       }),
     };
     const online = { ...calBase, params: { ...calBase.params, attendees: [] } }; // no location
+    const feishu = { ...calBase, params: { ...calBase.params, attendees: [], location: "https://vc.feishu.cn/j/680034335" } };
     await executeAction(action(online), deps({ calendar: { "leo@taiv.tv": inserter } }));
-    expect((passed!.event.conferenceData as { createRequest?: unknown }).createRequest).toBeTruthy();
-    expect(passed!.conferenceDataVersion).toBe(1);
-  });
-
-  it("in-person meeting (has location) → no Meet link", async () => {
-    let ev: CalendarEvent | undefined;
-    const inserter: CalendarInserter = {
-      listAllEvents: vi.fn(async () => []),
-      insertEvent: vi.fn(async (o: { event: CalendarEvent }) => { ev = o.event; return { id: "EVT-L", start: {}, end: {} } as CalendarEvent; }),
-    };
-    const located = { ...calBase, params: { ...calBase.params, attendees: [], location: "高青路站2号口" } };
-    await executeAction(action(located), deps({ calendar: { "leo@taiv.tv": inserter } }));
-    expect(ev!.conferenceData).toBeUndefined();
+    await executeAction(action(feishu), deps({ calendar: { "leo@taiv.tv": inserter } }));
+    expect(seen.map((o) => o.event.conferenceData)).toEqual([undefined, undefined]);
+    expect(seen.map((o) => o.conferenceDataVersion)).toEqual([undefined, undefined]);
+    expect(seen[1]!.event.location).toBe("https://vc.feishu.cn/j/680034335");
   });
 
   it("all-name attendees → attendees omitted entirely (not an empty/invalid list)", async () => {

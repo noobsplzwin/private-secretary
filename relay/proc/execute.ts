@@ -48,7 +48,6 @@ import {
 import { zoneOffsetAt } from "../core/when.js";
 import { machineTimeZone } from "../io/settings.js";
 import type { CalendarEvent } from "../io/calendar-api.js";
-import { randomUUID } from "node:crypto";
 
 // ─── injected platform senders (narrow interfaces, not the full clients) ─
 
@@ -73,7 +72,6 @@ export interface CalendarInserter {
   insertEvent(opts: {
     event: CalendarEvent;
     sendUpdates?: "all" | "externalOnly" | "none";
-    conferenceDataVersion?: number;
   }): Promise<CalendarEvent>;
   /** Change an event this engine booked (meeting-link.ts). Optional: older wiring lacks it. */
   patchEvent?(opts: { eventId: string; patch: Partial<CalendarEvent> }): Promise<CalendarEvent>;
@@ -277,8 +275,6 @@ async function executeCalendar(action: ActionItem, deps: ExecuteDeps): Promise<E
 
   const created = await inserter.insertEvent({
     event,
-    // conferenceDataVersion:1 is REQUIRED for a Meet createRequest to take effect.
-    ...(event.conferenceData ? { conferenceDataVersion: 1 } : {}),
     // Email the attendees only when a HUMAN triggered this. Auto-creation
     // (core/executors.canAutoExecute) fills in Leo's own calendar without the
     // engine mailing anyone on its own initiative: a wrong entry on his
@@ -383,24 +379,14 @@ function buildCalendarEvent(action: ActionItem): CalendarEvent {
     ? (p.reminderMinutes as unknown[]).filter((m): m is number => typeof m === "number")
     : DEFAULT_REMINDER_MINUTES;
   const location = typeof p.location === "string" ? p.location : undefined;
-  // Attach a Google Meet link for an online meeting — explicit params.online, or
-  // (default) any event with no physical location. createRequest → Calendar mints
-  // the Meet link on insert (needs conferenceDataVersion:1). online:false opts out.
-  const wantsMeet = p.online === true || (p.online !== false && !location);
+  // Never mint a Google Meet link (owner, 2026-11-11). Nobody else is invited
+  // to an auto-booked event, so a minted link leads to an empty room; the
+  // meeting's REAL join link (飞书/腾讯会议/Teams…) comes from the conversation,
+  // via params.location, or is patched in later (core/meeting-link.ts).
   return {
     summary: typeof p.title === "string" ? p.title : "(untitled)",
     description: typeof p.description === "string" ? p.description : undefined,
     location,
-    ...(wantsMeet
-      ? {
-          conferenceData: {
-            createRequest: {
-              requestId: randomUUID(),
-              conferenceSolutionKey: { type: "hangoutsMeet" },
-            },
-          },
-        }
-      : {}),
     // Normalized so a bare local datetime can't 400 the insert / conflict-check.
     start: { dateTime: toRfc3339(String(p.start)) },
     end: { dateTime: toRfc3339(String(p.end)) },
