@@ -127,6 +127,13 @@ export interface SlackHistoryResponse {
   response_metadata?: { next_cursor?: string };
 }
 
+export interface SlackSearchResponse {
+  messages: {
+    total: number;
+    matches: Array<SlackMessage & { channel?: { id: string; name?: string }; username?: string; permalink?: string }>;
+  };
+}
+
 export interface SlackRepliesResponse {
   messages: SlackMessage[]; // first element is the parent
   has_more: boolean;
@@ -274,6 +281,22 @@ export class SlackClient {
       limit: opts.limit ?? 100,
       cursor: opts.cursor,
       inclusive: opts.inclusive,
+    });
+  }
+
+  // One file's metadata (name, mimetype, url_private_download). Needs files:read.
+  async filesInfo(file: string): Promise<{ file: SlackFile }> {
+    return this.call("files.info", { file });
+  }
+
+  // Full-text search across the workspace, newest first. Needs the search:read
+  // user scope; a token without it fails with SlackApiError "missing_scope".
+  async searchMessages(opts: { query: string; count?: number; page?: number }): Promise<SlackSearchResponse> {
+    return this.call("search.messages", {
+      query: opts.query,
+      count: opts.count ?? 20,
+      page: opts.page ?? 1,
+      sort: "timestamp",
     });
   }
 

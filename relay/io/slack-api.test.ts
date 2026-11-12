@@ -51,6 +51,37 @@ describe("SlackClient — typed wrappers", () => {
     expect(calls[0]?.body).toBe("");
   });
 
+  it("searchMessages posts the query newest-first and returns the matches", async () => {
+    const { fetchFn, calls } = fakeFetch(() => ({
+      ok: true,
+      body: { ok: true, messages: { total: 1, matches: [{ ts: "1.0", text: "hi", channel: { id: "C1", name: "general" } }] } },
+    }));
+    const client = new SlackClient({ token: "x", fetchFn });
+    const r = await client.searchMessages({ query: "hi in:#general", count: 5 });
+    expect(r.messages.matches[0]?.channel?.name).toBe("general");
+    expect(calls[0]?.url).toMatch(/search\.messages$/);
+    expect(calls[0]?.body).toContain("query=hi+in%3A%23general");
+    expect(calls[0]?.body).toContain("sort=timestamp");
+  });
+
+  it("filesInfo posts the file id and returns its metadata", async () => {
+    const { fetchFn, calls } = fakeFetch(() => ({
+      ok: true,
+      body: { ok: true, file: { id: "F1", name: "notes.pdf", mimetype: "application/pdf", url_private_download: "https://files.slack.com/F1" } },
+    }));
+    const client = new SlackClient({ token: "x", fetchFn });
+    const r = await client.filesInfo("F1");
+    expect(r.file.url_private_download).toBe("https://files.slack.com/F1");
+    expect(calls[0]?.url).toMatch(/files\.info$/);
+    expect(calls[0]?.body).toBe("file=F1");
+  });
+
+  it("searchMessages surfaces a token without search:read as missing_scope", async () => {
+    const { fetchFn } = fakeFetch(() => ({ ok: true, body: { ok: false, error: "missing_scope", needed: "search:read" } }));
+    const client = new SlackClient({ token: "x", fetchFn, maxRetries: 0 });
+    await expect(client.searchMessages({ query: "hi" })).rejects.toMatchObject({ errorCode: "missing_scope" });
+  });
+
   it("call throws SlackApiError when ok: false (non-rate-limit)", async () => {
     const { fetchFn } = fakeFetch(() => ({
       ok: true,
