@@ -202,6 +202,28 @@ const ownerTimeZone = fileSettings.timezone;
 const llmFlag = strOpt("--llm");
 const llmMode = (llmFlag ?? fileSettings.llm.mode) === "anthropic" ? "api" : (llmFlag ?? fileSettings.llm.mode);
 const draftModel = strOpt("--draft-model") ?? fileSettings.llm.draftModel;
+// `claude -p` on a long-lived token instead of the interactive login. The login
+// is one OAuth session shared by every concurrent `claude -p` this daemon
+// spawns and by his own terminal; it died twice in two weeks (10/31, 11/9), the
+// second time within a day of a fresh /login. A `claude setup-token` token is
+// made for headless use and lasts a year. Children inherit process.env.
+//   security add-generic-password -U -s taiv-secretary-claude-token -a leo -w
+if (llmMode === "cli" && !process.env.CLAUDE_CODE_OAUTH_TOKEN) {
+  try {
+    const token = execFileSync("security", ["find-generic-password", "-s", "taiv-secretary-claude-token", "-w"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    if (token) process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+  } catch {
+    // No entry: `claude -p` falls back to the interactive login.
+  }
+  console.log(
+    process.env.CLAUDE_CODE_OAUTH_TOKEN
+      ? "[llm] claude -p uses the setup-token from Keychain (taiv-secretary-claude-token)"
+      : "[llm] claude -p uses the interactive login — no taiv-secretary-claude-token in Keychain",
+  );
+}
 const visionEnabled = process.argv.includes("--vision");
 const onceMode = process.argv.includes("--once");
 // --no-draft must ALSO stop polling, because a scan without a drafter still

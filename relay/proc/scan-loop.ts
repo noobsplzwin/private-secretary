@@ -14,6 +14,7 @@
 // existing semantics so swapping the skill out for a daemon is a no-op
 // from loop-state's point of view.
 
+import { appendFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { appendShadowRecord } from "../io/shadow-log.js";
 import {
@@ -52,6 +53,7 @@ import { deriveLedgerTasks, heldClosedByOwner } from "../core/ledger-list.js";
 import { applyInvite, cardForInvite } from "../core/calendar-invite.js";
 import type { RemoteTask } from "../core/ticktick-readback.js";
 import type { SyncMap } from "../core/ticktick-sync.js";
+import { outageAlertRow } from "../core/outage-alert.js";
 import { markAssessed, personsNeedingAssessment, recordGroupPresence, recordTraffic } from "../core/person-queue.js";
 import type { Commitment } from "../core/persona-v3.js";
 import { loadSyncMap, saveSyncMap } from "../io/ticktick-sync-store.js";
@@ -1514,10 +1516,19 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       });
     }
     if (overflow.length > 0) {
-      console.error(`[inbox] FULL — dropped the ${overflow.length} oldest waiting message(s)`);
+      // Kept, not lost: an outage that outlasts the inbox used to drop ~1,800
+      // messages for good (2026-11-02 → 11-13). They wait here for a reading by
+      // hand — never a bulk re-draft of stale messages.
+      if (!opts.dryRun) {
+        appendFileSync(
+          join(stateDir, "inbox-overflow.jsonl"),
+          overflow.map((e) => JSON.stringify({ ...e, overflowAt: roundAt })).join("\n") + "\n",
+        );
+      }
+      console.error(`[inbox] FULL — moved the ${overflow.length} oldest waiting message(s) to inbox-overflow.jsonl`);
       logActivity(
         "error",
-        `inbox full — dropped the ${overflow.length} oldest waiting message(s): ${[...new Set(overflow.map((e) => e.msg.senderHandle))].join(", ")}`,
+        `inbox full — dropped the ${overflow.length} oldest waiting message(s) to inbox-overflow.jsonl: ${[...new Set(overflow.map((e) => e.msg.senderHandle))].join(", ")}`,
         { phase: "fetch-commit", dropped: overflow.map((e) => e.msg.id) },
       );
     }
@@ -1858,9 +1869,13 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
       // routine noise. This key appears ONLY when nothing could think, and any
       // successful round clears it.
       if (llmDraftOutage) {
+        const at = new Date(startedAtMs).toISOString();
         fresh.sourceErrors["llm:draft-outage"] = {
           message: `THE BRAIN IS DOWN — ${llmDraftError}`,
-          at: new Date(startedAtMs).toISOString(),
+          at,
+          // When it BEGAN — `at` moves every tick. A lasting outage becomes a
+          // TickTick row (core/outage-alert.ts), and only a lasting one.
+          since: fresh.sourceErrors["llm:draft-outage"]?.since ?? at,
         };
       } else if (draftedActions.length > 0 || draftEmpty.length > 0) {
         delete fresh.sourceErrors["llm:draft-outage"];
@@ -2119,9 +2134,11 @@ export async function runScanTick(opts: ScanLoopOptions): Promise<ScanLoopResult
               return !h || opts.resolvePersonaKey!(h) === null;
             })
           : false;
+      const outage = outageAlertRow(snapshot.sourceErrors["llm:draft-outage"], nowMs, zone);
       const rows = [
         ...ledger.map((d) => ({ ...d, executable: [] })),
         ...cardRows(snapshot, zone, nowMs, personaLess),
+        ...(outage ? [outage] : []),
       ];
       console.log(`[ticktick] desired: ${ledger.length} ledger row(s) + ${rows.length - ledger.length} card row(s)`);
       // Live remote list for orphan reconciliation — non-fatal: without it the

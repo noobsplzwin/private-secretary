@@ -1793,6 +1793,27 @@ describe("split lanes: fetch queues, analyze drafts", () => {
     }
     const inbox = loadState(statePath).inbox!;
     expect(inbox.map((e) => [e.msg.text, e.attempts]).sort()).toEqual([["A", 0], ["冉同学周三上午9点面试", 0]]);
+    // The outage remembers when it BEGAN, so a lasting one can be raised
+    // (core/outage-alert.ts) while `at` moves on every tick.
+    const mark = loadState(statePath).sourceErrors["llm:draft-outage"]!;
+    expect(mark.since).toBeDefined();
+    expect(Date.parse(mark.since!)).toBeLessThanOrEqual(Date.parse(mark.at));
+  });
+
+  // 2026-11-02 → 11-13: an outage outlasted the 300-entry inbox and ~1,800
+  // messages were dropped for good. Overflow is now kept on disk.
+  it("a full inbox moves its oldest entries to inbox-overflow.jsonl, not into the void", async () => {
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("陈古龙", "seed", "21:30"), wechatDirect: { load: () => ({ 陈古龙: { lastSeenMs: 1 } }), save: () => {} } });
+    const s = loadState(statePath);
+    const seed = s.inbox![0]!;
+    s.inbox = Array.from({ length: 300 }, (_, i) => ({ ...seed, msg: { ...seed.msg, id: `old-${i}`, text: `old ${i}` } }));
+    saveState(statePath, s);
+    await runScanTick({ mode: "fetch", statePath, sources: ["wechat"], ...wechat("金小奇", "新消息", "21:41"), wechatDirect: { load: () => ({ 金小奇: { lastSeenMs: 1 } }), save: () => {} } });
+    const inbox = loadState(statePath).inbox!;
+    expect(inbox).toHaveLength(300);
+    expect(inbox.at(-1)!.msg.text).toBe("新消息");
+    const kept = readFileSync(join(dir, "inbox-overflow.jsonl"), "utf8").trim().split("\n").map((l) => JSON.parse(l));
+    expect(kept.map((e: { msg: { id: string } }) => e.msg.id)).toEqual(["old-0"]);
   });
 
   // The lanes run at the same time. The analyser must neither drop a message

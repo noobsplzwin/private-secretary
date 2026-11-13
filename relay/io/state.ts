@@ -23,6 +23,8 @@ import { appendLabels, buildLabel, labelsPathFor } from "./labels.js";
 export interface SourceError {
   message: string;
   at: string; // ISO timestamp
+  /** When a continuing error began (`at` moves every tick). Set for llm:draft-outage. */
+  since?: string;
 }
 
 export interface LoopState {
