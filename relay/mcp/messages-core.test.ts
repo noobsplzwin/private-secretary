@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildMime, clip, downloadExport, driveQuery, GOOGLE_DOC, GOOGLE_SHEET, mimeFromName, parseTime, pickByName, replySubject, textExportMime } from "./messages-core.js";
+import { buildMime, clip, downloadExport, driveQuery, eventLine, GOOGLE_DOC, GOOGLE_SHEET, isMeeting, meetingStats, mimeFromName, parseTime, pickByName, replySubject, textExportMime } from "./messages-core.js";
 
 describe("parseTime", () => {
   it("reads a date and a date-time as local time", () => {
@@ -125,5 +125,42 @@ describe("textExportMime / downloadExport", () => {
     expect(downloadExport(undefined)).toEqual({ mime: "application/pdf", ext: ".pdf" });
     expect(downloadExport("docx").ext).toBe(".docx");
     expect(() => downloadExport("odt")).toThrow(/export_as/);
+  });
+});
+
+describe("isMeeting / meetingStats / eventLine", () => {
+  const owner = "jordan@taiv.tv";
+  const at = (s: string, e: string) => ({ start: { dateTime: s }, end: { dateTime: e } });
+  const sync = { ...at("2026-11-18T10:15:00-05:00", "2026-11-18T11:00:00-05:00"), summary: "Supply Sync", attendees: [{ email: owner, responseStatus: "accepted" }, { email: "leo@taiv.tv" }, { email: "c_x@resource.calendar.google.com", resource: true }] };
+
+  it("counts a timed event with two people and no decline", () => {
+    expect(isMeeting(sync, owner)).toBe(true);
+    expect(isMeeting(sync, "JORDAN@taiv.tv")).toBe(true);
+  });
+
+  it("skips solo blocks (a room is not a person), all-day, cancelled, OOO and the owner's declines", () => {
+    expect(isMeeting({ ...sync, attendees: [{ email: owner }, { email: "c_y@group.calendar.google.com" }] }, owner)).toBe(false);
+    expect(isMeeting({ ...sync, start: { date: "2026-11-18" }, end: { date: "2026-11-19" } }, owner)).toBe(false);
+    expect(isMeeting({ ...sync, status: "cancelled" }, owner)).toBe(false);
+    expect(isMeeting({ ...sync, eventType: "outOfOffice" }, owner)).toBe(false);
+    expect(isMeeting({ ...sync, attendees: [{ email: owner, responseStatus: "declined" }, { email: "leo@taiv.tv" }] }, owner)).toBe(false);
+  });
+
+  it("judges the decline by the calendar owner, not the reader", () => {
+    const leoDeclined = { ...sync, attendees: [{ email: owner, responseStatus: "accepted" }, { email: "leo@taiv.tv", responseStatus: "declined" }] };
+    expect(isMeeting(leoDeclined, owner)).toBe(true);
+    expect(isMeeting(leoDeclined, "leo@taiv.tv")).toBe(false);
+  });
+
+  it("sums meetings and their hours", () => {
+    const solo = { ...at("2026-11-18T13:00:00-05:00", "2026-11-18T14:00:00-05:00"), summary: "Focus" };
+    const long = { ...sync, ...at("2026-11-19T09:00:00-05:00", "2026-11-19T10:30:00-05:00") };
+    expect(meetingStats([sync, solo, long, { ...sync, status: "cancelled" }], owner)).toEqual({ events: 3, meetings: 2, hours: 2.3 });
+  });
+
+  it("formats one line per event", () => {
+    const line = eventLine({ ...sync, attendees: [{ email: owner, responseStatus: "tentative" }, { email: "leo@taiv.tv" }] }, owner);
+    expect(line).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}–\d{2}:\d{2}  Supply Sync  \[2 people, tentative\]$/);
+    expect(eventLine({ start: { date: "2026-11-27" }, end: { date: "2026-11-28" } }, owner)).toBe("2026-11-27 (all day)  (no title — details hidden)");
   });
 });

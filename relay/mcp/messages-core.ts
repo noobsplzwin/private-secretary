@@ -134,3 +134,47 @@ export function downloadExport(as: string | undefined): { mime: string; ext: str
   if (!hit) throw new Error(`export_as must be one of ${Object.keys(EXPORT_AS).join(", ")}`);
   return { mime: hit[0], ext: hit[1] };
 }
+
+// ─── calendar ───────────────────────────────────────────────────────
+
+export interface CalAttendee { email: string; responseStatus?: string; resource?: boolean }
+export interface CalEvent {
+  status?: string;
+  summary?: string;
+  eventType?: string;
+  start: { dateTime?: string; date?: string };
+  end: { dateTime?: string; date?: string };
+  attendees?: CalAttendee[];
+}
+
+// Rooms and group calendars ride along as attendees; they are not people.
+const isRoom = (a: CalAttendee) => a.resource === true || /@(resource|group)\.calendar\.google\.com$/i.test(a.email);
+
+// A meeting on `owner`'s calendar: timed, at least two people (rooms aside), and
+// `owner` has not declined. Solo blocks, all-day items, OOO / focus / working
+// location are not meetings. `owner` is the calendar's email, never the reading
+// account: on a colleague's calendar the API's `self` flag marks the reader.
+export function isMeeting(ev: CalEvent, owner: string): boolean {
+  if (ev.status === "cancelled" || !ev.start.dateTime || !ev.end.dateTime) return false;
+  if (ev.eventType && ev.eventType !== "default" && ev.eventType !== "fromGmail") return false;
+  const people = (ev.attendees ?? []).filter((a) => !isRoom(a));
+  if (people.length < 2) return false;
+  const own = people.find((a) => a.email.toLowerCase() === owner.toLowerCase());
+  return own?.responseStatus !== "declined";
+}
+
+export function meetingStats(events: CalEvent[], owner: string): { events: number; meetings: number; hours: number } {
+  const meetings = events.filter((e) => isMeeting(e, owner));
+  const ms = meetings.reduce((t, e) => t + Date.parse(e.end.dateTime!) - Date.parse(e.start.dateTime!), 0);
+  return { events: events.filter((e) => e.status !== "cancelled").length, meetings: meetings.length, hours: Math.round(ms / 360_000) / 10 };
+}
+
+export function eventLine(ev: CalEvent, owner: string): string {
+  const when = ev.start.dateTime
+    ? `${fmtTime(Date.parse(ev.start.dateTime))}–${fmtTime(Date.parse(ev.end.dateTime!)).slice(11)}`
+    : `${ev.start.date} (all day)`;
+  const people = (ev.attendees ?? []).filter((a) => !isRoom(a));
+  const own = people.find((a) => a.email.toLowerCase() === owner.toLowerCase())?.responseStatus;
+  const tags = [people.length ? `${people.length} people` : "", own && own !== "accepted" ? own : "", ev.eventType && ev.eventType !== "default" ? ev.eventType : ""].filter(Boolean);
+  return `${when}  ${ev.summary ?? "(no title — details hidden)"}${tags.length ? `  [${tags.join(", ")}]` : ""}`;
+}

@@ -84,6 +84,8 @@ export interface CalendarEventsListResponse {
   description?: string;
   updated?: string;
   timeZone?: string;
+  // The reader's access: freeBusyReader sees only busy blocks (no titles, no attendees).
+  accessRole?: "freeBusyReader" | "reader" | "writer" | "owner";
   nextPageToken?: string;
   nextSyncToken?: string;
   items: CalendarEvent[];
