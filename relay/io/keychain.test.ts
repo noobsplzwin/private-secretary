@@ -83,6 +83,22 @@ describe("getSecret / setSecret", () => {
     );
   });
 
+  // 2026-11: execFile's "Command failed: <argv>" put a Google refresh token in
+  // secretary.err.log on every failed write.
+  it("a failed write never carries the secret in its error", async () => {
+    const secret = '{"refresh_token":"1//04-very-secret"}';
+    const runner = async () => {
+      throw Object.assign(new Error(`Command failed: security add-generic-password -w ${secret}`), {
+        code: 45,
+        stderr: `security: SecKeychainItemModifyAttributesAndData: User interaction is not allowed. ${secret}`,
+      });
+    };
+    const err = await setSecret("svc", "acc", secret, { runner }).catch((e: Error) => e);
+    expect((err as Error).message).not.toContain("very-secret");
+    expect((err as Error).message).toContain("User interaction is not allowed");
+    expect((err as Error).message).toContain("exit 45");
+  });
+
   it("setSecret upserts — re-running with a new value overwrites (the `-U` flag)", async () => {
     const { runner, calls } = fakeKeychain();
     await setSecret("svc", "acc", "v1", { runner });

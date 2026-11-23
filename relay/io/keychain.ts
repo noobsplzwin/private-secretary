@@ -104,16 +104,30 @@ export async function setSecret(
   opts: KeychainOptions = {},
 ): Promise<void> {
   const runner = opts.runner ?? _activeRunner;
-  await runner([
-    "add-generic-password",
-    "-U",
-    "-s",
-    service,
-    "-a",
-    account,
-    "-w",
-    value,
-  ]);
+  try {
+    await runner([
+      "add-generic-password",
+      "-U",
+      "-s",
+      service,
+      "-a",
+      account,
+      "-w",
+      value,
+    ]);
+  } catch (e) {
+    // execFile's error message is "Command failed: <the whole argv>" — the
+    // secret included. It reached secretary.err.log 185 times as a Google
+    // refresh token (2026-11). Rethrow with the value cut out, keeping what
+    // `security` itself said about why.
+    const err = e as { stderr?: unknown; code?: unknown };
+    const said = typeof err.stderr === "string" ? err.stderr.trim() : "";
+    throw new Error(
+      `security add-generic-password -s ${service} -a ${account} failed` +
+        (err.code !== undefined ? ` (exit ${String(err.code)})` : "") +
+        (said ? `: ${said.split(value).join("<secret>")}` : ""),
+    );
+  }
 }
 
 export async function deleteSecret(
