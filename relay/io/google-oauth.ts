@@ -69,10 +69,24 @@ async function loadBundle(email: string): Promise<StoredTokenBundle> {
   return bundle;
 }
 
+// Memory first, then Keychain. A failed write must not lose a token Google
+// already issued: this process keeps using it, and the next refresh writes
+// again. Before, the cache was only set after a successful write.
 async function persistBundle(bundle: StoredTokenBundle): Promise<void> {
-  await setJSON(TOKEN_KEYCHAIN_SERVICE, bundle.email, bundle);
   tokenCache.set(bundle.email, { bundle });
+  try {
+    await setJSON(TOKEN_KEYCHAIN_SERVICE, bundle.email, bundle);
+  } catch (e) {
+    console.error(`[google-oauth] refreshed token for ${bundle.email} kept in memory; Keychain write failed: ${(e as Error).message}`);
+  }
 }
+
+// One refresh per account at a time. The Feishu mirror reads four calendars
+// in parallel through one account; near expiry all four refreshed at once and
+// raced their Keychain writes ("The specified item already exists" / "could not
+// be found", 213 failed passes by 2026-11-25). Later callers now await the
+// refresh already in flight.
+const refreshing = new Map<string, Promise<StoredTokenBundle>>();
 
 function nowMs(): number {
   return Date.now();
@@ -121,10 +135,18 @@ async function exchangeRefreshToken(opts: {
 // about to expire. Returns the live bundle so callers can also see scope
 // + expiry.
 export async function getAccessToken(email: string): Promise<StoredTokenBundle> {
-  let bundle = await loadBundle(email);
+  const bundle = await loadBundle(email);
   if (bundle.expires_at - nowMs() > REFRESH_BUFFER_MS) {
     return bundle;
   }
+  const inFlight = refreshing.get(email);
+  if (inFlight) return inFlight;
+  const p = refreshAccessToken(email).finally(() => refreshing.delete(email));
+  refreshing.set(email, p);
+  return p;
+}
+
+async function refreshAccessToken(email: string): Promise<StoredTokenBundle> {
   // Re-read Keychain before refreshing: a re-consent (new scopes, new
   // refresh_token) or a sibling process's refresh may have written a newer
   // bundle since this process cached its own. Refreshing from the stale copy
@@ -132,7 +154,7 @@ export async function getAccessToken(email: string): Promise<StoredTokenBundle> 
   // and the messages MCP servers silently stripped a freshly granted Drive
   // scope this way, within minutes of each re-consent.
   tokenCache.delete(email);
-  bundle = await loadBundle(email);
+  const bundle = await loadBundle(email);
   if (bundle.expires_at - nowMs() > REFRESH_BUFFER_MS) {
     return bundle;
   }

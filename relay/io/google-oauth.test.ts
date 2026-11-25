@@ -262,4 +262,56 @@ describe("getAccessToken", () => {
     expect(stored.access_token).toBe("at-new");
     expect(stored.expires_at).toBeGreaterThan(Date.now());
   });
+
+  // 2026-11-25: the Feishu mirror read four calendars at once; near expiry all
+  // four refreshed and raced their Keychain writes (213 failed passes).
+  it("concurrent callers near expiry share one refresh and one Keychain write", async () => {
+    const { store } = fakeKeychainStore();
+    seedBundle(store, {
+      email: "leo@taiv.tv", refresh_token: "rt", access_token: "at-old", expires_at: 0, scope: "", granted_at: 0,
+      oauth_client_service: "taiv-secretary-gcp-A", oauth_client_account: "leo@taiv.tv",
+    });
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ access_token: "at-new", expires_in: 3600, token_type: "Bearer" }) }));
+    __setOAuthFetch(fetchSpy as unknown as typeof fetch);
+    let writes = 0;
+    const base = fakeKeychainStore();
+    for (const [k, v] of store) base.store.set(k, v);
+    __setKeychainRunner(async (args) => {
+      if (args[0] === "add-generic-password") writes++;
+      const s = args[args.indexOf("-s") + 1];
+      const a = args[args.indexOf("-a") + 1];
+      if (args[0] === "find-generic-password") {
+        const v = base.store.get(`${s}|${a}`);
+        if (v === undefined) throw Object.assign(new Error("missing"), { code: 44, stderr: "could not be found" });
+        return { stdout: v + "\n", stderr: "" };
+      }
+      base.store.set(`${s}|${a}`, args[args.indexOf("-w") + 1]!);
+      return { stdout: "", stderr: "" };
+    });
+    const got = await Promise.all([1, 2, 3, 4].map(() => getAccessToken("leo@taiv.tv")));
+    expect(got.map((b) => b.access_token)).toEqual(["at-new", "at-new", "at-new", "at-new"]);
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(writes).toBe(1);
+  });
+
+  it("a failed Keychain write keeps the refreshed token in memory instead of losing it", async () => {
+    const { store } = fakeKeychainStore();
+    seedBundle(store, {
+      email: "leo@taiv.tv", refresh_token: "rt", access_token: "at-old", expires_at: 0, scope: "", granted_at: 0,
+      oauth_client_service: "taiv-secretary-gcp-A", oauth_client_account: "leo@taiv.tv",
+    });
+    const fetchSpy = vi.fn(async () => ({ ok: true, json: async () => ({ access_token: "at-new", expires_in: 3600, token_type: "Bearer" }) }));
+    __setOAuthFetch(fetchSpy as unknown as typeof fetch);
+    __setKeychainRunner(async (args) => {
+      if (args[0] === "add-generic-password") throw Object.assign(new Error("boom"), { code: 45, stderr: "The specified item already exists in the keychain." });
+      const v = store.get(`${args[args.indexOf("-s") + 1]}|${args[args.indexOf("-a") + 1]}`);
+      if (v === undefined) throw Object.assign(new Error("missing"), { code: 44, stderr: "could not be found" });
+      return { stdout: v + "\n", stderr: "" };
+    });
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect((await getAccessToken("leo@taiv.tv")).access_token).toBe("at-new");
+    expect((await getAccessToken("leo@taiv.tv")).access_token).toBe("at-new"); // served from memory
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    err.mockRestore();
+  });
 });
